@@ -33,10 +33,8 @@ public class MainWindow extends JFrame
         glcanvas.setFocusable(true);      // 让它能拿键盘焦点
         glcanvas.requestFocusInWindow();  // 尝试获取焦点
 
-        // 4. �?GLEventListener（你�?GameRenderer�?
         glcanvas.addGLEventListener(gameRenderer);
 
-        // 5. 键盘监听挂在 glcanvas �?
         glcanvas.addKeyListener(new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
@@ -52,19 +50,17 @@ public class MainWindow extends JFrame
         glcanvas.addMouseMotionListener(UIMouse.get());
         glcanvas.addMouseWheelListener(UIMouse.get());
         
-        // 6. JFrame 布局，参�?jbox2d Testbed 的写�?
         JFrame frame = new JFrame("BWE");
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
         frame.setLayout(new BorderLayout());
         frame.add(glcanvas, BorderLayout.CENTER);
-        frame.pack();                       // �?glcanvas �?preferredSize
+        frame.pack();                       
         frame.setLocationRelativeTo(null);  // 居中显示
         frame.setVisible(true);
         frame.setResizable(false);
         // 再抢一次焦点，确保键盘事件稳定
         glcanvas.requestFocusInWindow();
 
-        // 7. 启动 FPSAnimator（驱�?GameRenderer.display�?
         FPSAnimator animator = new FPSAnimator(glcanvas, (int) GameRenderer.Frame, true);
         animator.start();
 

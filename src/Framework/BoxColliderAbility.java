@@ -14,7 +14,6 @@ public class BoxColliderAbility implements IAbility, ICollider {
     private GameObject gameObject;
     private TransformAbility transform;
 
-    // 相对 GameObject 中心的偏移和半宽/半高（用来创�?Box2D 形状�?
     public float offsetX = 0;
     public float offsetY = 0;
     public float halfWidth = 0.5f;
@@ -25,7 +24,7 @@ public class BoxColliderAbility implements IAbility, ICollider {
     public float density = 1.0f;
     public boolean isTrigger = false;
 
-    // 关联�?jbox2d 封装
+    // 关联�?jbox2d 封装
     public BoxCollider2D collider2D = new BoxCollider2D();
 
     private int abilityIndex = 0;
@@ -45,7 +44,6 @@ public class BoxColliderAbility implements IAbility, ICollider {
     public void OnAdded(GameObject go) {
         this.gameObject = go;
 
-        // �?TransformAbility
         for (IAbility ability : go.Abilitys) {
             if (ability instanceof TransformAbility) {
                 transform = (TransformAbility) ability;
@@ -54,11 +52,10 @@ public class BoxColliderAbility implements IAbility, ICollider {
         }
 
         if (transform == null) {
-            System.err.println("BoxColliderAbility: 找不�?TransformAbility");
+            System.err.println("BoxColliderAbility: 找不�?TransformAbility");
             return;
         }
 
-        // 用当�?Transform 的位置创建一�?Box2D body
         float startX = transform.position.x + offsetX;
         float startY = transform.position.y + offsetY;
 
@@ -70,10 +67,10 @@ public class BoxColliderAbility implements IAbility, ICollider {
                 bodyType,
                 density,
                 isTrigger,
-                this // userData������� ability �Լ������� gameObject ����
+                this
         );
 
-        // 注册到自己的碰撞系统（如果你还需要自己的 CollisionSystem�?
+        // 注册到自己的碰撞系统（如果你还需要自己的 CollisionSystem�?
         CollisionSystem.get().register(this);
         if (collider2D.body != null) {
             collider2D.body.setActive(true);
@@ -93,7 +90,7 @@ public class BoxColliderAbility implements IAbility, ICollider {
         return isActive;
     }
 
-    // �?逻辑阶段：Transform -> Body
+    // �?逻辑阶段：Transform -> Body
     public void syncTransformToBody() {
         if (collider2D.body == null || transform == null) return;
 
@@ -104,7 +101,6 @@ public class BoxColliderAbility implements IAbility, ICollider {
         collider2D.body.setTransform(new Vec2(tx, ty), angleRad);
     }
 
-    // �?物理解算后：Body -> Transform
     public void syncBodyToTransform() {
         if (collider2D.body == null || transform == null || isFrozen) return;
 
@@ -118,7 +114,6 @@ public class BoxColliderAbility implements IAbility, ICollider {
 
     @Override
     public void OnUpdate() {
-        // 不在这里同步了，�?GameSekai 控制调用时机
     }
 
     @Override
@@ -131,7 +126,6 @@ public class BoxColliderAbility implements IAbility, ICollider {
         }
     }
 
-    // ============ ICollider：用 Box2D 的接触信息替代手�?AABB ============
 
     @Override
     public boolean overlaps(ICollider other) {
@@ -143,7 +137,6 @@ public class BoxColliderAbility implements IAbility, ICollider {
         Body a = collider2D.body;
         Body b = box.collider2D.body;
 
-        // �?Box2D �?contactEdge 来判断是否接�?
         for (ContactEdge ce = a.getContactList(); ce != null; ce = ce.next) {
             if (ce.other == b && ce.contact.isTouching()) {
                 return true;
