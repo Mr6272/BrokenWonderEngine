@@ -62,7 +62,7 @@
             "command": "powershell",
             "args": [
                 "-Command",
-                "java -cp \"bin;lib/*\" -Djava.library.path=lib UserUsage.gameWindow"
+                "java -cp \"bin;lib/*\" -Djava.library.path=lib UserUsage.xia_demo.gameWindow"
             ],
             "dependsOn": [
                 "build"
