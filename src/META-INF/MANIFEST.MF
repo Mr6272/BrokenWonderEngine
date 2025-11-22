@@ -1,0 +1,4 @@
+Manifest-Version: 1.0
+Main-Class: UserUsage.gameWindow
+Class-Path: lib/gluegen-rt-2.1.2.jar lib/gluegen-rt-2.1.2-natives-windows-amd64.jar lib/jogl-all-2.1.2.jar lib/jogl-all-2.1.2-natives-windows-amd64.jar lib/jbox2d-library-2.1.2.jar lib/gson-2.13.1.jar
+

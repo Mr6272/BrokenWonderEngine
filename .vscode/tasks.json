@@ -1,0 +1,89 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "copy-natives",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "if(!(Test-Path -Path bin/natives)){New-Item -ItemType Directory -Force -Path bin/natives}"
+            ]
+        },
+        {
+            "label": "extract-natives",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "Get-ChildItem lib/*-natives-windows-amd64.jar | ForEach-Object { $jarFile = $_.FullName; Write-Host \"Extracting $jarFile...\"; java -jar \"$jarFile\" -os windows -ws win -jogl.dll -dll; Copy-Item -Path *.dll -Destination bin/natives -Force -ErrorAction SilentlyContinue; Remove-Item -Path *.dll -ErrorAction SilentlyContinue }"
+            ],
+            "dependsOn": [
+                "copy-natives"
+            ]
+        },
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "javac -d bin -encoding utf-8 -cp \"lib/*\" (Get-ChildItem -Recurse -Path src -Filter *.java | Select-Object -ExpandProperty FullName)"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "dependsOn": [
+                "extract-natives"
+            ],
+            "problemMatcher": [
+                "$javac"
+            ]
+        },
+        {
+            "label": "package",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "jar cfm BrokenWonder.jar src/META-INF/MANIFEST.MF -C bin ."
+            ],
+            "dependsOn": [
+                "build"
+            ],
+            "problemMatcher": [
+                "$jshint"
+            ]
+        },
+        {
+            "label": "run",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "java -cp \"bin;lib/*\" -Djava.library.path=lib UserUsage.gameWindow"
+            ],
+            "dependsOn": [
+                "build"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "run-jar",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "java -Djava.library.path=lib -jar BrokenWonder.jar"
+            ],
+            "dependsOn": [
+                "package"
+            ],
+            "group": "test"
+        }
+    ]
+}

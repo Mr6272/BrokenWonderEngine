@@ -1,0 +1,205 @@
+{
+  "name": "level_01",
+  "cellSize": 40,
+  "width": 17,
+  "height": 7,
+  "groundObject": "ground",
+  "wallObject": "wall",
+  "objectTypes": [
+    {
+      "type": "player",
+      "color": "#963131",
+      "texture": "image/大侠待机1.png"
+    },
+    {
+      "type": "box",
+      "color": "#4caf50",
+      "texture": "image/木头箱子.png"
+    },
+    {
+      "type": "goal",
+      "color": "#ff9800",
+      "texture": ""
+    },
+    {
+      "type": "room1inside",
+      "color": "#963131",
+      "texture": "image/房子类型1内部.png"
+    },
+    {
+      "type": "room1outside",
+      "color": "#963131",
+      "texture": "image/房子类型1外墙.png"
+    }
+  ],
+  "objects": [
+    {
+      "type": "box",
+      "tag": "box",
+      "enabled": true,
+      "x": 303.6,
+      "y": 180.4,
+      "z": -0.1,
+      "rotation": 0,
+      "scaleX": 60,
+      "scaleY": 60,
+      "color": "#4caf50",
+      "texture": "image/木头箱子.png",
+      "selectionSize": 30
+    },
+    {
+      "type": "player",
+      "tag": "player",
+      "enabled": true,
+      "x": 302.7,
+      "y": 144.1,
+      "z": -0.2,
+      "rotation": 0,
+      "scaleX": 40,
+      "scaleY": 40,
+      "color": "#963131",
+      "texture": "image/大侠待机1.png",
+      "selectionSize": 20
+    },
+    {
+      "type": "box",
+      "tag": "box",
+      "enabled": true,
+      "x": 273.8,
+      "y": 142.7,
+      "z": -0.1,
+      "rotation": 0,
+      "scaleX": 60,
+      "scaleY": 60,
+      "color": "#4caf50",
+      "texture": "image/木头箱子.png",
+      "selectionSize": 30
+    },
+    {
+      "type": "box",
+      "tag": "box",
+      "enabled": true,
+      "x": 304.6,
+      "y": 109.6,
+      "z": -0.1,
+      "rotation": 0,
+      "scaleX": 60,
+      "scaleY": 60,
+      "color": "#4caf50",
+      "texture": "image/木头箱子.png",
+      "selectionSize": 30
+    },
+    {
+      "type": "box",
+      "tag": "box",
+      "enabled": true,
+      "x": 333.5,
+      "y": 141.3,
+      "z": -0.1,
+      "rotation": 0,
+      "scaleX": 60,
+      "scaleY": 60,
+      "color": "#4caf50",
+      "texture": "image/木头箱子.png",
+      "selectionSize": 30
+    },
+    {
+      "type": "box",
+      "tag": "box",
+      "enabled": true,
+      "x": 176.4,
+      "y": 117.9,
+      "z": -0.1,
+      "rotation": 45,
+      "scaleX": 60,
+      "scaleY": 60,
+      "selectionSize": 30,
+      "color": "#4caf50",
+      "texture": "image/木头箱子.png"
+    },
+    {
+      "type": "room1outside",
+      "tag": "room1outside",
+      "enabled": true,
+      "x": 450.6,
+      "y": 83.8,
+      "z": 0.1,
+      "rotation": 0,
+      "scaleX": 1000,
+      "scaleY": 240,
+      "selectionSize": 50,
+      "color": "#963131",
+      "texture": "image/房子类型1外墙.png"
+    },
+    {
+      "type": "room1inside",
+      "tag": "room1inside",
+      "enabled": true,
+      "x": 488.5,
+      "y": 118.1,
+      "z": -0.25,
+      "rotation": 0,
+      "scaleX": 241,
+      "scaleY": 241,
+      "selectionSize": 120,
+      "color": "#963131",
+      "texture": "image/房子类型1内部.png"
+    },
+    {
+      "type": "room1outside",
+      "tag": "room1outside",
+      "enabled": true,
+      "x": 408,
+      "y": 142.5,
+      "z": 0.1,
+      "rotation": 90,
+      "scaleX": 1300,
+      "scaleY": 240,
+      "selectionSize": 40,
+      "color": "#963131",
+      "texture": "image/房子类型1外墙.png"
+    },
+    {
+      "type": "room1outside",
+      "tag": "room1outside",
+      "enabled": true,
+      "x": 569.4,
+      "y": 140.9,
+      "z": 0.1,
+      "rotation": 90,
+      "scaleX": 1300,
+      "scaleY": 240,
+      "selectionSize": 60,
+      "color": "#963131",
+      "texture": "image/房子类型1外墙.png"
+    },
+    {
+      "type": "room1outside",
+      "tag": "room1outside",
+      "enabled": true,
+      "x": 552.6,
+      "y": 83.5,
+      "z": 0.1,
+      "rotation": 0,
+      "scaleX": 400,
+      "scaleY": 240,
+      "selectionSize": 30,
+      "color": "#963131",
+      "texture": "image/房子类型1外墙.png"
+    },
+    {
+      "type": "room1outside",
+      "tag": "room1outside",
+      "enabled": true,
+      "x": 489,
+      "y": 195.4,
+      "z": 0.1,
+      "rotation": 0,
+      "scaleX": 2000,
+      "scaleY": 240,
+      "selectionSize": 60,
+      "color": "#963131",
+      "texture": "image/房子类型1外墙.png"
+    }
+  ]
+}

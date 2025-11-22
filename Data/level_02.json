@@ -1,0 +1,65 @@
+{
+  "name": "level_02",
+  "cellSize": 40,
+  "width": 17,
+  "height": 7,
+  "groundObject": "ground",
+  "wallObject": "wall",
+  "objectTypes": [
+    {
+      "type": "player",
+      "color": "#963131",
+      "texture": "image/大侠待机1.png"
+    },
+    {
+      "type": "box",
+      "color": "#4caf50",
+      "texture": "image/木头箱子.png"
+    },
+    {
+      "type": "goal",
+      "color": "#ff9800",
+      "texture": ""
+    },
+    {
+      "type": "room1inside",
+      "color": "#963131",
+      "texture": "image/房子类型1内部.png"
+    },
+    {
+      "type": "room1outside",
+      "color": "#963131",
+      "texture": "image/房子类型1外墙.png"
+    }
+  ],
+  "objects": [
+    {
+      "type": "box",
+      "tag": "box",
+      "enabled": true,
+      "x": 303.6,
+      "y": 180.4,
+      "z": -0.1,
+      "rotation": 0,
+      "scaleX": 60,
+      "scaleY": 60,
+      "color": "#4caf50",
+      "texture": "image/木头箱子.png",
+      "selectionSize": 30
+    },
+    {
+      "type": "player",
+      "tag": "player",
+      "enabled": true,
+      "x": 302.7,
+      "y": 144.1,
+      "z": -0.2,
+      "rotation": 0,
+      "scaleX": 40,
+      "scaleY": 40,
+      "color": "#963131",
+      "texture": "image/大侠待机1.png",
+      "selectionSize": 20
+    }
+  ]
+}
