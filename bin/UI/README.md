@@ -3,7 +3,7 @@
 Screen-space UI built on JOGL. Elements render in window coordinates, respond to mouse clicks, and render text via `TextRenderer`.
 
 Usage outline (no sample code):
-- Create elements: `UIPanel(name, x, y, width, height)`, `UILabel(name, text, x, y)`, `UIButton(name, text, x, y, width, height)`.
+- Create elements: `UIPanel(name, x, y, width, height)`, `UILabel(name, text, x, y)`, `UIButton(name, text, x, y, width, height)`, `UIImage(name, sprite, x, y, width, height)` (支持 Sprite 单张、多帧、Atlas)。
 - Register roots with `UIManager.getInstance().addElement(...)`; use `UIElement.addChild(...)` to build hierarchies.
 - Configure visuals: `UIPanel.setBackgroundColor(...)`, `UIPanel.setBorder(...)`, `UILabel.setColor(...)`, `UIButton.setHoverColor(...)`, `UIButton.setPressColor(...)`, `UIElement.setZIndex(...)` for layering.
 - Wire interactions with `UIButton.setOnClick(Runnable)`; hover/press states are handled automatically from the global mouse tracker.
@@ -18,3 +18,6 @@ Tween (lightweight, DOTween-style):
 - Shake position: `UITweens.shakePosition(element, amplitude, duration, Ease, onComplete);`（振幅像素值，自动衰减并复位）
 - Looping（可选参数）：所有工厂均有重载 `(..., Ease, LoopType, loopCount, onComplete)`，`loopCount` < 0 为无限循环，0 为不循环，正数为循环次数；`LoopType` 支持 `None`, `Loop`, `PingPong`。
 - Ease options: `Linear`, `EaseIn`, `EaseOut`, `EaseInOut`.
+
+Images:
+- Use `UIImage` with a `Sprite`（Single/Multiple/Atlas 均可）展示图片。可选：`setAutoPlay(true)` 开启多帧/图集自动播放，`setFrameRate(fps)` 设置播放帧率，`setFrame(idx)` 手动指定帧。

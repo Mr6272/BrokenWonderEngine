@@ -7,7 +7,7 @@ import Framework.*;
 import TypeStructure.Sprite;
 import TypeStructure.SpriteAtlas;
 import TypeStructure.SpriteWrapMode;
-import com.jogamp.newt.event.KeyEvent;
+import java.awt.event.KeyEvent;
 
 public class Xia2 extends GameObject {
 

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Level JSON Editor</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+<div class="toolbar">
+  <button id="btn-new">New</button>
+  <button id="btn-open">Open</button>
+  <button id="btn-save">Save</button>
+
+  <span class="divider"></span>
+
+  <button id="btn-undo" disabled>Undo (Ctrl+Z)</button>
+  <button id="btn-redo" disabled>Redo (Ctrl+Y)</button>
+  
+  <span class="divider"></span>
+
+  <label class="toolbar-label">
+    Type
+    <input type="text" id="toolbar-type-name" placeholder="e.g. enemy" />
+  </label>
+
+  <label class="toolbar-label">
+    Color
+    <input type="color" id="toolbar-color" value="#4caf50" />
+  </label>
+
+  <label class="toolbar-label">
+    Texture URL
+    <input type="text" id="toolbar-texture" placeholder="e.g. image.png" />
+  </label>
+
+  <button id="btn-add-type">Add Type</button>
+  <button id="btn-delete-type">Delete Type</button>
+
+  <span class="flex-spacer"></span>
+
+  <span id="level-info"></span>
+  <input type="file" id="file-input" accept=".json,application/json" style="display:none" />
+</div>
+
+
+
+  <div class="main">
+    <aside class="sidebar">
+      <h3>Assets</h3>
+      <div id="asset-list" class="asset-list">
+        </div>
+    </aside>
+
+    <section class="scene-panel">
+      <div class="scene-header">
+        <span>Scene View (0,0 at bottom-left)</span>
+      </div>
+      <div class="scene-inner">
+        <canvas id="scene-canvas" width="680" height="280"></canvas>
+      </div>
+    </section>
+
+    <aside class="inspect-panel">
+      <h3 id="inspect-title">Level Settings</h3>
+
+      <div id="global-inspector">
+        <div class="field">
+          <label for="level-name">Name</label>
+          <input type="text" id="level-name" />
+        </div>
+        <div class="field">
+          <label for="level-cellsize">Cell Size</label>
+          <input type="number" id="level-cellsize" step="0.1" />
+        </div>
+        <div class="field">
+          <label for="level-width">Width (cells)</label>
+          <input type="number" id="level-width" />
+        </div>
+        <div class="field">
+          <label for="level-height">Height (cells)</label>
+          <input type="number" id="level-height" />
+        </div>
+        <div class="field">
+          <label for="level-ground">Ground Object</label>
+          <input type="text" id="level-ground" />
+        </div>
+        <div class="field">
+          <label for="level-wall">Wall Object</label>
+          <input type="text" id="level-wall" />
+        </div>
+      </div>
+
+      <div id="object-inspector" style="display:none">
+        <div class="field">
+          <label for="obj-type">Type</label>
+          <input type="text" id="obj-type" />
+        </div>
+        <div class="field">
+          <label for="obj-tag">Tag</label>
+          <input type="text" id="obj-tag" />
+        </div>
+        <div class="field field-row">
+          <label for="obj-enabled">Enabled</label>
+          <input type="checkbox" id="obj-enabled" />
+        </div>
+        <div class="field">
+          <label for="obj-x">X</label>
+          <input type="number" id="obj-x" step="0.1" />
+        </div>
+        <div class="field">
+          <label for="obj-y">Y</label>
+          <input type="number" id="obj-y" step="0.1" />
+        </div>
+        <div class="field">
+          <label for="obj-z">Z</label>
+          <input type="number" id="obj-z" step="0.1" />
+        </div>
+        <div class="field">
+          <label for="obj-rot">Rotation</label>
+          <input type="number" id="obj-rot" step="0.1" />
+        </div>
+        <div class="field">
+          <label for="obj-scale-x">Scale X</label>
+          <input type="number" id="obj-scale-x" step="0.1" />
+        </div>
+
+        <div class="field">
+          <label for="obj-scale-y">Scale Y</label>
+          <input type="number" id="obj-scale-y" step="0.1" />
+        </div>
+        <div class="field">
+          <label for="obj-select-size">Selectable Size</label>
+          <input type="number" id="obj-select-size" step="0.1" />
+        </div>
+        <button id="btn-delete-obj" class="danger">Delete Object</button>
+      </div>
+    </aside>
+  </div>
+
+  <script src="editor.js"></script>
+</body>
+
+</html>

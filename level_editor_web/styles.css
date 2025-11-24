@@ -1,0 +1,212 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  color: #eee;
+  background: #1c1c1c;
+}
+
+.toolbar {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 8px;
+  background: #2a2a2a;
+  border-bottom: 1px solid #444;
+}
+
+.toolbar button {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: none;
+  background: #444;
+  color: #eee;
+  cursor: pointer;
+}
+
+.toolbar button:hover {
+  background: #666;
+}
+
+.toolbar .divider {
+  width: 1px;
+  height: 24px;
+  background: #555;
+}
+.toolbar-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #ccc;
+}
+
+.toolbar-label select,
+.toolbar-label input[type="color"] {
+  border: none;
+  background: #444;
+  color: #eee;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.toolbar-label input[type="text"] {
+  width: 100px;
+  padding: 0 4px;
+  border-radius: 4px;
+  height: 24px;
+  border: none;
+  background: #444;
+  color: #eee;
+}
+
+.flex-spacer {
+  flex: 1;
+}
+
+#level-info {
+  font-size: 12px;
+  color: #ccc;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 200px;
+  border-right: 1px solid #444;
+  padding: 8px;
+  overflow: auto;
+  background: #202020;
+}
+
+.sidebar h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.asset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.asset {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px;
+  border-radius: 6px;
+  background: #2a2a2a;
+  cursor: grab;
+  user-select: none;
+}
+
+.asset-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+  border: 1px solid #555;
+}
+
+.asset-label {
+  font-size: 12px;
+}
+
+.scene-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #444;
+  background: #181818;
+}
+
+.scene-header {
+  padding: 6px 10px;
+  border-bottom: 1px solid #333;
+  font-size: 12px;
+  color: #ccc;
+}
+
+.scene-inner {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#scene-canvas {
+  background: #111;
+  border: 1px solid #444;
+  /* 移除 canvas 上的固定尺寸，让 JS 控制其显示大小 */
+  image-rendering: pixelated;
+  max-width: none;
+  max-height: none;
+}
+
+.inspect-panel {
+  width: 260px;
+  padding: 8px;
+  overflow: auto;
+  background: #202020;
+}
+
+.inspect-panel h3 {
+  margin-top: 0;
+  font-size: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 8px;
+}
+
+.field-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.field label {
+  font-size: 12px;
+  margin-bottom: 2px;
+  color: #ccc;
+}
+
+.field input[type="text"],
+.field input[type="number"] {
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: #181818;
+  color: #eee;
+}
+
+.field input[type="checkbox"] {
+  transform: scale(1.1);
+}
+
+button.danger {
+  margin-top: 12px;
+  width: 100%;
+  padding: 6px;
+  background: #7a1f1f;
+}
+
+button.danger:hover {
+  background: #a22626;
+}
