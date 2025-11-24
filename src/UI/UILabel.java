@@ -35,9 +35,11 @@ public class UILabel extends UIElement {
         if (text == null || text.isEmpty()) {
             return;
         }
+        TextRenderUtils.begin(textRenderer);
         textRenderer.setColor(color);
         int drawX = Math.round(getAbsoluteX());
         int drawY = Math.round(getAbsoluteY());
         textRenderer.draw(text, drawX, drawY);
+        TextRenderUtils.end(textRenderer);
     }
 }

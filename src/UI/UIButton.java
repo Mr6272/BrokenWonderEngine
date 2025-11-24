@@ -79,11 +79,13 @@ public class UIButton extends UIPanel {
             UIRenderHelper.drawBorder(gl, getAbsoluteX(), getAbsoluteY(), width, height, getBorderThickness(), getBorderColor());
         }
         if (text != null && !text.isEmpty()) {
+            TextRenderUtils.begin(textRenderer);
             Rectangle2D bounds = textRenderer.getBounds(text);
             float textX = getAbsoluteX() + (width - (float) bounds.getWidth()) * 0.5f;
             float textY = getAbsoluteY() + (height - (float) bounds.getHeight()) * 0.5f;
             textRenderer.setColor(textColor);
             textRenderer.draw(text, Math.round(textX), Math.round(textY));
+            TextRenderUtils.end(textRenderer);
         }
     }
 }

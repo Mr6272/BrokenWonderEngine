@@ -1,0 +1,38 @@
+{
+  "groups": [
+    {
+      "name": "example",
+      "elements": [
+        {
+          "type": "panel",
+          "name": "hud_panel",
+          "position": { "x": 60, "y": 680 },
+          "size": { "width": 840, "height": 140 },
+          "background": "#1e1e1ecc",
+          "border": { "color": "#ffffff80", "thickness": 2 },
+          "children": [
+            {
+              "type": "label",
+              "name": "hud_title",
+              "text": "Example HUD",
+              "position": { "x": 16, "y": 110 },
+              "color": "#ffffffff"
+            },
+            {
+              "type": "button",
+              "name": "reload_button",
+              "text": "Reload (F5)",
+              "position": { "x": 280, "y": 24 },
+              "size": { "width": 120, "height": 48 },
+              "background": "#3a3a3acc",
+              "hoverColor": "#4a4a4ae6",
+              "pressColor": "#2f6f6fcc",
+              "textColor": "#ffffffff",
+              "border": { "color": "#ffffffff", "thickness": 1.5 }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -16,30 +16,34 @@ public class KeyManager {
     }
 
     /**
-     * 每帧最开始调用一次
-     * 把当前状态复制给上一帧
+     * 每帧开始调用：把当前状态复制给上一帧，便于本帧做边沿检测。
+     * 兼容旧名 update。
      */
     public void update() {
+        beginFrame();
+    }
+
+    public void beginFrame() {
         previousKeyStates.clear();
         previousKeyStates.putAll(currentKeyStates);
     }
 
     /**
-     * 在 KeyListener.keyPressed 里调用
+     * KeyListener.keyPressed 里调用。
      */
     public void keyPressed(int keyCode) {
         currentKeyStates.put(keyCode, true);
     }
 
     /**
-     * 在 KeyListener.keyReleased 里调用
+     * KeyListener.keyReleased 里调用。
      */
     public void keyReleased(int keyCode) {
         currentKeyStates.put(keyCode, false);
     }
 
     /**
-     * 这一帧“有没有按着” —— 用来做持续移动
+     * 这一帧是否按着（持续）
      */
     public boolean isKeyHeld(int keyCode) {
         return currentKeyStates.getOrDefault(keyCode, false);

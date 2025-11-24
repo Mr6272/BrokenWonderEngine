@@ -19,6 +19,7 @@ public class UIElement {
     private boolean enabled = true;
     private boolean hovered = false;
     private float zIndex = 0f;
+    private float rotation = 0f;
     private UIElement parent;
     private final List<UIElement> children = new ArrayList<>();
 
@@ -92,6 +93,10 @@ public class UIElement {
         this.zIndex = zIndex;
     }
 
+    public float getRotation() {
+        return rotation;
+    }
+
     public UIElement getParent() {
         return parent;
     }
@@ -152,7 +157,12 @@ public class UIElement {
             return;
         }
         drawSelf(gl, textRenderer);
-        for (UIElement child : children) {
+        if (children.isEmpty()) {
+            return;
+        }
+        List<UIElement> ordered = new ArrayList<>(children);
+        ordered.sort((a, b) -> Float.compare(a.getZIndex(), b.getZIndex()));
+        for (UIElement child : ordered) {
             child.render(gl, textRenderer);
         }
     }

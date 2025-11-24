@@ -2,6 +2,7 @@ package AbstractLayer;
 
 import Core.GameRenderer;
 import Tool.KeyManager;
+import Tool.Log;
 import UI.UIMouse;
 import com.jogamp.opengl.util.FPSAnimator;
 
@@ -65,6 +66,10 @@ public class MainWindow extends JFrame
         animator.start();
 
         //**//
-        scene.genMap();
+        if (scene != null) {
+            scene.genMap();
+        }
+        else
+            Log.w("Scene is null");
     }
 }

@@ -1,0 +1,47 @@
+{
+  "groups": [
+    {
+      "name": "example",
+      "elements": [
+        {
+          "type": "panel",
+          "name": "totaldia",
+          "position": { "x": 70, "y": 12 },
+          "color": "#000",
+          "size": { "width": 800 },
+          "children": [
+            {
+              "type": "image",
+              "name": "diablock",
+              "position": { "x": 20, "y": 12 },
+              "imageUrl": "file:Assets/art_mengpo/dialogblock.png",
+              "keepAspect": true,
+              "size": { "width": 800 },
+              "zIndex": -0.7
+            },
+            {
+              "type": "text",
+              "name": "tip_text",
+              "position": { "x": 100, "y": 150 },
+              "text": "Multi-line Text\\n支持换行与自动换行，默认左对齐。Multi-line Text支持换行与自动换行，默认左对齐。Multi-line Text支持换行与自动换行，默认左对齐。 Text支持换行与自动换行，默认左对齐。Text支持换行与自动换行，默认左对齐。",
+              "color": "#fff",
+              "maxWidth": 600,
+              "lineSpacing": 15,
+              "align": "Left",
+              "zIndex": -0.6
+            },
+            {
+              "type": "image",
+              "name": "role",
+              "position": { "x": -350, "y": -130 },
+              "imageUrl": "file:Assets/art_mengpo/roles/孟婆.png",
+              "keepAspect": true,
+              "size": { "width": 1500 },
+              "zIndex": -0.9
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

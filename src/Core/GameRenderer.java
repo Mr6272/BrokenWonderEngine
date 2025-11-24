@@ -2,6 +2,7 @@ package Core;
 
 import Framework.GameObject;
 import UI.UIManager;
+import AbstractLayer.MainWindow;
 
 import javax.media.opengl.GL;
 import javax.media.opengl.GL2;
@@ -25,7 +26,7 @@ public class GameRenderer implements GLEventListener {
         final GL2 gl = glAutoDrawable.getGL().getGL2();
         gl.glShadeModel(GL2.GL_SMOOTH);
         // 设置背景颜色为深灰色（降低亮度，避免灰蒙蒙的效果）
-        gl.glClearColor(0.7f, 0.7f, 0.7f, 1.0f);
+        gl.glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
         gl.glClearDepth(1.0f);
         gl.glHint(GL2.GL_PERSPECTIVE_CORRECTION_HINT, GL2.GL_NICEST);
         gl.glEnable(GL2.GL_TEXTURE_2D);
@@ -60,6 +61,8 @@ public class GameRenderer implements GLEventListener {
         uiManager.update();
         uiManager.render(glAutoDrawable);
         uiManager.endFrame();
+        // Snapshot key states at end of frame so next frame can detect edges
+        MainWindow.keyManager.beginFrame();
     }
 
     @Override

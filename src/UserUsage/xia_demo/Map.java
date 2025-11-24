@@ -1,16 +1,12 @@
 package UserUsage.xia_demo;
 
-import AbstractLayer.MainWindow;
 import Core.GameSekai;
-import Core.GameRenderer;
 import Core.Scene;
 import Core.Vector2;
 import Core.SceneManageTool.SceneObjReg;
 import Framework.*;
 import Framework.MapData.MapData;
 import Framework.MapData.MapObjectData;
-
-import java.io.IOException;
 
 /*
  * 地图应该是可以被泛用和重用的。

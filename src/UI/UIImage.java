@@ -19,6 +19,9 @@ import java.io.IOException;
 public class UIImage extends UIElement {
     private final ImgLoader loader = new ImgLoader();
     private Sprite sprite;
+    private String externalImagePath;
+    private boolean externalImageIsUrl;
+    private int externalTexture = 0;
     private int currentFrame = 0;
     private float frameRate = 12f;
     private boolean autoPlay = false;
@@ -39,6 +42,12 @@ public class UIImage extends UIElement {
         return sprite;
     }
 
+    public void setExternalImage(String path, boolean isUrl) {
+        this.externalImagePath = path;
+        this.externalImageIsUrl = isUrl;
+        this.sprite = null;
+    }
+
     public void setFrame(int frame) {
         this.currentFrame = Math.max(0, frame);
     }
@@ -56,6 +65,7 @@ public class UIImage extends UIElement {
      */
     public void fitToSpriteSize() {
         if (sprite == null) {
+            fitToExternalImage();
             return;
         }
         try {
@@ -84,6 +94,25 @@ public class UIImage extends UIElement {
         }
     }
 
+    private void fitToExternalImage() {
+        if (externalImagePath == null) {
+            return;
+        }
+        try {
+            BufferedImage img;
+            if (externalImageIsUrl) {
+                img = ImageIO.read(new java.net.URL(externalImagePath));
+            } else {
+                img = ImageIO.read(new File(externalImagePath));
+            }
+            if (img != null) {
+                setSize(img.getWidth(), img.getHeight());
+            }
+        } catch (IOException ex) {
+            System.err.println("UIImage fitToExternalImage failed: " + ex.getMessage());
+        }
+    }
+
     @Override
     public void update(UIMouse mouse) {
         float dt = advanceTime();
@@ -100,24 +129,31 @@ public class UIImage extends UIElement {
 
     @Override
     protected void drawSelf(GL2 gl, TextRenderer textRenderer) {
-        if (sprite == null) {
+        if (sprite == null && externalImagePath == null) {
             return;
         }
         ensureLoaded(gl);
         gl.glEnable(GL2.GL_TEXTURE_2D);
         gl.glEnable(GL.GL_BLEND);
-        if (sprite.SpType == SpriteType.Single) {
+        if (sprite != null && sprite.SpType == SpriteType.Single) {
             gl.glBindTexture(GL2.GL_TEXTURE_2D, sprite.texture);
+            gl.glColor4f(1f, 1f, 1f, 1f);
             drawQuad(gl, 0f, 0f, 1f, 1f);
-        } else if (sprite.SpType == SpriteType.Multiple) {
+        } else if (sprite != null && sprite.SpType == SpriteType.Multiple) {
             int idx = Math.min(Math.max(currentFrame, 1), sprite.textures.length - 1);
             gl.glBindTexture(GL2.GL_TEXTURE_2D, sprite.textures[idx]);
+            gl.glColor4f(1f, 1f, 1f, 1f);
             drawQuad(gl, 0f, 0f, 1f, 1f);
-        } else if (sprite.SpType == SpriteType.Atlas && sprite.Atlas != null) {
+        } else if (sprite != null && sprite.SpType == SpriteType.Atlas && sprite.Atlas != null) {
             SpriteAtlas atlas = sprite.Atlas;
             atlas.getFrameUV(currentFrame, uv);
             gl.glBindTexture(GL2.GL_TEXTURE_2D, atlas.textureId);
+            gl.glColor4f(1f, 1f, 1f, 1f);
             drawQuad(gl, uv[0], uv[1], uv[2], uv[5]);
+        } else if (externalTexture != 0) {
+            gl.glBindTexture(GL2.GL_TEXTURE_2D, externalTexture);
+            gl.glColor4f(1f, 1f, 1f, 1f);
+            drawQuad(gl, 0f, 0f, 1f, 1f);
         }
     }
 
@@ -137,7 +173,17 @@ public class UIImage extends UIElement {
     }
 
     private void ensureLoaded(GL2 gl) {
-        if (sprite == null || gl == null || !sprite.isAwake) {
+        if (gl == null) {
+            return;
+        }
+        if (sprite == null && externalImagePath != null && externalTexture == 0) {
+            try {
+                externalTexture = externalImageIsUrl ? loader.loadImgUrl(gl, externalImagePath) : loader.loadImg(gl, externalImagePath);
+            } catch (Exception ex) {
+                System.err.println("UIImage load external image failed: " + ex.getMessage());
+            }
+        }
+        if (sprite == null || !sprite.isAwake) {
             return;
         }
         try {

@@ -10,33 +10,32 @@ import javax.media.opengl.GLAutoDrawable;
 import java.util.List;
 
 public class GameSekai {
-    public static List<GameObject> GameObjects = new java.util.ArrayList<GameObject>();
+    public static List<GameObject> GameObjects = new java.util.ArrayList<>();
     public static CoroutineManager coroutineManager = new CoroutineManager();
     public static ColliderWorld colliderWorld = new ColliderWorld(new Vector2(0, 0));
 
-
-    public GameSekai()
-    {
-        GameObjects = new java.util.ArrayList<GameObject>();
+    public GameSekai() {
+        GameObjects = new java.util.ArrayList<>();
     }
-    public void Update()
-    {
-        float dt = 1f / GameRenderer.Frame; // GameRenderer.Frame 是 60f 的话，这里就是 1/60
-        MainWindow.keyManager.update();
-        // 1. 先跑你自己的逻辑（玩家输入、AI、协程里改 Transform，等等）
+
+    public void Update() {
+        float dt = 1f / GameRenderer.Frame; // GameRenderer.Frame 为 60f 时，这里就是 1/60
+        // 1. 逻辑更新
         if (!GameObjects.isEmpty()) {
             for (int i = GameObjects.size() - 1; i >= 0; i--) {
-                if (i >= GameObjects.size())
+                if (i >= GameObjects.size()) {
                     continue;
-                GameObjects.get(i).Update();   // 这里面会调用各 Ability.OnUpdate()
+                }
+                GameObjects.get(i).Update(); // 这里面会调用 Ability.OnUpdate()
             }
         }
 
-        // 2. Transform -> Body：让所有刚体跟上最新的 Transform
+        // 2. Transform -> Body
         if (!GameObjects.isEmpty()) {
             for (int i = GameObjects.size() - 1; i >= 0; i--) {
-                if (i >= GameObjects.size())
+                if (i >= GameObjects.size()) {
                     continue;
+                }
                 GameObject tg = GameObjects.get(i);
                 for (IAbility ab : tg.Abilitys) {
                     if (ab instanceof BoxColliderAbility) {
@@ -47,33 +46,35 @@ public class GameSekai {
             }
         }
 
-        // 3. 物理世界前进一步
+        // 3. 物理世界
         colliderWorld.step(dt, 30, 24);
-        // 4. Body -> Transform：用物理解算结果修正 Transform，防止穿模
+
+        // 4. Body -> Transform
         if (!GameObjects.isEmpty()) {
             for (GameObject tg : GameObjects) {
                 for (IAbility ab : tg.Abilitys) {
                     if (ab instanceof BoxColliderAbility) {
                         BoxColliderAbility box = (BoxColliderAbility) ab;
-                        if (GameRenderer.isVisible(box.getGameObject()))
+                        if (GameRenderer.isVisible(box.getGameObject())) {
                             box.syncBodyToTransform();
+                        }
                     }
                 }
             }
         }
 
-        // 5. 如果你还保留自己的 CollisionSystem（非 box2d 那套），放这里
+        // 5. 自定义碰撞
         CollisionSystem.get().update();
 
-        // 6. 协程系统最后收尾
+        // 6. 协程
         coroutineManager.update();
     }
 
-
-    public void Draw(GLAutoDrawable gld)
-    {
-        if (!GameObjects.isEmpty())
-            for (int i = GameObjects.size() - 1; i >= 0; i--)
-                    GameObjects.get(i).Draw(gld);
+    public void Draw(GLAutoDrawable gld) {
+        if (!GameObjects.isEmpty()) {
+            for (int i = GameObjects.size() - 1; i >= 0; i--) {
+                GameObjects.get(i).Draw(gld);
+            }
+        }
     }
 }

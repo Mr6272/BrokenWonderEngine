@@ -20,6 +20,7 @@ public final class UIRenderHelper {
         gl.glVertex2f(x, y + height);
         gl.glEnd();
         gl.glEnable(GL2.GL_TEXTURE_2D);
+        gl.glColor4f(1f, 1f, 1f, 1f); // reset tint for following textured draws
     }
 
     public static void drawBorder(GL2 gl, float x, float y, float width, float height, float thickness, Color color) {
@@ -30,5 +31,6 @@ public final class UIRenderHelper {
         fillRect(gl, x, y + height - thickness, width, thickness, color);
         fillRect(gl, x, y, thickness, height, color);
         fillRect(gl, x + width - thickness, y, thickness, height, color);
+        gl.glColor4f(1f, 1f, 1f, 1f);
     }
 }

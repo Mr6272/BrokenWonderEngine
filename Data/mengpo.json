@@ -1,0 +1,28 @@
+{
+  "name": "level_02",
+  "cellSize": 40,
+  "width": 0,
+  "height": 0,
+  "groundObject": "ground",
+  "wallObject": "wall",
+  "objectTypes": [
+    
+  ],
+  "objects": [
+    {
+      "type": "keyctrl",
+      "tag": "keyctrl",
+      "enabled": true,
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "rotation": 0,
+      "scaleX": 0,
+      "scaleY": 0,
+      "color": "#4caf50",
+      "texture": "image/木头箱子.png",
+      "selectionSize": 30
+    }
+    
+  ]
+}
