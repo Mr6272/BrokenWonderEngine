@@ -40,6 +40,24 @@
               "zIndex": -0.9
             }
           ]
+        },
+        {
+          "type": "panel",
+          "name": "totaldia",
+          "position": { "x": 840, "y": -30 },
+          "color": "#000",
+          "size": { "width": 800 },
+          "children": [
+            {
+              "type": "image",
+              "name": "scene",
+              "position": { "x": 20, "y": 12 },
+              "imageUrl": "file:Assets/art_mengpo/scene/scene.png",
+              "keepAspect": true,
+              "size": { "width": 800 },
+              "zIndex": -0.7
+            }
+          ]
         }
       ]
     }

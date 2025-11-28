@@ -5,8 +5,6 @@ import com.jogamp.opengl.util.awt.TextRenderer;
 import javax.media.opengl.GL2;
 import java.awt.Color;
 import java.awt.geom.Rectangle2D;
-import java.awt.font.FontRenderContext;
-import java.awt.font.LineMetrics;
 import java.util.ArrayList;
 import java.util.List;
 

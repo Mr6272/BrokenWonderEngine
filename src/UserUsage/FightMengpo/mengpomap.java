@@ -1,4 +1,4 @@
-package UserUsage.FighjtMengpo;
+package UserUsage.FightMengpo;
 
 import Core.GameSekai;
 import Core.Scene;
@@ -17,6 +17,7 @@ public class mengpomap extends Scene {
         SceneObjReg.register("keyctrl", (s, obj) -> {
             keyCtrl kc = new keyCtrl();
             Log.d("keyctrl");
+            new MPTextManager("Data/DialogueData.json");
         });
         super.build(scene, data);
     }

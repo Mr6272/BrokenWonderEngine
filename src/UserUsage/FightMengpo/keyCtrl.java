@@ -1,4 +1,4 @@
-package UserUsage.FighjtMengpo;
+package UserUsage.FightMengpo;
 
 import java.awt.event.KeyEvent;
 

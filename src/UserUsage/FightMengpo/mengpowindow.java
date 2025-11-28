@@ -1,4 +1,4 @@
-package UserUsage.FighjtMengpo;
+package UserUsage.FightMengpo;
 
 import AbstractLayer.MainWindow;
 import UI.UIManager;
