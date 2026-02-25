@@ -4,11 +4,12 @@
     ],
     "java.project.outputPath": "bin",
     "java.project.referencedLibraries": [
-        "d:\\java proj\\javaenginebw\\BrokenWonder\\lib\\jogl-all-2.1.2.jar",
-        "d:\\java proj\\javaenginebw\\BrokenWonder\\lib\\jbox2d-library-2.1.2.jar",
-        "d:\\java proj\\javaenginebw\\BrokenWonder\\lib\\gluegen-rt-2.1.2-natives-windows-amd64.jar",
-        "d:\\java proj\\javaenginebw\\BrokenWonder\\lib\\gluegen-rt-2.1.2.jar",
-        "d:\\java proj\\javaenginebw\\BrokenWonder\\lib\\gson-2.13.1.jar",
-        "d:\\java proj\\javaenginebw\\BrokenWonder\\lib\\jogl-all-2.1.2-natives-windows-amd64.jar"
-    ]
+        "d:\\githubdesktop\\BrokenWonderEngine\\lib\\gluegen-rt-2.1.2.jar",
+        "d:\\githubdesktop\\BrokenWonderEngine\\lib\\gluegen-rt-2.1.2-natives-windows-amd64.jar",
+        "d:\\githubdesktop\\BrokenWonderEngine\\lib\\jogl-all-2.1.2-natives-windows-amd64.jar",
+        "d:\\githubdesktop\\BrokenWonderEngine\\lib\\gson-2.13.1.jar",
+        "d:\\githubdesktop\\BrokenWonderEngine\\lib\\jbox2d-library-2.1.2.jar",
+        "d:\\githubdesktop\\BrokenWonderEngine\\lib\\jogl-all-2.1.2.jar"
+    ],
+    "java.format.settings.url": ".vscode/java-formatter.xml"
 }

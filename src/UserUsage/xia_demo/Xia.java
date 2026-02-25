@@ -29,9 +29,6 @@ public class Xia extends GameObject {
     float ThrowTimer;
     boolean isThrowing = false;
     Kuwu kuwu;
-    private float health = 1.0f;
-    private float mana = 0.8f;
-    private float exp = 0.45f;
     public SunAttack Sun;
     private boolean isRunning = false;
 

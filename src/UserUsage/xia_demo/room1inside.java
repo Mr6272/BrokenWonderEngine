@@ -1,7 +1,5 @@
 package UserUsage.xia_demo;
 
-import Core.Vector2;
-import Framework.BoxColliderAbility;
 import Framework.GameObject;
 import Framework.Renderer2DAbility;
 import Framework.TransformAbility;
