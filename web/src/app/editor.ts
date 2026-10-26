@@ -20,8 +20,9 @@ import { renderAssetPanel } from "../panels/assetPanel.ts";
 import { renderModulePanel } from "../panels/modulePanel.ts";
 import { renderScenePanel } from "../panels/scenePanel.ts";
 import { renderInspector } from "../panels/inspector.ts";
-import { renderScriptPanel } from "../panels/scriptPanel.ts";
+import { renderScriptPanel, requestOpenScriptPanel } from "../panels/scriptPanel.ts";
 import { renderSettingsPanel } from "../panels/settingsPanel.ts";
+import { openBwePackager } from "./packageBwe.ts";
 import { renderOutlinePanel } from "../panels/outlinePanel.ts";
 import { openModuleEditor } from "../panels/moduleEditor.ts";
 import { saveProjectFile, openProjectFile, downloadProject, createExampleProject } from "./project.ts";
@@ -52,6 +53,10 @@ export class Editor {
     store.onSelection(() => this.refreshToolbarState());
     window.addEventListener("bwe:refresh", () => this.refreshPanels());
     window.addEventListener("bwe:hint", (e) => this.hint(String((e as CustomEvent).detail ?? "")));
+    // 其它面板（Inspector 的「脚本」卡片、帮助菜单）请求跳到「剧本」页
+    window.addEventListener("bwe:open-scripts", () => this.leftTab.focus("scripts"));
+    // 面板自己接住 Ctrl+S 后广播保存请求（全局快捷键对 textarea 是放行的）
+    window.addEventListener("bwe:save", () => void saveProjectFile());
     window.addEventListener("resize", () => this.canvas?.requestPaint());
 
     this.bindShortcuts();
@@ -87,6 +92,7 @@ export class Editor {
         { label: "扫雷示例（.bwproj）", onClick: () => this.newBuiltinExample("minesweeper"), hint: "引擎内可试玩；行数、列数、地雷数都在模块参数里改" },
         { label: "换装示例（.bwproj）", onClick: () => this.newBuiltinExample("dressup"), hint: "角色拆成若干部件，点标签页即可换装" },
         { divider: true },
+        { label: "打包到 BWE（Windows EXE）…", onClick: () => void openBwePackager(), hint: "需要本地 npm run serve；输出含 exe 的 zip" },
         { label: "工程设置", onClick: () => this.leftTab.focus("settings") },
         { label: "导出 Web 游戏包", onClick: () => this.exportWeb(), disabled: true, hint: "下一步实现" }
       ]);
@@ -124,6 +130,7 @@ export class Editor {
         contextMenu(r.left + 150, r.bottom + 4, [
           { label: "快速上手", key: "F1", onClick: () => showQuickStart() },
           { label: "模块速查", onClick: () => this.leftTab.focus("modules") },
+          { label: "JS 脚本 API 速查", onClick: () => requestOpenScriptPanel("js"), hint: "在左栏「剧本」页搜 bwe API，点一条插到光标处" },
           { divider: true },
           { label: "关于 BWE Studio", onClick: () => showAbout() }
         ]);
@@ -212,6 +219,13 @@ export class Editor {
     bar.appendChild(
       button("预览", () => this.openPreview(), { size: "sm", iconPath: I.play, title: "在编辑器内预览场景；挂玩法模块时可直接试玩" })
     );
+    bar.appendChild(
+      button("打包", () => void openBwePackager(), {
+        size: "sm",
+        iconPath: I.exportImg,
+        title: "打包到 BWE，生成 Windows EXE（需要本地 npm run serve）"
+      })
+    );
 
     this.root.appendChild(bar);
   }
@@ -241,7 +255,7 @@ export class Editor {
         { id: "assets", label: "素材 Assets", hint: "图片与音频；拖到画布上使用", render: renderAssetPanel },
         { id: "modules", label: "模块 Modules", hint: "可以加到对象身上的行为积木", render: renderModulePanel },
         { id: "scenes", label: "场景 Scenes", hint: "地图列表与图层", render: renderScenePanel },
-        { id: "scripts", label: "剧本 Script", hint: "Yarn Spinner 剧情文本", render: renderScriptPanel },
+        { id: "scripts", label: "剧本 Script", hint: "Yarn 剧情对话 / JS 脚本（bwe API）", render: renderScriptPanel },
         { id: "settings", label: "工程 Project", hint: "工程设置与账号", render: renderSettingsPanel }
       ],
       "assets"

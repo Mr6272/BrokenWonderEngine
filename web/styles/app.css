@@ -2594,3 +2594,445 @@ textarea {
     max-height: 180px;
   }
 }
+
+/* ---------------- 打包到 BWE ---------------- */
+
+.pkg-workbench {
+  gap: 10px;
+  min-width: 620px;
+}
+
+.pkg-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.pkg-warn {
+  border-left: 3px solid var(--warn, #d69a2d);
+  padding: 6px 9px;
+  background: color-mix(in srgb, var(--warn, #d69a2d) 8%, transparent);
+  border-radius: 4px;
+  color: var(--text-dim);
+}
+
+.pkg-form {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.pkg-form .pkg-label {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: right;
+}
+
+.pkg-form .input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.pkg-check {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pkg-check input {
+  accent-color: var(--accent);
+}
+
+.pkg-hint {
+  flex: 1;
+  min-width: 0;
+}
+
+.pkg-log {
+  margin: 0;
+  min-height: 170px;
+  max-height: 300px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: #0d111a;
+  color: #b9c7d8;
+  font: 12px/1.55 "Cascadia Mono", "Consolas", monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.pkg-result {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+}
+
+.pkg-result:empty {
+  display: none;
+}
+
+.pkg-result-title {
+  color: var(--ok, #4fd18b);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.pkg-path {
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  word-break: break-all;
+}
+
+@media (max-width: 760px) {
+  .pkg-workbench {
+    min-width: 0;
+  }
+
+  .pkg-form {
+    grid-template-columns: 1fr;
+  }
+
+  .pkg-form .pkg-label {
+    text-align: left;
+  }
+}
+
+/* ==========================================================================
+   JS 脚本面板（剧本 · JS 模式）
+   --------------------------------------------------------------------------
+   布局纪律：
+   1. 行号栏与正文用**同一个字号 / 行高**（12px / 19px），行号才不会逐行飘；
+      两处都写死 19px，不用 1.6 这种相对值（不同浏览器会算出不同的整数）。
+   2. 行号栏不自己滚动，靠 textarea 的 scrollTop 用 transform 同步 —— 只有一个滚动条。
+   3. 编辑区与 API 速查用 flex-wrap：左栏窄（默认 300px）时速查自动落到下一行，
+      拖宽到 460px 以上就并排，不需要 JS 测量宽度。
+   ========================================================================== */
+
+.js-lang-hint {
+  margin-top: 2px;
+}
+
+.js-workbench {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.js-main {
+  flex: 1 1 260px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---------- 带行号栏的编辑器 ---------- */
+
+.js-code {
+  display: flex;
+  height: 320px;
+  min-height: 180px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  overflow: hidden;
+}
+
+.js-code:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.js-gutter {
+  flex: 0 0 auto;
+  overflow: hidden;
+  padding: 8px 8px 8px 9px;
+  border-right: 1px solid var(--line-soft);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 19px;
+  text-align: right;
+  user-select: none;
+}
+
+.js-gutter-inner {
+  white-space: pre;
+  will-change: transform;
+}
+
+.js-source {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 19px;
+  white-space: pre;
+  overflow: auto;
+  tab-size: 2;
+}
+
+.js-source:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.js-source::selection {
+  background: rgba(76, 141, 255, 0.32);
+}
+
+.js-stats {
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+/* ---------- 诊断 ---------- */
+
+.js-check-head .group-label {
+  margin: 0;
+}
+
+.js-check-state {
+  max-width: 62%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.js-diag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.js-diag {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 1px solid var(--line-soft);
+  border-left: 2px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.js-diag:hover {
+  border-color: var(--line);
+  background: var(--surface-3);
+}
+
+.js-diag.error {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.js-diag.warn {
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.js-diag.info {
+  border-left-color: var(--text-3);
+}
+
+.js-diag-where {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+.js-diag.error .js-diag-where {
+  color: var(--danger);
+}
+
+.js-diag.warn .js-diag-where {
+  color: var(--warn);
+}
+
+.js-diag-msg {
+  min-width: 0;
+  color: var(--text-2);
+  word-break: break-word;
+}
+
+.js-diag-ok {
+  color: var(--ok);
+}
+
+/* ---------- API 速查侧栏 ---------- */
+
+.js-api {
+  flex: 0 1 190px;
+  min-width: 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 5px 8px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  max-height: 420px;
+}
+
+.js-api-head .group-label {
+  margin: 0;
+}
+
+.js-api-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.js-api.collapsed .js-api-body {
+  display: none;
+}
+
+.js-api-search {
+  height: 26px;
+  font-size: 12px;
+}
+
+.js-api-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  max-height: 330px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.js-api-group {
+  margin: 5px 0 1px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  color: var(--text-3);
+}
+
+.js-api-row {
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.js-api-row:hover {
+  background: var(--surface-3);
+  border-color: var(--line);
+}
+
+.js-api-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--accent-hover);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.js-api-desc {
+  margin-top: 1px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.js-api-tag {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--font);
+  font-size: 9px;
+  color: var(--text-3);
+}
+
+.js-api-empty {
+  padding: 8px 4px;
+}
+
+/* ---------- 语言徽标 / 脚本槽位（Inspector 与列表共用） ---------- */
+
+.js-lang-badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: .3px;
+}
+
+.js-lang-badge.js {
+  border-color: rgba(240, 169, 43, .45);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.js-lang-badge.yarn {
+  border-color: rgba(43, 196, 212, .45);
+  background: rgba(43, 196, 212, .12);
+  color: var(--cat-dialogue);
+}
+
+.script-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.script-slot .name {
+  font-size: 12px;
+}
+
+.script-slot .sub {
+  font-size: 10.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+

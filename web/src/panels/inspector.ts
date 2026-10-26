@@ -10,13 +10,15 @@
  */
 
 import type { SceneObject } from "../core/model.ts";
-import { moduleDef, categoryOf, moduleSummary } from "../data/modules.ts";
+import { scriptLang, scriptNamesOfLang } from "../core/model.ts";
+import { moduleDef, categoryOf, moduleSummary, makeInstance } from "../data/modules.ts";
 import { store } from "../core/store.ts";
 import { el, input, button, select, switchToggle, fieldRow, numText } from "../core/dom.ts";
 import { I, iconForKind } from "../ui/icons.ts";
 import { KINDS } from "../ui/terms.ts";
-import { ok, info, warn, confirmDialog } from "../ui/toast.ts";
+import { ok, info, warn, confirmDialog, contextMenu } from "../ui/toast.ts";
 import { openModuleEditor } from "./moduleEditor.ts";
+import { requestOpenScriptPanel } from "./scriptPanel.ts";
 
 export function renderInspector(host: HTMLElement): void {
   host.replaceChildren();
@@ -44,6 +46,7 @@ export function renderInspector(host: HTMLElement): void {
   wrap.appendChild(identityCard(obj));
   wrap.appendChild(placeCard(obj));
   wrap.appendChild(modulesCard(obj));
+  wrap.appendChild(scriptCard(obj));
   host.appendChild(wrap);
 }
 
@@ -73,7 +76,65 @@ function emptyInspector(): HTMLElement {
       el("div", { class: "d" }, "在画布上点一个角色或物件，这里就会出现它的属性与模块。框选可以一次处理多个。")
     )
   );
+  // 没选中对象时正好放「场景级」设置：这里比工程设置页更顺手（改场景脚本时通常正在看画布）
+  box.appendChild(sceneScriptCard());
   return box;
+}
+
+/**
+ * 场景脚本入口。
+ * 契约见 docs/scripting-api.md §1.2：场景载入完、对象 spawn 完之后调用 onSceneStart。
+ * 放在 Inspector 的空状态里（而不是工程设置页），因为这是「这张地图」的属性，
+ * 和场景列表、画布在同一个视线里；选中对象时也不会被它占位置。
+ */
+function sceneScriptCard(): HTMLElement {
+  const box = el("div", { class: "col" });
+  const scene = store.scene;
+  if (!scene) {
+    box.appendChild(el("div", { class: "hint" }, "没有打开场景"));
+    return cardBox("场景脚本 Scene Script", box, I.script);
+  }
+
+  const all = Object.keys(store.project?.scripts ?? {});
+  const options = [
+    { value: "", label: "（不运行场景脚本）" },
+    ...all.map((n) => ({
+      value: n,
+      label: `${n}（${scriptLang(store.project?.scripts[n]) === "js" ? "JS" : "Yarn"}）`
+    }))
+  ];
+  const sel = select(options, scene.onStartScript ?? "", {
+    hint: "场景载入完成后执行脚本里的 onSceneStart(ctx)",
+    onChange: (v) => {
+      scene.onStartScript = v;
+      store.markDirty();
+      window.dispatchEvent(new CustomEvent("bwe:refresh"));
+    }
+  });
+  box.appendChild(fieldRow("场景脚本 On Start", sel, "JS 脚本里写 function onSceneStart(ctx) 就会被调用；适合刷怪、计分、天气这类系统级逻辑"));
+
+  if (!scene.onStartScript) {
+    box.appendChild(
+      el(
+        "div",
+        { class: "hint" },
+        all.length
+          ? "当前场景没有系统级逻辑。想刷怪 / 计分 / 做全局状态，选一个 JS 脚本挂在这里。"
+          : "还没有脚本。先去「剧本」页切到 JS 语言新建一个，再回来选。"
+      )
+    );
+  }
+
+  const row = el("div", { class: "row tight" });
+  row.appendChild(
+    button("打开剧本面板", () => requestOpenScriptPanel("js", scene.onStartScript || undefined), {
+      size: "sm",
+      variant: "ghost",
+      title: "在左栏「剧本」页写 / 改 JS 脚本"
+    })
+  );
+  box.appendChild(row);
+  return cardBox("场景脚本 Scene Script", box, I.script);
 }
 
 // ---------------- 身份 ----------------
@@ -357,6 +418,124 @@ function modulesCard(obj: SceneObject): HTMLElement {
     el("div", { class: "hint" }, "模块编辑器是独立窗口：左列拖「⠿」排序，右列调参数；滑块和数字框不会再触发拖动。")
   );
   return cardBox("模块 Modules", box);
+}
+
+// ---------------- 脚本 ----------------
+
+/**
+ * 对象脚本卡片。
+ *
+ * 「对象脚本 script.js」模块就是脚本挂到对象上的入口；这里给它一个比模块编辑器
+ * 短得多的路径：选脚本 → 去剧本页写。没挂脚本时也不留白，直接给一个能点的动作。
+ */
+function scriptCard(obj: SceneObject): HTMLElement {
+  const box = el("div", { class: "col" });
+  const attached = obj.modules.filter((m) => m.defId === "script.js");
+  const jsNames = scriptNamesOfLang(store.project, "js");
+
+  if (!attached.length) {
+    box.appendChild(
+      el(
+        "div",
+        { class: "hint" },
+        jsNames.length
+          ? "这个对象还没挂脚本。挂上之后，移动、攻击、UI 都能在 onStart / onUpdate 里自己写 —— 和模块共存，不互相覆盖。"
+          : "这个对象还没挂脚本。先去「剧本」页切到 JS 语言新建一个，回来就能挂了。"
+      )
+    );
+    const add = button(
+      jsNames.length ? "挂一个 JS 脚本…" : "去新建 JS 脚本",
+      () => {
+        if (!jsNames.length) {
+          requestOpenScriptPanel("js");
+          return;
+        }
+        scriptMenu(add, jsNames, (name) => attachScript(obj, name));
+      },
+      { size: "sm", variant: jsNames.length ? "primary" : "outline", iconPath: I.plus }
+    );
+    box.appendChild(add);
+    return cardBox("脚本 Script", box, I.script);
+  }
+
+  for (const inst of attached) {
+    const cur = inst.values["script"] ?? "";
+    const lang = cur ? scriptLang(store.project?.scripts[cur]) : "js";
+    const row = el("div", { class: "script-slot" });
+    row.appendChild(el("span", { class: `js-lang-badge ${lang}` }, lang === "js" ? "JS" : "Yarn"));
+    const infoBox = el("div", { class: "grow" });
+    infoBox.appendChild(el("div", { class: "name" }, cur || "（还没选脚本）"));
+    infoBox.appendChild(
+      el(
+        "div",
+        { class: "sub" },
+        cur
+          ? lang === "js"
+            ? "JS 脚本 · 事件函数由运行时调用"
+            : "Yarn 剧本 · 不能当对象脚本运行，请换成 JS 脚本"
+          : "点「选择」挑一个 JS 脚本"
+      )
+    );
+    row.appendChild(infoBox);
+    const btns = el("div", { class: "row tight" });
+    btns.appendChild(
+      button("选择", () => scriptMenu(btns, jsNames, (name) => {
+        inst.values["script"] = name;
+        store.markDirty();
+        window.dispatchEvent(new CustomEvent("bwe:refresh"));
+      }), { size: "sm", variant: "outline" })
+    );
+    if (cur && store.project?.scripts[cur]) {
+      btns.appendChild(
+        button("编辑", () => requestOpenScriptPanel(undefined, cur), {
+          size: "sm",
+          variant: "ghost",
+          title: "在左栏「剧本」页打开这段脚本"
+        })
+      );
+    }
+    row.appendChild(btns);
+    box.appendChild(row);
+  }
+
+  box.appendChild(
+    el(
+      "div",
+      { class: "hint" },
+      "脚本负责「额外逻辑」，模块负责「默认行为」，两者共存。脚本里 ctx.self 就是左边这个对象；可用能力见「剧本」页的 API 速查。"
+    )
+  );
+  return cardBox("脚本 Script", box, I.script);
+}
+
+/** 选择脚本的弹出菜单（只列 JS；Yarn 需要从「对话」模块进入）。 */
+function scriptMenu(anchor: HTMLElement, names: string[], onPick: (name: string) => void): void {
+  const r = anchor.getBoundingClientRect();
+  contextMenu(r.left, r.bottom + 2, [
+    ...names.slice(0, 30).map((n) => ({
+      label: n,
+      hint: store.project?.scripts[n]?.file ?? "",
+      onClick: () => onPick(n)
+    })),
+    { divider: true },
+    { label: "在「剧本」页新建 / 编辑…", onClick: () => requestOpenScriptPanel("js") }
+  ]);
+}
+
+/** 把 script.js 模块挂到对象上，并把脚本名写进参数。 */
+function attachScript(obj: SceneObject, name: string): void {
+  const def = moduleDef("script.js");
+  if (!def) {
+    warn("找不到「对象脚本」模块定义");
+    return;
+  }
+  const inst = makeInstance(def);
+  inst.values["script"] = name;
+  inst.trigger = "ALWAYS";
+  obj.modules.push(inst);
+  store.markDirty();
+  ok(`已给「${obj.name || "对象"}」挂上脚本「${name}」`);
+  window.dispatchEvent(new CustomEvent("bwe:refresh"));
 }
 
 // ---------------- 批量编辑 ----------------

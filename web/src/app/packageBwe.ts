@@ -1,0 +1,642 @@
+/**
+ * 「打包到 BWE」前端工作台。
+ *
+ * 浏览器不能直接调用 jpackage，所以这里只负责：
+ *   1. 把 IndexedDB 里的素材栅格化成 PNG / 原样音频；
+ *   2. 连同 .bwproj JSON 一起交给本地服务；
+ *   3. 轮询进度、展示日志、下载 zip、打开输出目录。
+ *
+ * 如果页面不是通过 npm run serve 打开的，会直接给出可执行的修复提示，
+ * 而不是让用户对着一句「网络错误」猜。
+ */
+
+import { store } from "../core/store.ts";
+import { el, button, input } from "../core/dom.ts";
+import { I } from "../ui/icons.ts";
+import { error, info, modal, warn } from "../ui/toast.ts";
+import { assetFilesForPack } from "../data/assets.ts";
+import { moduleDef } from "../data/modules.ts";
+import type { Project } from "../core/model.ts";
+
+interface PackStatus {
+  ok: boolean;
+  node: string;
+  javac: boolean;
+  jpackage: boolean;
+  wix: boolean;
+  appImage: boolean;
+  port: number;
+  outRoot: string;
+}
+
+interface PackJob {
+  id: string;
+  status: "running" | "done" | "error";
+  logs: string[];
+  error: string | null;
+  result?: {
+    appName: string;
+    version: string;
+    outDir: string;
+    appDir: string;
+    exeName: string;
+    exePath: string;
+    zipName: string;
+    sizeBytes: number;
+    warnings: string[];
+  };
+}
+
+/** /api/js-check 返回的一条诊断（行号列号都相对用户脚本，1 开始）。 */
+interface JsDiagnostic {
+  line: number;
+  col: number;
+  severity: "error" | "warning";
+  message: string;
+}
+
+interface JsCheckResult {
+  ok: boolean;
+  name?: string;
+  hasTypes?: boolean;
+  diagnostics?: JsDiagnostic[];
+  transpiled?: string;
+  error?: string;
+}
+
+interface QuickRunResult {
+  ok: boolean;
+  pid?: number;
+  error?: string;
+  warnings?: string[];
+  logFile?: string;
+  logTail?: string;
+}
+
+interface QuickRunStatus {
+  ok: boolean;
+  running: boolean;
+  pid: number | null;
+  project?: string;
+  startedAt?: string | null;
+  logTail?: string;
+  error?: string;
+}
+
+interface UploadedAssetPayload {
+  id: string;
+  files: { name: string; data: string }[];
+  error?: string;
+}
+
+/** 工程里的 JS 脚本（lang 缺省是 yarn，不算）。 */
+function projectJsScripts(p: Project): { name: string; source: string }[] {
+  const raw = (p.scripts ?? {}) as unknown as Record<
+    string,
+    { name?: string; lang?: string; source?: string } | null | undefined
+  >;
+  return Object.entries(raw)
+    .filter(([, s]) => s && String(s.lang ?? "yarn").toLowerCase() === "js")
+    .map(([key, s]) => ({ name: String(s?.name ?? key), source: String(s?.source ?? "") }));
+}
+
+/**
+ * 把 IndexedDB 里的素材栅格化成可上传的 base64。
+ * 打包与试跑共用这一份，避免两条路径对素材的收集规则不一致（一边转 PNG、一边丢掉）。
+ */
+async function collectUploads(
+  p: Project,
+  say: (s: string) => void
+): Promise<{ uploaded: UploadedAssetPayload[]; packed: number }> {
+  const uploaded: UploadedAssetPayload[] = [];
+  let done = 0;
+  let packed = 0;
+  for (const asset of p.assets) {
+    done++;
+    say(`收集素材 ${done}/${p.assets.length}：${asset.name}`);
+    const pack = await assetFilesForPack(asset);
+    if (pack.error) {
+      say(`  ⚠ 跳过「${asset.name}」：${pack.error}`);
+      uploaded.push({ id: asset.id, files: [], error: pack.error });
+      continue;
+    }
+    if (!pack.files.length) {
+      uploaded.push({ id: asset.id, files: [], error: "没有可打包的文件" });
+      continue;
+    }
+    const files: { name: string; data: string }[] = [];
+    for (const f of pack.files) {
+      files.push({ name: f.name, data: await blobToBase64(f.blob) });
+    }
+    uploaded.push({ id: asset.id, files });
+    packed++;
+  }
+  return { uploaded, packed };
+}
+
+/** 当前 Java 运行时真的会执行的模块；其余只保留数据，不会被解释。 */
+const RUNTIME_MODULES = new Set([
+  // script.js：运行时会按事件调用脚本里的 onStart / onUpdate / onClick …（ScriptEngine.bindSceneObjects）
+  "script.js",
+  "move.follow",
+  "move.patrol",
+  "move.wander",
+  "move.flee",
+  "move.locked",
+  "combat.health",
+  "fight.hp",
+  "fx.cameraFollow",
+  "show.camera",
+  "render.shadow",
+  "look.shadow",
+  "render.blink",
+  "look.blink",
+  "render.sortByY",
+  "look.sortByY",
+  "render.playOnce",
+  "look.playOnce",
+  "game.minesweeper",
+  "game.dressup",
+  "game.dressPart"
+]);
+
+function unsupportedModules(p: Project): string[] {
+  const out = new Set<string>();
+  for (const scene of p.scenes) {
+    for (const obj of scene.objects) {
+      for (const m of obj.modules) {
+        if (!m.enabled) continue;
+        if (!RUNTIME_MODULES.has(m.defId)) out.add(m.defId);
+      }
+    }
+  }
+  return [...out];
+}
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return blob.arrayBuffer().then((buf) => {
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function instructionsModal(title: string, lines: string[]): void {
+  modal({
+    title,
+    body: (() => {
+      const box = el("div", { class: "col" });
+      for (const line of lines) {
+        box.appendChild(el("div", { class: "hint", style: { lineHeight: "1.75" } }, line));
+      }
+      return box;
+    })(),
+    actions: [{ label: "知道了", variant: "primary", onClick: (close) => close() }]
+  });
+}
+
+export async function openBwePackager(): Promise<void> {
+  const p = store.project;
+  if (!p) {
+    warn("先打开一个工程");
+    return;
+  }
+
+  let status: PackStatus | null = null;
+  try {
+    const resp = await fetch("/api/package-bwe/status", { cache: "no-store" });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    status = (await resp.json()) as PackStatus;
+  } catch {
+    instructionsModal("打包服务没有启动", [
+      "「打包到 BWE」需要本地 Node 服务调用 JDK 的 jpackage。",
+      "在项目根目录运行：npm run serve",
+      "然后从 http://127.0.0.1:5273/ 打开编辑器，再点「打包到 BWE」。",
+      "",
+      "如果你已经用其他端口启动，请从对应地址打开页面。",
+      "没有 JDK 时，服务会显示缺少 javac / jpackage；安装 JDK 17+ 后重启服务即可。"
+    ]);
+    return;
+  }
+
+  if (!status || !status.ok) {
+    instructionsModal("本机缺少打包工具", [
+      `Node：${status?.node ?? "未知"}`,
+      `javac：${status?.javac ? "已找到" : "缺失"}`,
+      `jpackage：${status?.jpackage ? "已找到" : "缺失"}`,
+      "",
+      "安装 JDK 17 或更高版本，把 bin 目录加入 PATH，然后重启 npm run serve。",
+      "Windows 便携应用不需要 WiX；只有做安装器（setup.exe）才需要。"
+    ]);
+    return;
+  }
+  const st = status;
+  // 弹窗关闭时停掉「试跑」的 1s 轮询；body 里会把它指到真正的 clearInterval 上。
+  let stopRunPolling: () => void = () => {};
+
+  const unsupported = unsupportedModules(p);
+  const multipleScenes = p.scenes.length > 1;
+
+  modal({
+    title: "打包到 BWE · Windows EXE",
+    xwide: true,
+    closeOnMask: false,
+    // 关掉面板就停止轮询试跑日志；Java 窗口本身保留，用户可再开面板点「停止试跑」。
+    onClose: () => stopRunPolling(),
+    body: () => {
+      const wrap = el("div", { class: "col pkg-workbench" });
+
+      wrap.appendChild(
+        el(
+          "div",
+          { class: "hint" },
+          "把当前工程交给 BWE Java 运行时，生成自带 Java 的 Windows 应用目录，再压缩成 zip。"
+            + "解压后双击里面的 .exe 即可运行，目标机器不需要安装 Java。"
+        )
+      );
+
+      const infoRow = el("div", { class: "pkg-meta" });
+      infoRow.appendChild(el("span", {}, `工程：${p.name}`));
+      infoRow.appendChild(el("span", {}, `场景：${p.scenes.length}`));
+      infoRow.appendChild(el("span", {}, `素材：${p.assets.length}`));
+      infoRow.appendChild(el("span", {}, `Node ${st.node}`));
+      wrap.appendChild(infoRow);
+
+      if (multipleScenes) {
+        wrap.appendChild(
+          el("div", { class: "hint pkg-warn" },
+            `注意：当前运行时会加载第一张场景「${p.scenes[0]?.name ?? ""}」，多场景切换模块暂未实现。`)
+        );
+      }
+      if (unsupported.length > 0) {
+        const names = unsupported.slice(0, 12).map((id) => moduleDef(id)?.title ?? id);
+        wrap.appendChild(
+          el("div", { class: "hint pkg-warn" },
+            `以下 ${unsupported.length} 个模块在打包运行时里不会执行（工程数据保留，不会报错）：`
+              + names.join("、") + (unsupported.length > 12 ? "…" : ""))
+        );
+      }
+
+      const form = el("div", { class: "pkg-form" });
+      form.appendChild(el("label", { class: "pkg-label" }, "应用名称（显示在窗口标题和 exe 文件名）"));
+      const nameI = input(p.name, { hint: "建议使用英文名，兼容性最好；中文名会自动重试" });
+      form.appendChild(nameI);
+
+      form.appendChild(el("label", { class: "pkg-label" }, "版本号"));
+      const verI = input("1.0.0", { hint: "三段数字，例如 1.0.0" });
+      form.appendChild(verI);
+
+      const consoleRow = el("label", { class: "pkg-check" });
+      const consoleBox = el("input", { type: "checkbox" }) as HTMLInputElement;
+      consoleRow.appendChild(consoleBox);
+      consoleRow.appendChild(el("span", {}, "保留控制台窗口（调试用，正常发布不要勾）"));
+      form.appendChild(consoleRow);
+      wrap.appendChild(form);
+
+      const actionRow = el("div", { class: "row tight" });
+      const startBtn = button("开始打包", () => void start(), {
+        variant: "primary",
+        iconPath: I.exportImg,
+        title: "生成 Windows 应用与 zip"
+      });
+      // 试跑：不打包，直接在本机起 Java 窗口。先做 JS 诊断，有 error 就停在提示。
+      const runBtn = button("试跑", () => void tryRun(), {
+        variant: "outline",
+        iconPath: I.play,
+        title: "不做 Windows 包，直接在本机启动 Java 运行时看效果"
+      });
+      actionRow.appendChild(startBtn);
+      actionRow.appendChild(runBtn);
+      actionRow.appendChild(
+        el("span", { class: "hint pkg-hint" },
+          st.wix ? "已检测到 WiX，但本版本仍输出便携 zip。" : "未安装 WiX：输出便携 zip；安装器 exe 不在本版本范围。")
+      );
+      wrap.appendChild(actionRow);
+
+      const logBox = el("pre", { class: "pkg-log" }, "等待开始…");
+      wrap.appendChild(logBox);
+      const resultBox = el("div", { class: "pkg-result" });
+      wrap.appendChild(resultBox);
+
+      // ---------- 试跑面板（日志 + 停止）----------
+      const runSection = el("div", { class: "col" });
+      runSection.appendChild(el("div", { class: "pkg-label" }, "试跑（本机 Java 窗口，不生成 exe）"));
+      runSection.appendChild(
+        el("div", { class: "hint" },
+          "先用 TypeScript 检查全部 JS 脚本：有 error 会停下来并列出位置；没有错误就直接起 Java 窗口。"
+            + "日志每秒刷新，改完代码可以再点一次「试跑」。")
+      );
+      const runLogBox = el("pre", { class: "pkg-log" }, "点上方「试跑」启动本机 Java 窗口…");
+      runSection.appendChild(runLogBox);
+      const runRow = el("div", { class: "row tight" });
+      const stopBtn = button("停止试跑", () => void stopRun(), {
+        variant: "danger",
+        size: "sm",
+        iconPath: I.stop,
+        title: "结束本机 Java 试跑进程（Windows 下杀整棵进程树）",
+        disabled: true
+      });
+      runRow.appendChild(stopBtn);
+      const runHint = el("span", { class: "hint pkg-hint" }, "未启动");
+      runRow.appendChild(runHint);
+      runSection.appendChild(runRow);
+      wrap.appendChild(runSection);
+
+      let busy = false;
+      let lastJobId = "";
+
+      // ---- 试跑状态 ----
+      let runTimer: number | null = null;
+      let runStarting = false;
+      let runPid = 0;
+
+      const setRunLog = (lines: string[] | string): void => {
+        const text = Array.isArray(lines) ? lines.join("\n") : lines;
+        runLogBox.textContent = text || "（没有日志）";
+        runLogBox.scrollTop = runLogBox.scrollHeight;
+      };
+
+      function stopPolling(): void {
+        if (runTimer !== null) {
+          window.clearInterval(runTimer);
+          runTimer = null;
+        }
+      }
+      // 弹窗关闭后停止轮询（Java 进程保留，用户可以从任务栏关窗口，或再开面板点停止）。
+      stopRunPolling = stopPolling;
+
+      async function refreshRunStatus(): Promise<void> {
+        try {
+          const resp = await fetch("/api/quick-run/status", { cache: "no-store" });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = (await resp.json()) as QuickRunStatus;
+          if (data.logTail) setRunLog(data.logTail);
+          if (data.running) {
+            runPid = data.pid ?? runPid;
+            stopBtn.disabled = false;
+            runHint.textContent = `运行中 · PID ${data.pid} · 日志每秒刷新`;
+          } else {
+            stopPolling();
+            runPid = 0;
+            stopBtn.disabled = true;
+            runHint.textContent = "试跑进程已退出";
+          }
+        } catch (e) {
+          stopPolling();
+          const msg = e instanceof Error ? e.message : String(e);
+          setRunLog(`${runLogBox.textContent ?? ""}\n读取试跑状态失败：${msg}`);
+          runHint.textContent = "状态读取失败";
+        }
+      }
+
+      async function tryRun(): Promise<void> {
+        if (!p || runStarting) return;
+        runStarting = true;
+        stopPolling();
+        runBtn.disabled = true;
+        runBtn.textContent = "准备中…";
+        stopBtn.disabled = true;
+        runHint.textContent = "检查 JS 脚本诊断…";
+        const lines: string[] = [];
+        const say = (s: string): void => {
+          lines.push(s);
+          setRunLog(lines);
+        };
+        try {
+          const jsScripts = projectJsScripts(p);
+          let errors = 0;
+          if (jsScripts.length === 0) {
+            say("工程里没有 JS 脚本，直接试跑。");
+          } else {
+            for (const script of jsScripts) {
+              const r = await fetch("/api/js-check", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ source: script.source, name: script.name })
+              });
+              const data = (await r.json()) as JsCheckResult;
+              if (!r.ok) {
+                say(`⚠ 脚本「${script.name}」诊断服务不可用：${data.error || `HTTP ${r.status}`}`);
+                continue;
+              }
+              const diagnostics = data.diagnostics ?? [];
+              const errs = diagnostics.filter((d) => d.severity === "error");
+              errors += errs.length;
+              say(
+                `脚本「${script.name}」：${errs.length} 个错误 / ${diagnostics.length - errs.length} 个警告`
+                  + (data.hasTypes ? "" : "（bwe.d.ts 不可用，只做了语法检查）")
+              );
+              for (const d of diagnostics) {
+                say(`  ${d.severity === "error" ? "✗" : "⚠"} 第 ${d.line} 行第 ${d.col} 列：${d.message}`);
+              }
+            }
+            if (errors > 0) {
+              // 有 error 就停在这里：起 Java 窗口也只会看到脚本报错，先把源码改对。
+              say(`✗ 有 ${errors} 个脚本错误，先修好再试跑（没有发起试跑请求）。`);
+              runHint.textContent = "脚本有错误，未启动试跑";
+              error(`JS 脚本有 ${errors} 个错误`);
+              return;
+            }
+            say(`✓ ${jsScripts.length} 个 JS 脚本诊断通过`);
+          }
+
+          say("准备素材…");
+          const { uploaded, packed } = await collectUploads(p, say);
+          say(`素材 ${packed}/${p.assets.length} 项，请求启动 Java 运行时…`);
+          runHint.textContent = "启动 Java 运行时…";
+          const resp = await fetch("/api/quick-run", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ project: p, assets: uploaded, name: p.name })
+          });
+          const data = (await resp.json()) as QuickRunResult;
+          if (data.logTail) setRunLog(data.logTail);
+          if (!resp.ok || !data.ok) {
+            throw new Error(data.error || `试跑失败（HTTP ${resp.status}）`);
+          }
+          runPid = data.pid ?? 0;
+          for (const w of data.warnings ?? []) say(`⚠ ${w}`);
+          say(`✓ Java 已启动：PID ${data.pid}（日志：${data.logFile ?? ".build/quickrun/run.log"}）`);
+          stopBtn.disabled = false;
+          runHint.textContent = `运行中 · PID ${data.pid}`;
+          stopPolling();
+          runTimer = window.setInterval(() => void refreshRunStatus(), 1000);
+          void refreshRunStatus();
+          info(`试跑已启动：PID ${data.pid}`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          say(`✗ ${msg}`);
+          error(`试跑失败：${msg}`);
+          runHint.textContent = "试跑失败";
+        } finally {
+          runStarting = false;
+          runBtn.disabled = false;
+          runBtn.textContent = "试跑";
+        }
+      }
+
+      async function stopRun(): Promise<void> {
+        stopPolling();
+        stopBtn.disabled = true;
+        runHint.textContent = "正在结束试跑…";
+        try {
+          const resp = await fetch("/api/quick-run/stop", { method: "POST" });
+          const data = (await resp.json()) as QuickRunStatus & { stopped?: boolean };
+          if (data.logTail) setRunLog(data.logTail);
+          runPid = 0;
+          if (data.stopped) {
+            runHint.textContent = "已停止试跑";
+            info("已停止试跑");
+          } else {
+            runHint.textContent = "当前没有在跑的试跑进程";
+            info("没有在跑的试跑进程");
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setRunLog(`${runLogBox.textContent ?? ""}\n停止试跑失败：${msg}`);
+          warn("停止试跑失败，请手动结束 java 进程");
+        }
+      }
+
+      const setLogs = (lines: string[]) => {
+        const text = lines.length ? lines.join("\n") : "等待开始…";
+        logBox.textContent = text;
+        logBox.scrollTop = logBox.scrollHeight;
+      };
+
+      async function start(): Promise<void> {
+        if (busy) return;
+        busy = true;
+        startBtn.disabled = true;
+        startBtn.textContent = "打包中…";
+        resultBox.replaceChildren();
+        const local: string[] = [];
+        let remoteLogs: string[] = [];
+        const display = () => setLogs([...remoteLogs, ...local].slice(-160));
+        const say = (s: string) => {
+          local.push(s);
+          if (local.length > 120) local.splice(0, local.length - 120);
+          display();
+        };
+        try {
+          if (!p) throw new Error("工程已关闭");
+          const name = nameI.value.trim() || p.name;
+          const version = verI.value.trim() || "1.0.0";
+          say(`准备打包「${name}」v${version}`);
+
+          // 素材失败也要把原因一起上传：服务端 writeBuild 会把它写进 result.warnings，
+          // 「这局游戏里某张图变成色块」的原因就不会只留在前端日志里。
+          const { uploaded, packed } = await collectUploads(p, say);
+          say(`素材准备完成：${packed}/${p.assets.length} 项，开始上传工程…`);
+
+          const body = JSON.stringify({
+            project: p,
+            assets: uploaded,
+            name,
+            version,
+            console: consoleBox.checked
+          });
+          const resp = await fetch("/api/package-bwe", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body
+          });
+          const data = (await resp.json()) as { ok?: boolean; jobId?: string; error?: string };
+          if (!resp.ok || !data.jobId) {
+            throw new Error(data.error || `打包请求失败（HTTP ${resp.status}）`);
+          }
+          lastJobId = data.jobId;
+          say(`任务已创建：${lastJobId}`);
+
+          let job: PackJob | null = null;
+          for (;;) {
+            await delay(750);
+            const r = await fetch(`/api/package-bwe/jobs/${lastJobId}`, { cache: "no-store" });
+            if (!r.ok) throw new Error(`读取进度失败（HTTP ${r.status}）`);
+            const jd = (await r.json()) as { ok?: boolean; job?: PackJob; error?: string };
+            if (!jd.job) throw new Error(jd.error || "任务状态为空");
+            job = jd.job;
+            if (job.logs?.length) {
+              // 服务端日志到达后，丢掉前端「准备阶段」的重复行，之后两边合并展示。
+              if (remoteLogs.length === 0) local.length = 0;
+              remoteLogs = job.logs;
+              display();
+            }
+            if (job.status === "done" || job.status === "error") break;
+          }
+          if (!job) throw new Error("没有拿到打包任务状态");
+
+          if (job.status === "error") {
+            throw new Error(job.error || "打包失败");
+          }
+          const r = job.result;
+          if (!r) throw new Error("打包完成但没有返回结果");
+          say(`打包完成：${r.zipName}（${formatBytes(r.sizeBytes)}）`);
+          renderResult(r, lastJobId);
+          info(`打包完成：${r.exeName}`);
+          startBtn.textContent = "重新打包";
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          say(`✗ ${msg}`);
+          error(`打包失败：${msg}`);
+          startBtn.textContent = "重试打包";
+        } finally {
+          busy = false;
+          startBtn.disabled = false;
+        }
+      }
+
+      function renderResult(r: NonNullable<PackJob["result"]>, jobId: string): void {
+        resultBox.replaceChildren();
+        resultBox.appendChild(el("div", { class: "pkg-result-title" }, "打包完成"));
+        resultBox.appendChild(
+          el("div", { class: "hint" },
+            `${r.exeName} · ${r.version} · ${formatBytes(r.sizeBytes)}`)
+        );
+        resultBox.appendChild(el("div", { class: "hint pkg-path" }, `输出目录：${r.outDir}`));
+        const row = el("div", { class: "row tight" });
+        row.appendChild(
+          button("下载 ZIP", () => {
+            window.location.href = `/api/package-bwe/download/${jobId}`;
+          }, { variant: "primary", iconPath: I.import, title: "下载包含 exe 的 Windows 应用包" })
+        );
+        row.appendChild(
+          button("打开输出目录", () => {
+            void fetch(`/api/package-bwe/open/${jobId}`).catch(() => {
+              warn("打不开资源管理器，请手动复制输出目录");
+            });
+          }, { size: "sm", iconPath: I.open })
+        );
+        resultBox.appendChild(row);
+        if (r.warnings?.length) {
+          for (const w of r.warnings) {
+            resultBox.appendChild(el("div", { class: "hint pkg-warn" }, `⚠ ${w}`));
+          }
+        }
+        resultBox.appendChild(
+          el("div", { class: "hint" },
+            "解压后双击 exe 运行；如果启动失败，查看 Build/bwe.log。")
+        );
+      }
+
+      return wrap;
+    },
+    actions: [
+      { label: "关闭", variant: "ghost", onClick: (close) => close() }
+    ]
+  });
+}

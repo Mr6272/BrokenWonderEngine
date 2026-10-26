@@ -685,6 +685,18 @@ export const MODULES: ModuleDef[] = [
 
   // ===== 玩法 Gameplay =====
   {
+    id: "script.js",
+    title: "对象脚本",
+    code: "Script (JS)",
+    category: "game",
+    blurb: "给这个对象挂一段 JS 脚本，按事件调用同名函数",
+    detail: "脚本在左栏「剧本」页用 JS 语言新建，函数名就是触发时机：onStart / onUpdate / onClick / onInteract / onDamage / onDeath 等，"
+      + "没写的函数直接跳过。「有模块负责默认行为，脚本再加一层逻辑」，两者共存不打架。"
+      + "脚本里的 ctx.self 就是挂脚本的这个对象，可用 bwe.* 访问世界、输入、相机、绘制、存档等能力（见「剧本」页的 API 速查）。",
+    triggers: ["ALWAYS"],
+    params: [ref("script", "脚本 Script", "script", "在左栏「剧本」页切到 JS 语言，新建一个脚本再回到这里选择")]
+  },
+  {
     id: "game.minesweeper",
     title: "扫雷棋盘",
     code: "Minesweeper Board",

@@ -1,0 +1,2619 @@
+{
+  "format": 1,
+  "name": "涌现沙盘",
+  "author": "BWE Studio",
+  "tileSize": 32,
+  "gridW": 40,
+  "gridH": 30,
+  "scenes": [
+    {
+      "id": "scene-emergence",
+      "name": "荒原哨站",
+      "originX": 0,
+      "originY": 0,
+      "widthTiles": 40,
+      "heightTiles": 30,
+      "layers": [
+        {
+          "id": "layer-terrain",
+          "name": "地形",
+          "visible": true,
+          "locked": false,
+          "order": 0
+        },
+        {
+          "id": "layer-prop",
+          "name": "物件",
+          "visible": true,
+          "locked": false,
+          "order": 0
+        },
+        {
+          "id": "layer-actor",
+          "name": "角色",
+          "visible": true,
+          "locked": false,
+          "order": 0
+        }
+      ],
+      "objects": [
+        {
+          "id": "obj-ground",
+          "name": "地面",
+          "kind": "PROP",
+          "x": 640,
+          "y": 480,
+          "z": 0,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 0,
+          "halfH": 0,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-ground",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "w": "1280",
+            "h": "960"
+          },
+          "tags": [
+            "地面"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-001",
+          "name": "石墙 14,5",
+          "kind": "TILE",
+          "x": 464,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-002",
+          "name": "石墙 14,13",
+          "kind": "TILE",
+          "x": 464,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-003",
+          "name": "石墙 15,5",
+          "kind": "TILE",
+          "x": 496,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-004",
+          "name": "石墙 15,13",
+          "kind": "TILE",
+          "x": 496,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-005",
+          "name": "石墙 16,5",
+          "kind": "TILE",
+          "x": 528,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-006",
+          "name": "石墙 16,13",
+          "kind": "TILE",
+          "x": 528,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-007",
+          "name": "石墙 17,5",
+          "kind": "TILE",
+          "x": 560,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-008",
+          "name": "石墙 17,13",
+          "kind": "TILE",
+          "x": 560,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-009",
+          "name": "石墙 18,5",
+          "kind": "TILE",
+          "x": 592,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-010",
+          "name": "石墙 18,13",
+          "kind": "TILE",
+          "x": 592,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-011",
+          "name": "石墙 19,5",
+          "kind": "TILE",
+          "x": 624,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-012",
+          "name": "石墙 20,5",
+          "kind": "TILE",
+          "x": 656,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-013",
+          "name": "石墙 21,5",
+          "kind": "TILE",
+          "x": 688,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-014",
+          "name": "石墙 21,13",
+          "kind": "TILE",
+          "x": 688,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-015",
+          "name": "石墙 22,5",
+          "kind": "TILE",
+          "x": 720,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-016",
+          "name": "石墙 22,13",
+          "kind": "TILE",
+          "x": 720,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-017",
+          "name": "石墙 23,5",
+          "kind": "TILE",
+          "x": 752,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-018",
+          "name": "石墙 23,13",
+          "kind": "TILE",
+          "x": 752,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-019",
+          "name": "石墙 24,5",
+          "kind": "TILE",
+          "x": 784,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-020",
+          "name": "石墙 24,13",
+          "kind": "TILE",
+          "x": 784,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-021",
+          "name": "石墙 25,5",
+          "kind": "TILE",
+          "x": 816,
+          "y": 176,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-022",
+          "name": "石墙 25,13",
+          "kind": "TILE",
+          "x": 816,
+          "y": 432,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-023",
+          "name": "石墙 14,6",
+          "kind": "TILE",
+          "x": 464,
+          "y": 208,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-024",
+          "name": "石墙 25,6",
+          "kind": "TILE",
+          "x": 816,
+          "y": 208,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-025",
+          "name": "石墙 14,7",
+          "kind": "TILE",
+          "x": 464,
+          "y": 240,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-026",
+          "name": "石墙 25,7",
+          "kind": "TILE",
+          "x": 816,
+          "y": 240,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-027",
+          "name": "石墙 14,8",
+          "kind": "TILE",
+          "x": 464,
+          "y": 272,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-028",
+          "name": "石墙 25,8",
+          "kind": "TILE",
+          "x": 816,
+          "y": 272,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-029",
+          "name": "石墙 14,9",
+          "kind": "TILE",
+          "x": 464,
+          "y": 304,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-030",
+          "name": "石墙 25,9",
+          "kind": "TILE",
+          "x": 816,
+          "y": 304,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-031",
+          "name": "石墙 14,10",
+          "kind": "TILE",
+          "x": 464,
+          "y": 336,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-032",
+          "name": "石墙 25,10",
+          "kind": "TILE",
+          "x": 816,
+          "y": 336,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-033",
+          "name": "石墙 14,11",
+          "kind": "TILE",
+          "x": 464,
+          "y": 368,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-034",
+          "name": "石墙 25,11",
+          "kind": "TILE",
+          "x": 816,
+          "y": 368,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-035",
+          "name": "石墙 14,12",
+          "kind": "TILE",
+          "x": 464,
+          "y": 400,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-036",
+          "name": "石墙 25,12",
+          "kind": "TILE",
+          "x": 816,
+          "y": 400,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-037",
+          "name": "石墙 6,19",
+          "kind": "TILE",
+          "x": 208,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-038",
+          "name": "石墙 7,19",
+          "kind": "TILE",
+          "x": 240,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-039",
+          "name": "石墙 8,19",
+          "kind": "TILE",
+          "x": 272,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-040",
+          "name": "石墙 9,19",
+          "kind": "TILE",
+          "x": 304,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-041",
+          "name": "石墙 10,19",
+          "kind": "TILE",
+          "x": 336,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-042",
+          "name": "石墙 11,19",
+          "kind": "TILE",
+          "x": 368,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-043",
+          "name": "石墙 12,19",
+          "kind": "TILE",
+          "x": 400,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-044",
+          "name": "石墙 13,19",
+          "kind": "TILE",
+          "x": 432,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-045",
+          "name": "石墙 16,19",
+          "kind": "TILE",
+          "x": 528,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-046",
+          "name": "石墙 17,19",
+          "kind": "TILE",
+          "x": 560,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-047",
+          "name": "石墙 18,19",
+          "kind": "TILE",
+          "x": 592,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-048",
+          "name": "石墙 19,19",
+          "kind": "TILE",
+          "x": 624,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-049",
+          "name": "石墙 20,19",
+          "kind": "TILE",
+          "x": 656,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-050",
+          "name": "石墙 2,15",
+          "kind": "TILE",
+          "x": 80,
+          "y": 496,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-051",
+          "name": "石墙 3,15",
+          "kind": "TILE",
+          "x": 112,
+          "y": 496,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-052",
+          "name": "石墙 4,15",
+          "kind": "TILE",
+          "x": 144,
+          "y": 496,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-053",
+          "name": "石墙 5,15",
+          "kind": "TILE",
+          "x": 176,
+          "y": 496,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-054",
+          "name": "石墙 6,15",
+          "kind": "TILE",
+          "x": 208,
+          "y": 496,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-055",
+          "name": "石墙 7,15",
+          "kind": "TILE",
+          "x": 240,
+          "y": 496,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-056",
+          "name": "石墙 8,15",
+          "kind": "TILE",
+          "x": 272,
+          "y": 496,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-057",
+          "name": "石墙 2,16",
+          "kind": "TILE",
+          "x": 80,
+          "y": 528,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-058",
+          "name": "石墙 8,16",
+          "kind": "TILE",
+          "x": 272,
+          "y": 528,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-059",
+          "name": "石墙 2,17",
+          "kind": "TILE",
+          "x": 80,
+          "y": 560,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-060",
+          "name": "石墙 8,17",
+          "kind": "TILE",
+          "x": 272,
+          "y": 560,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-061",
+          "name": "石墙 2,18",
+          "kind": "TILE",
+          "x": 80,
+          "y": 592,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-062",
+          "name": "石墙 3,18",
+          "kind": "TILE",
+          "x": 112,
+          "y": 592,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-063",
+          "name": "石墙 4,18",
+          "kind": "TILE",
+          "x": 144,
+          "y": 592,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-064",
+          "name": "石墙 5,18",
+          "kind": "TILE",
+          "x": 176,
+          "y": 592,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-065",
+          "name": "石墙 6,18",
+          "kind": "TILE",
+          "x": 208,
+          "y": 592,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-066",
+          "name": "石墙 7,18",
+          "kind": "TILE",
+          "x": 240,
+          "y": 592,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-stone-067",
+          "name": "石墙 8,18",
+          "kind": "TILE",
+          "x": 272,
+          "y": 592,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-stone",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "stone"
+          },
+          "tags": [
+            "墙",
+            "石墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-wood-068",
+          "name": "木栅栏 14,19",
+          "kind": "TILE",
+          "x": 464,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-wood",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "wood"
+          },
+          "tags": [
+            "墙",
+            "木墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-wood-069",
+          "name": "木栅栏 15,19",
+          "kind": "TILE",
+          "x": 496,
+          "y": 624,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-wood",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "wood"
+          },
+          "tags": [
+            "墙",
+            "木墙"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-oil-070",
+          "name": "油桶 6,23",
+          "kind": "TILE",
+          "x": 208,
+          "y": 752,
+          "z": 2,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-barrel",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "oil"
+          },
+          "tags": [
+            "油桶"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-oil-071",
+          "name": "油桶 7,23",
+          "kind": "TILE",
+          "x": 240,
+          "y": 752,
+          "z": 2,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-barrel",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "oil"
+          },
+          "tags": [
+            "油桶"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-oil-072",
+          "name": "油桶 6,24",
+          "kind": "TILE",
+          "x": 208,
+          "y": 784,
+          "z": 2,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-barrel",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "oil"
+          },
+          "tags": [
+            "油桶"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-oil-073",
+          "name": "油桶 7,24",
+          "kind": "TILE",
+          "x": 240,
+          "y": 784,
+          "z": 2,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 16,
+          "halfH": 16,
+          "layerId": "layer-terrain",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-barrel",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {
+            "material": "oil"
+          },
+          "tags": [
+            "油桶"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-player",
+          "name": "玩家",
+          "kind": "ACTOR",
+          "x": 400,
+          "y": 688,
+          "z": 6,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 12,
+          "halfH": 12,
+          "layerId": "layer-actor",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-player",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "move.locked",
+              "trigger": null,
+              "values": {},
+              "enabled": true,
+              "collapsed": false
+            },
+            {
+              "defId": "combat.health",
+              "trigger": null,
+              "values": {
+                "maxHealth": "160"
+              },
+              "enabled": true,
+              "collapsed": false
+            },
+            {
+              "defId": "script.js",
+              "label": "脚本 player",
+              "trigger": null,
+              "values": {
+                "script": "player"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {},
+          "tags": [
+            "玩家"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-guard-1",
+          "name": "守卫·甲",
+          "kind": "ACTOR",
+          "x": 528,
+          "y": 272,
+          "z": 6,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 12,
+          "halfH": 12,
+          "layerId": "layer-actor",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-guard",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "combat.health",
+              "trigger": null,
+              "values": {
+                "maxHealth": "90"
+              },
+              "enabled": true,
+              "collapsed": false
+            },
+            {
+              "defId": "script.js",
+              "label": "脚本 guard",
+              "trigger": null,
+              "values": {
+                "script": "guard"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {
+            "material": "cloth"
+          },
+          "tags": [
+            "守卫"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-guard-2",
+          "name": "守卫·乙",
+          "kind": "ACTOR",
+          "x": 752,
+          "y": 272,
+          "z": 6,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 12,
+          "halfH": 12,
+          "layerId": "layer-actor",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-guard",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "combat.health",
+              "trigger": null,
+              "values": {
+                "maxHealth": "90"
+              },
+              "enabled": true,
+              "collapsed": false
+            },
+            {
+              "defId": "script.js",
+              "label": "脚本 guard",
+              "trigger": null,
+              "values": {
+                "script": "guard"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {
+            "material": "cloth"
+          },
+          "tags": [
+            "守卫"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-civilian",
+          "name": "平民·阿禾",
+          "kind": "ACTOR",
+          "x": 560,
+          "y": 880,
+          "z": 6,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 12,
+          "halfH": 12,
+          "layerId": "layer-actor",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-civilian",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "combat.health",
+              "trigger": null,
+              "values": {
+                "maxHealth": "60"
+              },
+              "enabled": true,
+              "collapsed": false
+            },
+            {
+              "defId": "script.js",
+              "label": "脚本 civilian",
+              "trigger": null,
+              "values": {
+                "script": "civilian"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {
+            "material": "cloth"
+          },
+          "tags": [
+            "平民"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-bottle-1",
+          "name": "油瓶1",
+          "kind": "PROP",
+          "x": 400,
+          "y": 656,
+          "z": 4,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 7,
+          "halfH": 7,
+          "layerId": "layer-prop",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-bottle",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "script.js",
+              "label": "脚本 bottle",
+              "trigger": null,
+              "values": {
+                "script": "bottle"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {
+            "material": "glass"
+          },
+          "tags": [
+            "可推",
+            "油瓶"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-bottle-2",
+          "name": "油瓶2",
+          "kind": "PROP",
+          "x": 560,
+          "y": 848,
+          "z": 4,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 7,
+          "halfH": 7,
+          "layerId": "layer-prop",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-bottle",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "script.js",
+              "label": "脚本 bottle",
+              "trigger": null,
+              "values": {
+                "script": "bottle"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {
+            "material": "glass"
+          },
+          "tags": [
+            "可推",
+            "油瓶"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-bottle-3",
+          "name": "油瓶3",
+          "kind": "PROP",
+          "x": 304,
+          "y": 880,
+          "z": 4,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 7,
+          "halfH": 7,
+          "layerId": "layer-prop",
+          "visible": true,
+          "locked": false,
+          "assetId": "asset-bottle",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "script.js",
+              "label": "脚本 bottle",
+              "trigger": null,
+              "values": {
+                "script": "bottle"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {
+            "material": "glass"
+          },
+          "tags": [
+            "可推",
+            "油瓶"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "obj-hud",
+          "name": "HUD 控制器",
+          "kind": "PROP",
+          "x": 16,
+          "y": 16,
+          "z": 0,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 8,
+          "halfH": 8,
+          "layerId": "layer-prop",
+          "visible": false,
+          "locked": false,
+          "assetId": "",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "script.js",
+              "label": "脚本 hud",
+              "trigger": null,
+              "values": {
+                "script": "hud"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {},
+          "tags": [
+            "HUD"
+          ],
+          "parentId": null
+        }
+      ],
+      "onStartScript": "world",
+      "bgmAssetId": ""
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset-ground",
+      "name": "地面",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/png;base64,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ly9fvnz58uXLby3/zN8pjr98+fJHyD9yHVQAKgCdgPLly5cvX758+fLly5cvX758+XYA/mLcrpdlKAAVgE5A+fLly5cvv4P89bfEjr98+fLly5cv3yO4CsDIwq/bAjDqICgAvYPO8Zdv/bWVn/VByPGXL1++fPny5c+cn10+Of7y5XsE2A5AJ2CX+SVumI5/f/klPyg5/vLly5cvX758+fLly5evAFQAKgCdgPLly5cvX758+fLly5cvX758+QpABaAC0AkoX758+fLly5cvX758+fLly5evAFQAKgCdgPLly5cvX778AfLPvo7B8ZffUr4fAZAvv9380uen4y9fAagAdALKly9f/iD5Wz8oOv7y5cuXn1/+Ov7y5cuP/O+/ukY5/u/Vjr0C8O/7r4/bdRkKQAXgtPmZ38I6/vLly5fvA7h8O0Acf/ny5cuXL98OQDsAFYBOQPld5e/5I8nxnyf/3rpw/MfIP1qMOP7y5cuXL1++/OzNGI6/fAWgAlABKF++fPny5dsB6PjLly9f/mT53sEof+T89fp2/BWACkAFoPzG86M+mPTgj/xQZgeW80++/Bbys//4dPzly/cOLMdfvnz58hWA0WP9jkEFoBNAvnz58uXLlz9g/rMiwvH3BaQdYNaffPny5SsA7QBUADoB5cuXL1++fPmB5YTjL1++fPny5cuXrwBUACoA5cuXL987SOTLly8/6HUMXoIv3/p3/OXLl68AVAAqAJ2A8uXLly9fvnz58uXLly9fvnz5gz2BoQBUADoB5cuXLz94x4HjL1++fPnyI/L33oscf/ny5cu3A1ABuHHcrpdltH4A1r94UqIALN1COwHly5cvX75891/58uXLly9/hPxX92vHPy//3lz8PD/7B5gUgHYA2gHoBuD4y286P/LG6PjLly9fft/5R+8Rjr98+XaA1voSzPqTbwegAlAB6ASUL1++fPny5cuXLz+8jHH85cuXL1++AlABqACUL1++fPny5cuXL1++fPny5cuXrwBUACoA5cuXL1++fPny5cuXL1++fPny5SsAFYAKQPny5cuXL1++fPny5cuXL1++fPkKwPcfDcMwDMMwDMMwDMMwDMMYc7y1sAOvdgNbu4H+/V8/qg358n0DJV++fPny5cuXL1++fPnyZ8ifuf9SACoA5SsA3YDky5cvX758+fLly5cvX74CUAGoAFQAylcAugHJ7yf/6+++WobjL1++fPny5bebv+V+7fjLl3/ss67jrwDsrgC8XS/LUAD+z/jz375ZhgJMvgJQvnz58o9/IHb85cuXL1++fPnyFYCjFYDPOjQ7AO0AlK8AdAOSLz/hG1fHX758+Y/ys3dBOf7y5cuXL3+E/L33TzsAFYAKQPkKQDegLvJL/4Ho+MuXL1++fPnya/wB7vjLl+8RfDsAFYAKQAWY/ODHvhWA8uXLtwMz37/+d5t/+f4AjP2Sy/wrIB1/+fLlKwAVgApABdzL/MjSzQ5ANyD58hUAjr98+fLly5cvX758BaACUAHYdAFXshxTQCoA5cuXL1++fPny5cuXL1++fAWgAlABqACTrwCUL1++fPkFd2y26s/ajWr9ya/x6gHHX758+fIVgApABaACTH53BeDIf4DKly9fvnz58uXLly+/Tn7kl0GOv3wFoAJQAdh5/tHHkh1/NwD58uXLly9fvnegjuLf4jH/8nvJjzg/HX/5CkAFYNUPAApA+QpA+fLz/vBx/OXLly9fvnz58uXLVwAqAO0ATPvjUwEoXwEoX758+fLly5cvX758+fLlKwAVgJM/AlzyF3cVYPIVgPLly5cvX758+fLly4/e6OL4y1cAKgAVgHYAegegAnD4G9BPH47+7T//5B088uXLly9fvnz58uXLl68AVAAqABWA8hWAUQXclm8o3QDly5cvX758+fJzd4E5/vLly1cAKgAVgAow+QpA+fLly+82v9Ufobn37zL/8uXLly9fftnHmx1/BeAwBeDH7bqMXg/A7XpZhgJQASZfASjfO2BGyj86H46/fPl51zvHX758+fLly1cA2gFoB6ACbJL8e+8pVADKly9fvnz58uXLly9fvh2Ijr8CUAGoAFTAyQ/7kRQ3APny5cuXX2MnsOMvX758+bnFj+MvX74CUAGoAEwvnRSAdgC6AcmXL1++fPny5csfKb/mj9C1+g5a+fIVgLn916NX3ykAFYAKMPluAPKrffh0/L0DzfEfP//Z2nH839PPOcdfvnz58uXLfw//nYspdgAePXgKQAWUfAWgfPkt5Wc9juP4y5cvX778Gl/EOP6x+a/my/GX32t+iWtRtn/9b/YIsB2ACkD5CkA3IB8A5HeZf+Y8cPzlK0Ac/xpfflz8Cr18+Z4AGcB/9Hpk/XkEWAGoAFSAyVcAypcvX758+fLly5cvX758+QpABaACUAEmv80C0Ddg8uXLly9fvnz58uXLly+/5wIw+r2ACkAFoAJMvh2A8j0CLV++fPmD5fsRFPny5cuXL98OQAWgAlABKF8B6AYkX758+fLly5cvX758+fIVgApABaACTL4CUL58+fLly5cvX758+fLly1cAKgAVgAow+QpA+fLly5cvX758+fLly5cvXwH4rAA0DMMwDMMwDMMwDMMwDGPM8dbCDrzaDawdgPLtAPQNlHz58uXLly9fvnz58uXLHzt/5v5LAagAlK8AdAOSL1++fPny5cuXL1++fPkKQAXgGAfg43ZdhgJQASZfASh/f/7X3321jBn9pe3Wn/ze88+eE46/fPny5cuXL18BqAC0A7DDAurPf/tmGQo4BaAbkHz58uXLly9fvnz58kfPP/JlmOOvAFQAKgAVYPIVgPJ9AEnejWj9yZcvX758+fLly5evAFQAKgAVgPLDd0Ku84/upFQAypcvX758+WPlR7x6wPH3BZx8+fLlz5J/7/qsAHxxAG7XyzJmKAAjP2gpAOXbAegGuCU/8zqU4X/mMf/y5csfLX/rNdzxl68Adfzly5c/xg7APZ2ZHYB2ACrA5CsA5cuXL3/y/OwvIR1/+fLly89//Yjj7wto+R4BVgAqABVg8hWA8uUnfxh3/OXLly9fvnz58uXLVwAqABWAVQvArHfBKcDkuwHJly8/c+eD4y9fvnz5Y+QfvS84/vLly1cAKgAVgAow+QpAO8Dky5cvX758+fLly5cvv3J+xOtJFIAKQAWgAky+AlC+fPny5cuXL1++fPkN5pcsgno//mePhfWnAFQAKgAVYPIVgD4AOf7y5cuXL1++fPny5cv3ChgFoAJw6/i4XZehAFSA9Z4f/S7IR+s/69co3YDly5cvX758+V4BIr/nAmLvv8/8y5evAOy2ALxdL8uwA1ABKN8OQDcg+fLly9/2B6LjL1++/Ox3bzn+8uXLl68A9AiwAlC+AtANSL78AfOf/QHp+MuXL1++fPnyW8uPfhLJ8W83P+MptJH6rz1PvioAFYAKMPlewusGLF++fPlD5z+6Tzj+8uXLHyl/z2dix1++HYB2ACoAOywAS7wfrucCbHa/AlC+fPny5cuXL1++fPny5ctXACoA7QBUgMlXAMqXL9878Bx/+fLD8o/sxnf85cuXL1++AlAB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BaACUL58+fLly5cvX74CUAEoX758+fIVgApABaACUL58+fLly5cvX74CUAEoX758+fIVgArAn/4BhmEYhmEYhmEYhmEYhmGMOd40sBp4+fLly5cvX758OwDtALT+5MuXL19+dP7sT6DW9CsAnYDy5cuXL1++fPkKQAWg9Sdfvnz58hWACkAFoAuAfPny5cuXL1++AlABaP3Jly9fvnwFoAJQAegCIF++fPny5Qfn/+Hz75bh+MtXACoA5cuXL1++AlABqABUAMqXL1++fPnyh80/U4Q6/gpA5598+fLly1cAKgAVgA2egCV2O7gAyZc/X/6za4fjL1++fAWgAtD6ky9f/oh//z763zv+CkAFoALQBUC+fPny5cuXn/ZFnOPfXwH45fc/LEMBaP3Jly9fvnwFoAJQAegCsPOPJcdfvnz58uXLzy8hHf/2dwCWLBwVgPLly5cvXwGoAFQAOgHl24HiD2DrT758+fIVgB4Btv7ky5cvX74CUAGoAHQBkC9fvvyx86Peter4y+8xP/p8UAAqAOXLnyV/fT11/OUrABWA98bH7boMBaACUP6kHwBm+ANMvnz58uXLVwAqAGvnZ34J5PiPkX90zYx6/LceD+tPvgLQDkAFoHw3YPny5cuXL1++AlABKD/4c7HjL1++/NEKwK275xSACsDhT8BnHwJcgOTLbz8/aleC4y9fvnwFoAKw1fmP3JHnHczy5cuXbwegAlAB6AIgX758+fKbzi/1h6jjL18BqAC0/uTLly8/9zOY468A9A5ABaB8+fLl+wDk+MuXL18BqACUH74L0fH3BJjj30/+iDuQsx/7PVIA3q6XZdgBWPigKADly5cvX758+fLlKwDbKAAzfgzD+pMvX758OwDtAPQIsAJQvnz5w+U/+mPK8ZfvEWTHX74C0A5A+S3nRxTCjr98+QpABaACcKgC0M+gy5cvX758+fn57r/yFYAKQPny5cuXrwDcUwBGPfKrALQD0AVg4Py935I6/vLly5cvX74CUAEoX758+fIVgHYAVisAW29AS/1CihNQvnzvAJLvEWzHX778uQvAL7//YRmtFoCl/32tz3/0ZxDrX758+T3l9/gjQM8+fysA7QC0A1C+fPny5duB21n+mQ+kjr98OwDtAJTfX36JIsI7CNvMz/jy3/GXrwBUACoA5ad/8+D4y5f/y/ysD32Ov3z5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/zy/l6Da/wSgDeAXAP2X3y9AxWWI/ssvv/zyyy+//PLLH/kiRP2XX34C0AaQX375vQVP/+WXf8r80b/+67/88ssvv/zyyy+//ASgDSC//PLLL7/88ssvv/zyy1/kR1D9dweY/ssvPwFoA8gvv/zyyy+//PLLL7/88ssvv/zyy5/9sUj6TwCGBr799cwBIL/88svvGZD6L78JoPr59+Y7sx4j5Hf9x02A5Z4Ic/69Zvtbzv6XX3755ScAbQD55Zdffvnll19++eWXX3755Zd/6Px7xLj+t5+/5A+CBOAE+X/aQPovv/zyyy+//PFvAtd/+eWP/8NH/+WXX375vQQt4nve1BOAPy2cA6Df/FsuiGf/jf7LL7/88ssv/5j5ff+z/7fmj34MhP7LL3/8s9/0X3753QLc7QbIZYNdAPLXGv/Vf/nll19++eUfK//W7w36L7/88ssvv/wEoA0gv/zyy28CImQSSP/ll19++eWXX3755ZdffvkJQBtAfvnll7+gHGw1f5QItf/ll19++eWXX3755ZdffgLQBpBf/qbz55Ak+i+//PLLL7/88Q9C13/55Zdf/vi7X/RffgLQBhg6/7NDVf/ll19++eWPevOZ/ssvv/zyyy+//PLL7yVoBKALQH755ZdffvknvwVc/+WXX3755Zdffvnll58AtAHkl19++eX3C6D+nxal9r/88ssvv/zyx38H0n/5o77r6T8BaAPIL7/88ssvv/zyyy+//PIPnv+RKNB/+eWXnwC0AeSXX3755Zdffvnll19++eWXX3755ZefALQB5Jdffvnll19++eWXX3755Zdffvnll58AtAHkl19++eWXX3755Zdffvnll19++eWXv4H8/wLv/jNRUkyOFgAAAABJRU5ErkJggg==",
+      "path": "地面",
+      "width": 1280,
+      "height": 960,
+      "group": "涌现沙盘",
+      "hiddenFrames": [],
+      "frameDurations": [],
+      "note": "整张地图的地面底图（1280x960）"
+    },
+    {
+      "id": "asset-stone",
+      "name": "石墙",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAXUlEQVR42mOwcvD5P5CYYdQByJyYpDySsINbEBiTqg+vA+rapmDFI8cBAx4Fow4YdcCoA0aeA2CGDBQeeAcQigJygxmfXpLSwKgDRh0w6oBRB4w6gK4OGO0bDgQGAK7c/voE7mrIAAAAAElFTkSuQmCC",
+      "path": "石墙",
+      "width": 32,
+      "height": 32,
+      "group": "涌现沙盘",
+      "hiddenFrames": [],
+      "frameDurations": [],
+      "note": "不可燃，火势屏障"
+    },
+    {
+      "id": "asset-wood",
+      "name": "木栅栏",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAWUlEQVR42mOIcVL5D8J1MSZ0xTB7GQaNAwYKDx4HDJo0MK/CDY4psYCQOYM3BEYdMFoOjJYD5OZrcsqH0Vww6oDRcmB4pAFyy4fRXDDqgNFyYDQNjDoAZi8A18LQyGytaGkAAAAASUVORK5CYII=",
+      "path": "木栅栏",
+      "width": 32,
+      "height": 32,
+      "group": "涌现沙盘",
+      "hiddenFrames": [],
+      "frameDurations": [],
+      "note": "易燃，烧穿后该格可通行"
+    },
+    {
+      "id": "asset-barrel",
+      "name": "油桶",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAfUlEQVR42mNgGAWjgEiwocLkPyl4QCylmmN4hGT+U8tyGAaZObQcMC1Bg2qWg8wiywHImBxLkTHFDqAUk+yABBsJquKh54ABjwJ0Ax5ssUHBA+IAGw0BMB51wMh1wIAmwtGScLQkHHUA3R1AC0xq4ziKypgsMKCWU+qYoQEAGdsT80aZ5tcAAAAASUVORK5CYII=",
+      "path": "油桶",
+      "width": 32,
+      "height": 32,
+      "group": "涌现沙盘",
+      "hiddenFrames": [],
+      "frameDurations": [],
+      "note": "oil 材质，极易燃"
+    },
+    {
+      "id": "asset-player",
+      "name": "玩家",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABAElEQVR42mNgGAVDEfAIyfzHhulm+Z9rG7BimjsCn+U0dwQxltPUEeQ64P8qm//omG4OgFv6YRUCk+sIdAfIqJng5NPFAXQNAVg+J8UBIIwt/kl2AMwwvYJ9/4nNhjC1uBxBsu9BBoJw7eaX/wkVRDC1MEeAzEhwUvkPwxRZ3rr/OxjjKordpr0AY3RHUMUBMMvRMcxSdEyxA5AtBxlIqgOQHTE8HIDNEfgsp4kDSMWjDqDIAZQ6gurlACmOoFpBRI4jqFoUo1dGhByBbjlVHMDAwBCFzRH4MJLlUZQ2BaOQMSGHoFmMjKnjAHSHYOmYROHADFR3BAmYqmBALKUpAABZSZWwT6XxdwAAAABJRU5ErkJggg==",
+      "path": "玩家",
+      "width": 32,
+      "height": 32,
+      "group": "涌现沙盘",
+      "hiddenFrames": [],
+      "frameDurations": [],
+      "note": "带火把的玩家"
+    },
+    {
+      "id": "asset-guard",
+      "name": "守卫",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAA6klEQVR42mNgGAV0AOeuPfmPjCk2kEdI5j82TBcHgCx6cWQBVozLEVRzAD7L8TmCKg5w84n4TwpG119R1/MfhMn2/agD0ONfRs0EJx9bOqC6A0hNiBQ5AJbPSXEAuiPIdgDMsAo9k//EZkOYWmRHUOQAkIEwTKggQldLkQPQDZxn5wTGuIpimDw2R1DsAJjhxGKKHUCJ5dgcMeqAUQcMPQcMeDbEVxARaznFDiDHEVQtitErI0KOQLecKg5gYGCIwuYIfBjJ8ihKHRCFjAk5BM1iZEwdB6A7BEvHJAoHpghEUYipCgbEUpoCAALDxXKL8tQ8AAAAAElFTkSuQmCC",
+      "path": "守卫",
+      "width": 32,
+      "height": 32,
+      "group": "涌现沙盘",
+      "hiddenFrames": [],
+      "frameDurations": [],
+      "note": "哨站守卫"
+    },
+    {
+      "id": "asset-civilian",
+      "name": "平民",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAz0lEQVR42mNgGMrg3YmS/yA8YBaj4+HvgGsbYv7jshyGQWqobikyJsYByJiqlhNyBC71Q9cB+ByB7BB8aqiWFniEZPBahIxBaqmeA0CG/rq0hihMFwdoyEng5I+MEKCrA0AGJkzL+k+MI5DVUtVyGMbnCGxqqe4AZMORMS41NLGcFEyRI0YdMOoAbA5wKwsCY2LFqZ4TSHEATcoBujsA3RHEOoBm9QExDqC25QEwjK/YRS6ekfVQzXJsDkHHuNRT3QFkYIaBdAQDTdIDtSwFAFfGyy49MrjJAAAAAElFTkSuQmCC",
+      "path": "平民",
+      "width": 32,
+      "height": 32,
+      "group": "涌现沙盘",
+      "hiddenFrames": [],
+      "frameDurations": [],
+      "note": "平民"
+    },
+    {
+      "id": "asset-bottle",
+      "name": "油瓶",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAASklEQVR42mNgGPLAzULuPzKmioGrpkWB8aiBlEcIxRED0tyQoIOCB4+BVnoS//HhgTdw8IchzQykajqEggA0TBVDcOGBM5BsLwMA8OeU60pR2G4AAAAASUVORK5CYII=",
+      "path": "油瓶",
+      "width": 20,
+      "height": 20,
+      "group": "涌现沙盘",
+      "hiddenFrames": [],
+      "frameDurations": [],
+      "note": "可抛的物理油瓶"
+    }
+  ],
+  "packs": [],
+  "scripts": {
+    "world": {
+      "name": "world",
+      "file": "world.js",
+      "source": "// world.js —— 场景脚本：铺材质、开物理、定种子、装全局钩子、每秒打点。\n// 规格见 docs/emergence-demo.md；契约见 docs/scripting-api.md §2.11。\nvar W_CFG = {\n  seed: 20261026,\n  igniteStrength: 1.0,\n  summaryEvery: 1,\n  // 场是固定步长模拟。默认 0.1s/tick 时火线每秒推进约 10 格，4 秒就把整片草地烧光，\n  // 「火→油桶→水渠」来不及交互；放慢到 0.3s/tick + 草地易燃度 0.25，\n  // 火线约 1 格/秒，一场火能烧 20+ 秒，才看得到涌现组合。\n  fieldTick: 0.3,\n  grassFlammable: 0.25,\n  grassBurnTime: 3.0\n};\n\nvar W_STATE = { ready: false, t: 0, ignites: 0, burned: 0, extinguish: 0, collisions: 0, oilFired: false, brokenBottles: {} };\n\nfunction onSceneStart(ctx) {\n  W_STATE.ready = true;\n  // 确定性：同种子 + 同输入 ⇒ 同结果（材质场/物理/AI 三个随机源一起重置）\n  bwe.seed.set(W_CFG.seed);\n  bwe.field.tickRate(W_CFG.fieldTick);\n  // 草地调慢一点：默认 flammable 0.8 时相邻格几乎每个 tick 必着，火线 10 格/秒，\n  // 一场火 4 秒烧完，看不到「油桶爆燃 / 水渠切断 / 守卫赶来」这些组合。\n  bwe.material.define(\"grass\", { flammable: W_CFG.grassFlammable, burnTime: W_CFG.grassBurnTime, tags: [\"plant\", \"ground\"] });\n  paintTerrain();\n  W_STATE.oilCells = findOilCells();\n  bwe.physics.enable();\n  bwe.physics.gravity(0);\n  setupFactions();\n  hookField();\n  hookPhysics();\n  bwe.every(W_CFG.summaryEvery, function () { summary(); });\n  // 油桶爆燃：开局先记下油桶所在的格子（按 tag 找，不写死坐标），之后每 0.25 秒看它们有没有被点着。\n  // 为什么不用 field 的 ignite/burned 事件：油桶是 TILE 实体，火先烧伤实体再烧格子，\n  // 事件里的 material 可能已经是 null，靠事件判断会漏掉；轮询「原来有油、现在烧了/没了」更可靠。\n  bwe.every(0.25, function () { checkOil(); });\n  bwe.log(\"[涌现] 材质就绪：grass/wood/stone/oil/water\");\n  bwe.log(\"[涌现] 物理已开启，种子 \" + W_CFG.seed);\n}\n\n/** 材质铺法：草地（易燃）/ 水渠（灭火）/ 哨站石地（不燃）。石墙/木栅/油桶在 TILE 对象的 props.material。 */\nfunction paintTerrain() {\n  const g = { grassNorth: { x0: 2, y0: 15, x1: 37, y1: 18 },\n            grassSouthA: { x0: 2, y0: 20, x1: 21, y1: 28 },\n            grassSouthB: { x0: 24, y0: 20, x1: 36, y1: 28 },\n            channel: { x0: 22, y0: 20, x1: 23, y1: 28 },\n            pond: { x0: 18, y0: 24, x1: 19, y1: 26 },\n            flowerbed: { x0: 3, y0: 16, x1: 7, y1: 17 },\n            stationFloor: { x0: 15, y0: 6, x1: 24, y1: 12 } };\n  paintRect(g.grassNorth, \"grass\");\n  paintRect(g.grassSouthA, \"grass\");\n  paintRect(g.grassSouthB, \"grass\");\n  paintRect(g.channel, \"water\");\n  paintRect(g.pond, \"water\");\n  paintRect(g.flowerbed, \"grass\");\n  // ⚠ bwe.material.setTile 会把格子标记成\"脚本固定\"，之后 TILE 对象的材质不会覆盖它；\n  // 所以花圃的**石墙圈必须显式再刷一遍 stone**，否则一圈草会把火引进花圃（踩过）。\n  paintFlowerbedRing();\n  paintRect(g.stationFloor, \"stone\");\n  bwe.log(\"[涌现] 地形材质：草地 \" + (cellCount(g.grassNorth) + cellCount(g.grassSouthA) + cellCount(g.grassSouthB))\n    + \" 格 / 水 \" + (cellCount(g.channel) + cellCount(g.pond)) + \" 格 / 石地 \" + cellCount(g.stationFloor) + \" 格\");\n}\n\nfunction paintRect(r, mat) {\n  for (var cy = r.y0; cy <= r.y1; cy++) {\n    for (var cx = r.x0; cx <= r.x1; cx++) bwe.material.setTile(cx, cy, mat);\n  }\n}\n\nfunction cellCount(r) { return (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1); }\n\n/** 花圃石墙圈：花圃矩形里除了内部草地之外的格子，全部刷成 stone。 */\nfunction paintFlowerbedRing() {\n  var fb = { x0: 2, y0: 15, x1: 8, y1: 18 };\n  var inside = { x0: 3, y0: 16, x1: 7, y1: 17 };\n  for (var cy = fb.y0; cy <= fb.y1; cy++) {\n    for (var cx = fb.x0; cx <= fb.x1; cx++) {\n      var inGrass = cx >= inside.x0 && cx <= inside.x1 && cy >= inside.y0 && cy <= inside.y1;\n      if (!inGrass) bwe.material.setTile(cx, cy, \"stone\");\n    }\n  }\n}\n\nfunction setupFactions() {\n  bwe.faction.relation(\"guard\", \"player\", -1);\n  bwe.faction.relation(\"guard\", \"civilian\", 0);\n  var guards = bwe.world.findAll({ tag: \"守卫\" }) || [];\n  for (var i = 0; i < guards.length; i++) bwe.faction.set(guards[i], \"guard\");\n  var player = bwe.world.find({ tag: \"玩家\" });\n  if (player) bwe.faction.set(player, \"player\");\n  var civ = bwe.world.find({ tag: \"平民\" });\n  if (civ) bwe.faction.set(civ, \"civilian\");\n}\n\n/** 场事件：烧穿木墙从引擎事件里读（不写死坐标）。 */\nfunction hookField() {\n  bwe.field.on(\"ignite\", function (ev) {\n    if (ev) W_STATE.ignites += 1;\n  });\n  bwe.field.on(\"extinguish\", function (ev) {\n    if (!ev) return;\n    W_STATE.extinguish += 1;\n    var wetNb = wetNeighbors(ev.cx, ev.cy);\n    if (wetNb > 0 && bwe.material.of(ev.cx, ev.cy) !== null) {\n      bwe.log(\"[涌现] 水渠灭火 (\" + ev.cx + \",\" + ev.cy + \")，相邻 \" + wetNb + \" 格变 wet\");\n    }\n  });\n  bwe.field.on(\"burned\", function (ev) {\n    if (!ev) return;\n    W_STATE.burned += 1;\n    // 木墙烧穿：E3 的断言依据（只给木墙专门打行，草地烧尽太常见，只在统计里计数）\n    if (ev.material === \"wood\") {\n      var open = !bwe.tilemap.solid(ev.cx, ev.cy);\n      bwe.log(\"[涌现] 木墙 (\" + ev.cx + \",\" + ev.cy + \") 烧穿，格子\" + (open ? \"已可通行\" : \"仍阻挡\"));\n    }\n    // 油桶烧尽 = 那格油被点着了 → 爆燃（实际检测在 checkOil 轮询里，见 onSceneStart）\n  });\n}\n\n/** 开局记下所有油桶格子（按 tag 找实体，不写死坐标）。 */\nfunction findOilCells() {\n  var list = bwe.world.findAll({ tag: \"油桶\" }) || [];\n  var out = [];\n  for (var i = 0; i < list.length; i++) {\n    var c = bwe.grid.toCell(list[i].x, list[i].y);\n    out.push({ cx: c.cx, cy: c.cy });\n  }\n  return out;\n}\n\n/** 油桶第一次被点着 → 爆燃：冲击波推周围可推物体 + 大范围噪音（火势暴涨的源头）。 */\nfunction checkOil() {\n  if (W_STATE.oilFired) return;\n  var cells = W_STATE.oilCells || [];\n  for (var i = 0; i < cells.length; i++) {\n    var cx = cells[i].cx;\n    var cy = cells[i].cy;\n    var burning = bwe.field.sample(\"fire\", cx, cy) > 0.05;\n    var gone = bwe.material.of(cx, cy) === null;\n    if (!burning && !gone) continue;\n    W_STATE.oilFired = true;\n    bwe.log(\"[涌现] 油桶起火 (\" + cx + \",\" + cy + \") 燃烧强度 \" + bwe.field.sample(\"fire\", cx, cy));\n    shockwave(cx, cy, 150, 120);\n    bwe.noise.emit(cx * 32 + 16, cy * 32 + 16, { radius: 900, intensity: 2.0, tag: \"explosion\" });\n    bwe.log(\"[涌现] 油桶爆燃：噪音半径 900，冲击波已推周围物体\");\n    return;\n  }\n}\n\nfunction wetNeighbors(cx, cy) {\n  var n = 0;\n  var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];\n  for (var i = 0; i < dirs.length; i++) {\n    if (bwe.field.sample(\"water\", cx + dirs[i][0], cy + dirs[i][1]) > 0) n += 1;\n  }\n  return n;\n}\n\nfunction shockwave(cx, cy, radiusPx, impulse) {\n  var list = bwe.world.findAll({ tag: \"可推\" }) || [];\n  for (var i = 0; i < list.length; i++) {\n    var e = list[i];\n    var dx = e.x - (cx * 32 + 16);\n    var dy = e.y - (cy * 32 + 16);\n    var d = Math.sqrt(dx * dx + dy * dy);\n    if (d > radiusPx || d < 0.5) continue;\n    var k = (1 - d / radiusPx);\n    bwe.physics.applyImpulse(e, (dx / d) * impulse * k, (dy / d) * impulse * k);\n    bwe.log(\"[涌现] 冲击波 applyImpulse->\" + e.name + \" 冲量 \" + Math.round(impulse * k));\n  }\n}\n\n/** 物理碰撞：油瓶落地/撞墙 → 在落点放火（油瓶自己决定，不是引擎写死）。\n *  同一个瓶子只处理第一次碰撞：jbox2d 在贴墙静止时会反复上报接触，\n *  不设防会把「碎裂起火」刷屏，也会把同一格反复点燃。 */\nfunction hookPhysics() {\n  bwe.physics.on(\"collision\", function (ev) {\n    if (!ev) return;\n    W_STATE.collisions += 1;\n    var a = ev.a, b = ev.b;\n    var bottle = null;\n    if (a && a.tags && a.tags.includes(\"油瓶\")) bottle = a;\n    else if (b && b.tags && b.tags.includes(\"油瓶\")) bottle = b;\n    var key = bottle ? bottle.id : \"\";\n    var first = bottle && !W_STATE.brokenBottles[key];\n    bwe.log(\"[涌现] 碰撞 #\" + W_STATE.collisions + \" \" + nameOf(a) + \" x \" + nameOf(b)\n      + \" 冲量 \" + (ev.impulse ? Math.round(ev.impulse) : 0) + (first ? \"（首次）\" : \"\"));\n    if (!first) return;\n    W_STATE.brokenBottles[key] = true;\n    var cell = bwe.grid.toCell(bottle.x, bottle.y);\n    bwe.field.emit(\"fire\", cell.cx, cell.cy, 0.9);\n    bwe.log(\"[涌现] 油瓶碎裂 (\" + cell.cx + \",\" + cell.cy + \") 起火\");\n  });\n}\n\nfunction nameOf(e) { return e && e.name ? e.name : \"(静态)\"; }\n\nfunction summary() {\n  W_STATE.t += W_CFG.summaryEvery;\n  var burning = bwe.field.burning() || [];\n  var guards = bwe.world.findAll({ tag: \"守卫\" }) || [];\n  var states = [];\n  for (var i = 0; i < guards.length; i++) states.push(bwe.ai.state(guards[i]));\n  var civ = bwe.world.find({ tag: \"平民\" });\n  var noises = bwe.noise.events() || [];\n  bwe.log(\"[涌现] \" + W_STATE.t + \" 秒统计：燃烧 \" + burning.length + \" 格 / 烧毁 \" + W_STATE.burned\n    + \" 格 / 守卫状态 \" + states.join(\",\")\n    + \" / 平民 \" + (civ ? bwe.ai.state(civ) : \"-\")\n    + \" / 噪音 \" + noises.length + \" 条 / 碰撞 \" + W_STATE.collisions);\n}\n",
+      "lang": "js"
+    },
+    "player": {
+      "name": "player",
+      "file": "player.js",
+      "source": "// player.js —— 玩家：WASD 移动 / 空格 点火把 / F 推物体 / 鼠标左键 丢油瓶。\n// 注意：同一段脚本挂多个对象时，模块级变量是共享的；这里只有玩家一个对象，所以直接存。\nvar P_CFG = {\n  speed: 200,\n  half: 10,\n  noiseRadius: 620,\n  pushRange: 120,\n  pushImpulse: 90,\n  throwSpeed: 380\n};\n\nvar P_STATE = { ready: false, mapW: 0, mapH: 0, faceX: 0, faceY: 1, ignites: 0, pushes: 0, throws: 0 };\n\nfunction onStart(ctx) {\n  var map = bwe.world.mapSize();\n  P_STATE.mapW = map.w;\n  P_STATE.mapH = map.h;\n  bwe.camera.follow(ctx.self, { smooth: 0.25 });\n  bwe.camera.bounds({ x: 0, y: 0, w: map.w, h: map.h });\n  P_STATE.ready = true;\n  bwe.log(\"[涌现] 玩家就绪：WASD 移动 / 空格 点火 / F 推 / 左键 丢油瓶\");\n}\n\nfunction onUpdate(ctx, dt) {\n  var me = ctx.self;\n  if (!P_STATE.ready || !me || me.alive === false) return;\n  move(me, dt);\n  if (bwe.input.pressed(\"Space\")) ignite(me);\n  if (bwe.input.pressed(\"KeyF\")) push(me);\n  if (bwe.input.pressed(\"Mouse0\")) throwBottle(me);\n}\n\nfunction move(me, dt) {\n  var ax = bwe.input.axis();\n  if (!ax || (ax.x === 0 && ax.y === 0)) return;\n  P_STATE.faceX = ax.x;\n  P_STATE.faceY = ax.y;\n  var step = P_CFG.speed * dt;\n  var nx = me.x + ax.x * step;\n  var ny = me.y + ax.y * step;\n  if (!solid(nx, me.y)) me.setPos(nx, me.y);\n  if (!solid(me.x, ny)) me.setPos(me.x, ny);\n  clamp(me);\n}\n\nfunction solid(x, y) {\n  var h = P_CFG.half;\n  return bwe.tilemap.blocked(x - h, y - h, h * 2, h * 2);\n}\n\nfunction clamp(me) {\n  var x = Math.max(16, Math.min(P_STATE.mapW - 16, me.x));\n  var y = Math.max(16, Math.min(P_STATE.mapH - 16, me.y));\n  if (x !== me.x || y !== me.y) me.setPos(x, y);\n}\n\n/** 点火把：点**面前那一格**（偏一格 = 32px，保证不会因为站在格子边缘而点到脚下）。\n *  注意：不能点脚下 —— 实体自身的材质会盖住脚下格的材质（引擎兜底 stone），\n *  所以「踩在草地上点自己」永远点不着，这是引擎语义（§2.11.1 实体材质优先）。 */\nfunction ignite(me) {\n  var fx = P_STATE.faceX;\n  var fy = P_STATE.faceY;\n  if (fx === 0 && fy === 0) fy = 1;\n  var cell = bwe.grid.toCell(me.x + fx * 32, me.y + fy * 32);\n  var mat = bwe.material.of(cell.cx, cell.cy);\n  if (!flammable(mat)) {\n    bwe.log(\"[涌现] 点火失败：(\" + cell.cx + \",\" + cell.cy + \") 材质 \" + mat + \" 不可燃\");\n    return;\n  }\n  bwe.field.emit(\"fire\", cell.cx, cell.cy, 1.0);\n  // 点火 = 制造噪音：守卫的第二感知通道（引擎只存数据，去不去查由 guard.js 决定）\n  bwe.noise.emit(cell.cx * 32 + 16, cell.cy * 32 + 16, { radius: P_CFG.noiseRadius, intensity: 1.2, tag: \"combat\" });\n  P_STATE.ignites += 1;\n  bwe.log(\"[涌现] 点火 (\" + cell.cx + \",\" + cell.cy + \") 强度 1.0 材质 \" + mat + \"（第 \" + P_STATE.ignites + \" 次）\");\n}\n\nfunction flammable(mat) {\n  if (!mat) return false;\n  var def = bwe.material.get(mat);\n  return !!def && typeof def.flammable === \"number\" && def.flammable > 0;\n}\n\n/** 推：对最近的可推物体施冲击力（jbox2d applyImpulse）。 */\nfunction push(me) {\n  var target = nearestTagged(me, \"可推\", P_CFG.pushRange);\n  if (!target) {\n    bwe.log(\"[涌现] 推力落空：附近没有可推物体\");\n    return;\n  }\n  var dx = target.x - me.x;\n  var dy = target.y - me.y;\n  var len = Math.sqrt(dx * dx + dy * dy);\n  if (len < 0.001) { dx = 0; dy = -1; len = 1; }\n  bwe.physics.applyImpulse(target, (dx / len) * P_CFG.pushImpulse, (dy / len) * P_CFG.pushImpulse);\n  P_STATE.pushes += 1;\n  bwe.log(\"[涌现] 推 \" + target.name + \" 冲量 \" + P_CFG.pushImpulse + \"（第 \" + P_STATE.pushes + \" 次）\");\n}\n\nfunction nearestTagged(me, tag, range) {\n  var list = bwe.world.findAll({ tag: tag }) || [];\n  var best = null;\n  var bestD = range;\n  for (var i = 0; i < list.length; i++) {\n    var d = me.distanceTo(list[i]);\n    if (d < bestD) { bestD = d; best = list[i]; }\n  }\n  return best;\n}\n\n/** 左键：朝鼠标世界坐标丢油瓶（力度按距离），落地碰撞后由 world.js 的点火钩子引燃。 */\nfunction throwBottle(me) {\n  var bottle = nearestTagged(me, \"油瓶\", 400);\n  if (!bottle) {\n    bwe.log(\"[涌现] 丢油瓶失败：身上没有油瓶\");\n    return;\n  }\n  var m = bwe.input.mouse;\n  var tx = m ? m.worldX : me.x;\n  var ty = m ? m.worldY : me.y - 96;\n  bwe.physics.throwAt(bottle, tx, ty, P_CFG.throwSpeed);\n  P_STATE.throws += 1;\n  bwe.log(\"[涌现] 丢油瓶 -> (\" + Math.round(tx) + \",\" + Math.round(ty) + \") 速度 \" + P_CFG.throwSpeed);\n}\n\nfunction onDamage(ctx, amount, from) {\n  bwe.log(\"[涌现] 玩家受击 -\" + Math.round(amount) + \" 剩 \" + Math.round(ctx.self.hp));\n}\n",
+      "lang": "js"
+    },
+    "guard": {
+      "name": "guard",
+      "file": "guard.js",
+      "source": "// guard.js —— 守卫：巡逻 → 听到噪音 investigate → 看见玩家 chase → 同阵营 alert。\n// ⚠ 同一段脚本会挂到多个守卫对象上：模块级变量是共享的，所以「每实体状态」必须按 e.id 分桶。\nvar G_CFG = {\n  patrolSpeed: 62,\n  chaseSpeed: 96,\n  attackRange: 36,\n  damage: 7,\n  cooldown: 1.2,\n  waypoints: [[16, 8], [23, 8], [23, 11], [16, 11]]\n};\n\nvar G_POOL = { agents: {}, alerted: 0, spottings: 0, alertHook: false, lastAlertAt: 0 };\n\nfunction agentOf(me) {\n  var key = me.id;\n  if (!G_POOL.agents[key]) {\n    G_POOL.agents[key] = { wp: Object.keys(G_POOL.agents).length % G_CFG.waypoints.length, cool: 0, nav: null };\n  }\n  return G_POOL.agents[key];\n}\n\nfunction onStart(ctx) {\n  var me = ctx.self;\n  bwe.ai.attach(me, { sight: 300, fov: 200, hearing: 560, memory: 8, speed: G_CFG.chaseSpeed });\n  bwe.faction.set(me, \"guard\");\n  bwe.ai.setState(me, \"patrol\");\n  agentOf(me);\n  bwe.log(\"[涌现] 守卫就绪：\" + me.name);\n  // 同阵营警报：引擎只负责传播（一跳延迟、按对象逐个派发），收到之后干什么由脚本决定。\n  // 注意 payload：info.entity = **收到警报的那个守卫**，info.from = 发警报的守卫，info.position = 目标点。\n  if (!G_POOL.alertHook) {\n    G_POOL.alertHook = true;\n    bwe.ai.onAlert(function (info) {\n      if (!info || !info.position || !info.entity) return;\n      var who = info.entity;\n      if (info.from && info.from.id === who.id) return;\n      if (bwe.ai.state(who) === \"chase\") return; // 已经在追了，不用再\"去查\"\n      // 同一帧可能被投递多次（每个守卫一个 handler 实例），去重\n      var stamp = bwe.time.now;\n      if (G_POOL.lastAlertAt && stamp - G_POOL.lastAlertAt < 0.2) return;\n      G_POOL.lastAlertAt = stamp;\n      var st = agentOf(who);\n      bwe.ai.setState(who, \"investigate\");\n      st.nav = { x: info.position.x, y: info.position.y, t: 0 };\n      G_POOL.alerted += 1;\n      bwe.log(\"[涌现] 守卫 \" + who.name + \" 收到警报 → investigate（来自 \" + (info.from ? info.from.name : \"?\") + \"）\");\n    });\n  }\n}\n\nfunction onUpdate(ctx, dt) {\n  var me = ctx.self;\n  if (!me || me.alive === false) return;\n  var st = agentOf(me);\n  if (st.cool > 0) st.cool = Math.max(0, st.cool - dt);\n  if (st.nav) st.nav.t += dt;\n\n  var player = bwe.world.find({ tag: \"玩家\" });\n  // 1) 视觉优先：看见敌对目标 → chase + 同阵营 alert\n  if (player && player.alive !== false && bwe.sense.canSee(me, player)) {\n    if (bwe.ai.state(me) !== \"chase\") {\n      bwe.ai.setState(me, \"chase\");\n      G_POOL.spottings += 1;\n      bwe.log(\"[涌现] 守卫 \" + me.name + \" 状态 → chase（看见玩家）\");\n      bwe.ai.alert(me, { x: player.x, y: player.y });\n      bwe.noise.emit(me.x, me.y, { radius: 520, intensity: 1.0, tag: \"combat\" });\n    }\n    chase(me, player, dt, st);\n    return;\n  }\n\n  // 2) 听觉：噪音写进 lastKnown（from=noise），脚本据此决定去查\n  var known = bwe.sense.lastKnown(me);\n  var state = bwe.ai.state(me);\n  if (known && known.from === \"noise\" && state !== \"chase\" && state !== \"investigate\") {\n    // 记下「听到时到底看不看得见」——E7 的断言依据：隔墙听得到、但看不见\n    var sees = player ? bwe.sense.canSee(me, player) : false;\n    bwe.ai.setState(me, \"investigate\");\n    st.nav = { x: known.x, y: known.y, t: 0 };\n    bwe.log(\"[涌现] 守卫 \" + me.name + \" 状态 → investigate（噪声源 \" + Math.round(known.x) + \",\" + Math.round(known.y)\n      + \"）canSee=\" + sees);\n  }\n\n  if (bwe.ai.state(me) === \"investigate\") {\n    investigate(me, dt, st);\n    return;\n  }\n  patrol(me, dt, st);\n}\n\nfunction patrol(me, dt, st) {\n  var wp = G_CFG.waypoints[st.wp % G_CFG.waypoints.length];\n  var target = { x: wp[0] * 32 + 16, y: wp[1] * 32 + 16 };\n  if (stepToward(me, target.x, target.y, G_CFG.patrolSpeed, dt)) {\n    st.wp = (st.wp + 1) % G_CFG.waypoints.length;\n  }\n  if (bwe.ai.state(me) !== \"patrol\") bwe.ai.setState(me, \"patrol\");\n}\n\nfunction investigate(me, dt, st) {\n  var nav = st.nav;\n  if (!nav || nav.t > 6) {\n    bwe.ai.setState(me, \"patrol\");\n    st.nav = null;\n    bwe.log(\"[涌现] 守卫 \" + me.name + \" 状态 → patrol（调查结束）\");\n    return;\n  }\n  stepToward(me, nav.x, nav.y, G_CFG.chaseSpeed, dt);\n  var d = Math.sqrt((me.x - nav.x) * (me.x - nav.x) + (me.y - nav.y) * (me.y - nav.y));\n  if (d < 40) {\n    // 到现场没发现人：转回巡逻\n    bwe.ai.setState(me, \"patrol\");\n    st.nav = null;\n  }\n}\n\nfunction chase(me, player, dt, st) {\n  var d = me.distanceTo(player);\n  if (d <= G_CFG.attackRange) {\n    if (st.cool <= 0) {\n      st.cool = G_CFG.cooldown;\n      player.damage(G_CFG.damage);\n      bwe.noise.emit(me.x, me.y, { radius: 460, intensity: 1.0, tag: \"combat\" });\n      bwe.log(\"[涌现] 守卫 \" + me.name + \" 攻击玩家 -\" + G_CFG.damage);\n    }\n    return;\n  }\n  stepToward(me, player.x, player.y, G_CFG.chaseSpeed, dt);\n}\n\n/** 朝目标走一步（A* 找路，0.25 秒重算一次缓存；被墙卡住时退回直线）。\n *  A* 每帧算一次在 40x30 上会吃掉 2~3ms 帧预算，所以做节流——这也是脚本侧该有的写法示范。 */\nfunction stepToward(me, tx, ty, speed, dt) {\n  var dx = tx - me.x;\n  var dy = ty - me.y;\n  var d = Math.sqrt(dx * dx + dy * dy);\n  if (d < 6) return true;\n  var st = agentOf(me);\n  st.repath = (st.repath || 0) - dt;\n  if (!st.path || st.repath <= 0) {\n    st.repath = 0.25;\n    st.path = bwe.nav.find(me.pos, { x: tx, y: ty }, { diagonal: true, maxNodes: 800 });\n    st.pathGoal = { x: tx, y: ty };\n  }\n  var step = speed * dt;\n  var path = st.path;\n  if (path && path.length > 1 && st.pathGoal) {\n    // 路点走完后重新找路（目标可能在移动）\n    var next = path[1];\n    var pdx = next.x - me.x;\n    var pdy = next.y - me.y;\n    var plen = Math.sqrt(pdx * pdx + pdy * pdy) || 1;\n    me.setPos(me.x + (pdx / plen) * Math.min(step, plen), me.y + (pdy / plen) * Math.min(step, plen));\n    if (plen < 8 && path.length > 2) st.path = path.slice(1);\n    return false;\n  }\n  var len = d || 1;\n  me.setPos(me.x + (dx / len) * step, me.y + (dy / len) * step);\n  return false;\n}\n",
+      "lang": "js"
+    },
+    "civilian": {
+      "name": "civilian",
+      "file": "civilian.js",
+      "source": "// civilian.js —— 平民：看见火 → flee；主方向朝水渠（东），东边也有火就改往北。\n// 状态机写在 JS 里（引擎只提供感知/记忆/状态存储）。\nvar C_CFG = {\n  speed: 70,\n  fleeSpeed: 150,\n  fearCells: 5,\n  fireThreshold: 0.12,\n  channelX: 22 * 32 + 32\n};\n\nvar C_STATE = { ready: false, me: null, dir: \"east\", panic: 0 };\n\nfunction onStart(ctx) {\n  C_STATE.me = ctx.self;\n  bwe.ai.attach(ctx.self, { sight: 220, fov: 360, hearing: 260, memory: 5, speed: C_CFG.fleeSpeed });\n  bwe.faction.set(ctx.self, \"civilian\");\n  bwe.ai.setState(ctx.self, \"idle\");\n  C_STATE.ready = true;\n  bwe.log(\"[涌现] 平民就绪：\" + ctx.self.name);\n}\n\nfunction onUpdate(ctx, dt) {\n  var me = ctx.self;\n  if (!C_STATE.ready || !me || me.alive === false) return;\n  var danger = maxFireAround(me, C_CFG.fearCells);\n  var state = bwe.ai.state(me);\n\n  if (danger > C_CFG.fireThreshold) {\n    if (state !== \"flee\") {\n      bwe.ai.setState(me, \"flee\");\n      C_STATE.panic += 1;\n      bwe.log(\"[涌现] 平民 状态 → flee（附近火势 \" + (Math.round(danger * 100) / 100) + \"）\");\n      bwe.noise.emit(me.x, me.y, { radius: 360, intensity: 1.0, tag: \"panic\" });\n    }\n    flee(me, dt);\n    return;\n  }\n  if (state === \"flee\") {\n    bwe.ai.setState(me, \"idle\");\n    bwe.log(\"[涌现] 平民 状态 → idle（火势远离）\");\n  }\n  // 没火的时候原地小幅踱步（也顺便演示 idle 决策）\n  idle(me, dt);\n}\n\n/** 逃跑：主方向朝水渠；如果东边也烧起来了（火线绕过来），改往北跑 —— 分支由 JS 决定。 */\nfunction flee(me, dt) {\n  var eastFire = maxFireInRect(me, 1, 4, -2, 2);\n  C_STATE.dir = eastFire > 0.5 ? \"north\" : \"east\";\n  var tx = C_STATE.dir === \"east\" ? C_CFG.channelX : me.x;\n  var ty = C_STATE.dir === \"east\" ? me.y : me.y - 160;\n  var dx = tx - me.x;\n  var dy = ty - me.y;\n  var len = Math.sqrt(dx * dx + dy * dy) || 1;\n  var step = C_CFG.fleeSpeed * dt;\n  var nx = me.x + (dx / len) * step;\n  var ny = me.y + (dy / len) * step;\n  if (!blocked(nx, me.y)) me.setPos(nx, me.y);\n  if (!blocked(me.x, ny)) me.setPos(me.x, ny);\n}\n\nfunction idle(me, dt) {\n  // 轻微绕圈，避免完全静止（也验证 AI 状态 idle 下的行为）\n  var t = bwe.time.now;\n  var nx = me.x + Math.cos(t * 0.7) * 8 * dt;\n  var ny = me.y + Math.sin(t * 0.9) * 8 * dt;\n  if (!blocked(nx, ny)) me.setPos(nx, ny);\n}\n\nfunction blocked(x, y) {\n  return bwe.tilemap.blocked(x - 8, y - 8, 16, 16);\n}\n\nfunction maxFireAround(me, cells) {\n  var c = bwe.grid.toCell(me.x, me.y);\n  var best = 0;\n  for (var dy = -cells; dy <= cells; dy++) {\n    for (var dx = -cells; dx <= cells; dx++) {\n      var v = bwe.field.sample(\"fire\", c.cx + dx, c.cy + dy);\n      if (v > best) best = v;\n    }\n  }\n  return best;\n}\n\nfunction maxFireInRect(me, x0, x1, y0, y1) {\n  var c = bwe.grid.toCell(me.x, me.y);\n  var best = 0;\n  for (var cy = y0; cy <= y1; cy++) {\n    for (var cx = x0; cx <= x1; cx++) {\n      var v = bwe.field.sample(\"fire\", c.cx + cx, c.cy + cy);\n      if (v > best) best = v;\n    }\n  }\n  return best;\n}\n",
+      "lang": "js"
+    },
+    "bottle": {
+      "name": "bottle",
+      "file": "bottle.js",
+      "source": "// bottle.js —— 油瓶：物理体；被 throwAt / applyImpulse 推着走，落地碰撞由 world.js 的全局钩子点火。\n// ⚠ 多个油瓶共用这段脚本 → 每瓶状态按 e.id 分桶。\n// ⚠ bwe.physics.enable() 发生在场景脚本（onSceneStart），晚于对象 onStart，\n//    所以刚体必须**延迟到第一帧 onUpdate** 再建，否则会被引擎按「物理未启用」拒绝。\nvar B_POOL = { bodied: {}, fastLogged: {} };\n\nfunction onStart(ctx) {\n  bwe.log(\"[涌现] 油瓶就绪：\" + ctx.self.name);\n}\n\nfunction onUpdate(ctx, dt) {\n  var me = ctx.self;\n  if (!me || me.alive === false) return;\n  if (!B_POOL.bodied[me.id]) {\n    B_POOL.bodied[me.id] = true;\n    bwe.physics.body(me, { type: \"dynamic\", shape: \"circle\", radius: 7, density: 2.2, friction: 0.25, restitution: 0.35 });\n  }\n  var v = bwe.physics.velocity(me);\n  if (v && (Math.abs(v.vx) + Math.abs(v.vy)) > 90 && !B_POOL.fastLogged[me.id]) {\n    B_POOL.fastLogged[me.id] = true;\n    bwe.log(\"[涌现] 油瓶在飞：\" + me.name + \" 速度 \" + Math.round(Math.sqrt(v.vx * v.vx + v.vy * v.vy)) + \" px/s\");\n  }\n}\n",
+      "lang": "js"
+    },
+    "hud": {
+      "name": "hud",
+      "file": "hud.js",
+      "source": "// hud.js —— HUD + 世界叠色：材质场是逻辑概念，火/烟/湿要靠 bwe.draw 画出来才看得见。\nvar HUD_STATE = { ready: false, frame: 0, burning: 0, noises: 0, fps: 0, fireCells: 0 };\n\nfunction onStart(ctx) {\n  HUD_STATE.ready = true;\n  bwe.log(\"[涌现] HUD 就绪\");\n}\n\nfunction onUpdate(ctx, dt) {\n  if (!HUD_STATE.ready) return;\n  HUD_STATE.frame += 1;\n  HUD_STATE.fps = dt > 0 ? Math.round(1 / dt) : 0;\n  // 火焰叠加每帧画（火是动态的）；统计/文字每 6 帧才刷，省开销\n  drawFire();\n  if (HUD_STATE.frame % 6 === 0) {\n    var burning = bwe.field.burning() || [];\n    HUD_STATE.burning = burning.length;\n    var noises = bwe.noise.events() || [];\n    HUD_STATE.noises = noises.length;\n  }\n  if (HUD_STATE.frame % 30 === 0) drawHudText();\n}\n\n/** 把正在燃烧的格子画成橙红色（alpha 按强度），另外把湿格子画成淡蓝。 */\nfunction drawFire() {\n  var burning = bwe.field.burning() || [];\n  HUD_STATE.fireCells = burning.length;\n  if (burning.length === 0) return;\n  bwe.draw.world(function () {\n    for (var i = 0; i < burning.length; i++) {\n      var b = burning[i];\n      var k = Math.min(1, b.intensity);\n      // 火心亮黄 → 边缘橙红\n      var color = k > 0.6 ? \"#ffd24a\" : \"#ff7a3c\";\n      bwe.draw.rect(b.cx * 32, b.cy * 32, 32, 32, { fill: color, alpha: 0.25 + 0.5 * k });\n    }\n  });\n}\n\nfunction drawHudText() {\n  var player = bwe.world.find({ tag: \"玩家\" });\n  var hp = player ? player.hp : 0;\n  var hpMax = player && player.hpMax > 0 ? player.hpMax : 1;\n  var guards = bwe.world.findAll({ tag: \"守卫\" }) || [];\n  var guardText = [];\n  for (var i = 0; i < guards.length; i++) guardText.push(guards[i].name + \":\" + bwe.ai.state(guards[i]));\n  var civ = bwe.world.find({ tag: \"平民\" });\n\n  bwe.draw.rect(16, 16, 380, 116, { fill: \"#0a1018\", stroke: \"#3a4a62\", radius: 8, alpha: 0.88 });\n  bwe.draw.text(30, 24, \"涌现沙盘 · 生命\", { size: 13, color: \"#a9c2dd\" });\n  bwe.draw.bar(30, 44, 352, 13, hp / hpMax, { bg: \"#182231\", fg: \"#3ddc84\", border: \"#0a111b\" });\n  bwe.draw.text(30, 66, \"燃烧 \" + HUD_STATE.burning + \" 格 · 噪音 \" + HUD_STATE.noises + \" 条 · FPS \" + HUD_STATE.fps,\n    { size: 13, color: \"#ffb24a\" });\n  bwe.draw.text(30, 86, guardText.join(\"  \"), { size: 12, color: \"#ff8a92\" });\n  bwe.draw.text(30, 104, \"平民:\" + (civ ? bwe.ai.state(civ) : \"-\") + \" WASD 移动 · 空格 点火 · F 推 · 左键 丢瓶\",\n    { size: 11, color: \"#7f97b6\" });\n}\n",
+      "lang": "js"
+    }
+  },
+  "variables": {
+    "涌现.种子": "20261026",
+    "材质.草地易燃度": "0.8",
+    "材质.木墙燃烧时间": "4.0",
+    "材质.水渠": "永久灭火"
+  },
+  "masterVolume": 0.7
+}

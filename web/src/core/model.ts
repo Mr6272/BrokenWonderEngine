@@ -159,10 +159,42 @@ export interface SceneModel {
   bgmAssetId: string;
 }
 
-export interface YarnScript {
+/**
+ * 脚本语言。
+ * - yarn：Yarn Spinner 剧情文本，给「打开对话框」模块用；
+ * - js：  JS 脚本（bwe API），给「对象脚本 script.js」与场景 onStartScript 用。
+ *
+ * 缺省值按 yarn 处理：旧工程里没有 lang 字段，打开后仍是能跑的剧本。
+ */
+export type ScriptLang = "js" | "yarn";
+
+/** 工程里的一段脚本。js 与 yarn 共用同一条记录，靠 lang 区分。 */
+export interface ScriptEntry {
   name: string;
+  /** 导出时的相对路径，例如 Scripts/player.js */
   file: string;
   source: string;
+  /** 缺省（undefined）等价于 "yarn"，向后兼容旧工程 */
+  lang?: ScriptLang;
+}
+
+/** 旧名字：历史上脚本只有 Yarn 一种。保留导出，避免外部引用失效。 */
+export type YarnScript = ScriptEntry;
+
+/** 取脚本的语言，缺省按 yarn（旧工程没有 lang 字段）。 */
+export function scriptLang(s: ScriptEntry | undefined): ScriptLang {
+  return s?.lang === "js" ? "js" : "yarn";
+}
+
+/** 工程里某一种语言的脚本名（保持插入顺序）。 */
+export function scriptNamesOfLang(p: Project | null | undefined, lang: ScriptLang): string[] {
+  const scripts = p?.scripts ?? {};
+  return Object.keys(scripts).filter((k) => scriptLang(scripts[k]) === lang);
+}
+
+/** 默认文件路径：让 js / yarn 各有正确的后缀。 */
+export function defaultScriptFile(name: string, lang: ScriptLang): string {
+  return `Scripts/${name}.${lang === "js" ? "js" : "yarn"}`;
 }
 
 /** 规则包（模块组合的封装）。 */
@@ -186,7 +218,7 @@ export interface Project {
   scenes: SceneModel[];
   assets: AssetEntry[];
   packs: RulePack[];
-  scripts: Record<string, YarnScript>;
+  scripts: Record<string, ScriptEntry>;
   variables: Record<string, string>;
   masterVolume: number;
 }
@@ -283,6 +315,29 @@ export function totalFrames(a: AssetEntry | undefined): number {
 }
 
 /**
+ * 补齐脚本条目的缺失字段。
+ * 旧工程的脚本没有 lang（那时只有 Yarn），这里统一补成 "yarn"，
+ * 保证「保存 / 打开」一个来回之后字段是齐的，也让面板不必到处判空。
+ */
+function normalizeScripts(raw: unknown): Record<string, ScriptEntry> {
+  const out: Record<string, ScriptEntry> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object") continue;
+    const s = value as Partial<ScriptEntry>;
+    const name = typeof s.name === "string" && s.name ? s.name : key;
+    const lang: ScriptLang = s.lang === "js" ? "js" : "yarn";
+    out[key] = {
+      name,
+      file: typeof s.file === "string" && s.file ? s.file : defaultScriptFile(name, lang),
+      source: typeof s.source === "string" ? s.source : "",
+      lang
+    };
+  }
+  return out;
+}
+
+/**
  * 补齐缺失字段。
  * 从磁盘读进来的 JSON 可能缺字段（旧版本工程、手工改过的文件），
  * 不在入口一次性补齐，undefined 会散落到全场每个面板。
@@ -301,7 +356,7 @@ export function normalizeProject(raw: unknown): Project {
     scenes: [],
     assets: [],
     packs: Array.isArray(p.packs) ? p.packs : [],
-    scripts: p.scripts ?? {},
+    scripts: normalizeScripts(p.scripts),
     variables: p.variables ?? {},
     masterVolume: typeof p.masterVolume === "number" ? p.masterVolume : 0.8
   };

@@ -11,6 +11,7 @@ import { el, input, button, select, fieldRow } from "../core/dom.ts";
 import { I } from "../ui/icons.ts";
 import { info, ok, warn } from "../ui/toast.ts";
 import { cleanupAssets, downloadProject, showExportComingSoon } from "../app/project.ts";
+import { openBwePackager } from "../app/packageBwe.ts";
 
 export function renderSettingsPanel(host: HTMLElement): void {
   host.replaceChildren();
@@ -105,6 +106,16 @@ export function renderSettingsPanel(host: HTMLElement): void {
     button("导出 Web 游戏包", () => showExportComingSoon(), { size: "sm", iconPath: I.play, title: "生成可上传到网页的自包含游戏包" })
   );
   wrap.appendChild(expRow);
+  const packRow = el("div", { class: "row tight" });
+  packRow.appendChild(
+    button("打包到 BWE（Windows EXE）…", () => void openBwePackager(), {
+      size: "sm",
+      variant: "primary",
+      iconPath: I.exportImg,
+      title: "调用本机 jpackage 生成含 exe 的 Windows 应用包"
+    })
+  );
+  wrap.appendChild(packRow);
 
   // ---- 账号与订阅 ----
   wrap.appendChild(el("div", { class: "group-label" }, "账号与订阅 Account"));

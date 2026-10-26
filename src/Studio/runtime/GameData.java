@@ -28,6 +28,9 @@ public final class GameData {
     public final List<SceneRef> scenes = new ArrayList<>();
     public final Map<String, String> variables = new LinkedHashMap<>();
     public final Map<String, String> scripts = new LinkedHashMap<>();
+    /** 工程级素材表：玩法模块按素材名找图时用（扫雷、换装）。 */
+    public final Map<String, RtAsset> assets = new LinkedHashMap<>();
+    public final Map<String, RtAsset> assetsByName = new LinkedHashMap<>();
 
     public static final class SceneRef {
         public String name;
@@ -37,6 +40,8 @@ public final class GameData {
     }
 
     public static final class RtAsset {
+        public String id = "";
+        public String name = "";
         public String kind = "IMAGE";
         public String path = "";
         public String head = "";
@@ -56,8 +61,12 @@ public final class GameData {
         public float x, y, rotation = 0;
         public float scaleX = 1, scaleY = 1;
         public int z = 0;
+        /** 图层下标：编辑器绘制顺序是 layer → z → y（见 web/src/app/canvas.ts orderObjects）。 */
+        public int layer = 0;
         public float halfW, halfH;
         public boolean visible = true;
+        public String assetId = "";
+        public String assetName = "";
         public RtAsset asset;
         public String animMode = "默认";
         public float animFps = 8;
@@ -111,7 +120,7 @@ public final class GameData {
     }
 
     public static GameData load(File bootFile) throws IOException {
-        String json = Files.readString(bootFile.toPath(), StandardCharsets.UTF_8);
+        String json = readText(bootFile);
         JsonObject root = new Gson().fromJson(json, JsonObject.class);
         GameData g = new GameData();
         g.project = str(root, "project", "未命名");
@@ -135,11 +144,23 @@ public final class GameData {
             JsonObject o = e.getAsJsonObject();
             g.scripts.put(str(o, "name", ""), str(o, "source", ""));
         }
+        for (JsonElement e : arr(root, "assets")) {
+            if (!e.isJsonObject()) {
+                continue;
+            }
+            RtAsset a = readAsset(e.getAsJsonObject());
+            if (!a.id.isEmpty()) {
+                g.assets.put(a.id, a);
+            }
+            if (!a.name.isEmpty()) {
+                g.assetsByName.put(a.name, a);
+            }
+        }
         return g;
     }
 
     public static RtScene loadScene(File sceneFile, int fallbackTile) throws IOException {
-        String json = Files.readString(sceneFile.toPath(), StandardCharsets.UTF_8);
+        String json = readText(sceneFile);
         JsonObject root = new Gson().fromJson(json, JsonObject.class);
         RtScene s = new RtScene();
         s.width = num(root, "width", 60);
@@ -151,30 +172,25 @@ public final class GameData {
             t.id = str(o, "id", "");
             t.kind = str(o, "kind", "PROP");
             t.name = str(o, "name", "");
-            t.x = num(o, "x", 0);
-            t.y = num(o, "y", 0);
-            t.rotation = num(o, "rotation", 0);
-            t.scaleX = num(o, "scaleX", 1);
-            t.scaleY = num(o, "scaleY", 1);
+            // ⚠ 默认值必须写字面量 float（0f/1f/8f）：写成 0/1/8 会命中
+            // num(JsonObject,String,int) 重载，内部 getAsInt() 会把编辑器里产生的
+            // 小数坐标/半宽/缩放全部截断，打包后就变成「位置差一截、大小比例不对」。
+            t.x = num(o, "x", 0f);
+            t.y = num(o, "y", 0f);
+            t.rotation = num(o, "rotation", 0f);
+            t.scaleX = num(o, "scaleX", 1f);
+            t.scaleY = num(o, "scaleY", 1f);
             t.z = num(o, "z", 0);
-            t.halfW = num(o, "halfW", 0);
-            t.halfH = num(o, "halfH", 0);
+            t.layer = num(o, "layer", 0);
+            t.halfW = num(o, "halfW", 0f);
+            t.halfH = num(o, "halfH", 0f);
             t.visible = !o.has("visible") || o.get("visible").getAsBoolean();
+            t.assetId = str(o, "assetId", "");
+            t.assetName = str(o, "assetName", "");
             t.animMode = str(o, "animMode", "默认");
-            t.animFps = num(o, "animFps", 8);
+            t.animFps = num(o, "animFps", 8f);
             if (o.has("asset") && o.get("asset").isJsonObject()) {
-                JsonObject a = o.getAsJsonObject("asset");
-                RtAsset ra = new RtAsset();
-                ra.kind = str(a, "kind", "IMAGE");
-                ra.path = str(a, "path", "");
-                ra.head = str(a, "head", "");
-                ra.frames = num(a, "frames", 1);
-                ra.cols = num(a, "cols", 1);
-                ra.rows = num(a, "rows", 1);
-                ra.cellW = num(a, "cellW", 0);
-                ra.cellH = num(a, "cellH", 0);
-                ra.zeroBased = a.has("zeroBased") && a.get("zeroBased").getAsBoolean();
-                t.asset = ra;
+                t.asset = readAsset(o.getAsJsonObject("asset"));
             }
             for (JsonElement te : arr(o, "tags")) {
                 t.tags.add(te.getAsString());
@@ -217,7 +233,53 @@ public final class GameData {
         return firstModule(o, def, null) != null;
     }
 
+    /** 兼容两套 id：Web 编辑器用 combat.health / fx.cameraFollow，桌面模块用 fight.hp / show.camera。 */
+    public RtModule module(RtObject o, String a, String b) {
+        RtModule m = firstModule(o, a, null);
+        return m != null ? m : firstModule(o, b, null);
+    }
+
+    public RtAsset assetByName(String name) {
+        if (name == null || name.isEmpty()) {
+            return null;
+        }
+        RtAsset a = assetsByName.get(name);
+        if (a != null) {
+            return a;
+        }
+        for (RtAsset v : assets.values()) {
+            if (v.name.equalsIgnoreCase(name)) {
+                return v;
+            }
+        }
+        return null;
+    }
+
+    public RtAsset assetById(String id) {
+        return id == null || id.isEmpty() ? null : assets.get(id);
+    }
+
     // ---------------- Json 小工具 ----------------
+
+    private static String readText(File f) throws IOException {
+        return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+    }
+
+    private static RtAsset readAsset(JsonObject a) {
+        RtAsset ra = new RtAsset();
+        ra.id = str(a, "id", "");
+        ra.name = str(a, "name", "");
+        ra.kind = str(a, "kind", "IMAGE");
+        ra.path = str(a, "path", "");
+        ra.head = str(a, "head", "");
+        ra.frames = Math.max(1, num(a, "frames", 1));
+        ra.cols = Math.max(1, num(a, "cols", 1));
+        ra.rows = Math.max(1, num(a, "rows", 1));
+        ra.cellW = num(a, "cellW", 0);
+        ra.cellH = num(a, "cellH", 0);
+        ra.zeroBased = a.has("zeroBased") && a.get("zeroBased").getAsBoolean();
+        return ra;
+    }
 
     private static String str(JsonObject o, String k, String def) {
         JsonElement e = o.get(k);

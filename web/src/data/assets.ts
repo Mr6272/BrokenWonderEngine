@@ -78,7 +78,7 @@ async function idbKeys(store: string): Promise<string[]> {
 
 // ---------------- 图片缓存 ----------------
 
-interface LoadedImage {
+export interface LoadedImage {
   /** canvas 的 drawImage 能直接吃这几种类型；图集切片产出的是 HTMLCanvasElement */
   bitmap: ImageBitmap | HTMLImageElement | HTMLCanvasElement;
   width: number;
@@ -148,22 +148,25 @@ async function loadRaw(asset: AssetEntry, frame: number): Promise<LoadedImage | 
 
 const wholeCache = new Map<string, LoadedImage>();
 
+/** 读取原始二进制。打包音频时用得到；图片解码也会先经过这里。 */
+export async function assetRawBlob(asset: AssetEntry, frame = 0): Promise<Blob | null> {
+  if (asset.src === "url" && asset.url) {
+    const resp = await fetch(asset.url, { mode: "cors" });
+    if (!resp.ok) return null;
+    return resp.blob();
+  }
+  const stored = await idbGet<{ frames: Blob[] }>(STORE_ASSET, asset.id);
+  if (!stored?.frames?.length) return null;
+  const idx = asset.kind === "SEQUENCE" ? Math.min(frame, stored.frames.length - 1) : 0;
+  return stored.frames[idx] ?? null;
+}
+
 async function loadWhole(asset: AssetEntry, frame = 0): Promise<LoadedImage | null> {
   const key = asset.kind === "SEQUENCE" ? `${asset.id}#raw#${frame}` : `${asset.id}#raw`;
   const hit = wholeCache.get(key);
   if (hit) return hit;
 
-  let blob: Blob | null = null;
-  if (asset.src === "url" && asset.url) {
-    const resp = await fetch(asset.url, { mode: "cors" });
-    if (!resp.ok) return null;
-    blob = await resp.blob();
-  } else {
-    const stored = await idbGet<{ frames: Blob[] }>(STORE_ASSET, asset.id);
-    if (!stored?.frames?.length) return null;
-    const idx = asset.kind === "SEQUENCE" ? Math.min(frame, stored.frames.length - 1) : 0;
-    blob = stored.frames[idx];
-  }
+  const blob = await assetRawBlob(asset, frame);
   if (!blob) return null;
   const img = await decodeBlob(blob);
   if (!img) return null;
@@ -516,5 +519,84 @@ export function assetKindShort(kind: AssetKind): string {
     case "ATLAS": return "图集";
     case "AUDIO": return "音频";
     default: return "素材";
+  }
+}
+
+// ---------------- 打包用素材导出 ----------------
+
+export interface PackAssetFile {
+  name: string;
+  blob: Blob;
+}
+
+export interface PackAssetResult {
+  files: PackAssetFile[];
+  error?: string;
+}
+
+async function imageToPng(img: LoadedImage): Promise<Blob | null> {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, img.width);
+  canvas.height = Math.max(1, img.height);
+  const g = canvas.getContext("2d");
+  if (!g) return null;
+  g.imageSmoothingEnabled = false;
+  g.drawImage(img.bitmap as CanvasImageSource, 0, 0, canvas.width, canvas.height);
+  return new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((b) => resolve(b), "image/png");
+  });
+}
+
+function audioExtension(asset: AssetEntry, blob: Blob): string {
+  const fromPath = asset.path && /\.[a-z0-9]+$/i.exec(asset.path)?.[0];
+  if (fromPath) return fromPath.toLowerCase();
+  const type = (blob.type || "").toLowerCase();
+  if (type.includes("mpeg")) return ".mp3";
+  if (type.includes("ogg")) return ".ogg";
+  if (type.includes("wav")) return ".wav";
+  return ".wav";
+}
+
+/**
+ * 把一条素材转成 Java 运行时能直接读的文件。
+ *
+ * 关键点：SVG / WebP / GIF 都先画到 canvas 再导出 PNG。
+ * 浏览器里看起来正常的图，不等于 Java ImageIO 能读；打包前统一栅格化最稳。
+ */
+export async function assetFilesForPack(asset: AssetEntry): Promise<PackAssetResult> {
+  try {
+    if (asset.kind === "AUDIO") {
+      const blob = await assetRawBlob(asset, 0);
+      if (!blob) return { files: [], error: "音频二进制读不到" };
+      return { files: [{ name: "audio" + audioExtension(asset, blob), blob }] };
+    }
+
+    if (asset.kind === "ATLAS") {
+      const whole = await loadWhole(asset, 0);
+      if (!whole) return { files: [], error: "图集原图读不到" };
+      const blob = await imageToPng(whole);
+      return blob ? { files: [{ name: "main.png", blob }] } : { files: [], error: "图集转 PNG 失败" };
+    }
+
+    if (asset.kind === "SEQUENCE") {
+      const count = totalFrames(asset);
+      const files: PackAssetFile[] = [];
+      for (let i = 0; i < count; i++) {
+        const img = await loadFrame(asset, i);
+        if (!img) continue;
+        const blob = await imageToPng(img);
+        if (blob) files.push({ name: `frame${i + 1}.png`, blob });
+      }
+      return files.length > 0
+        ? { files }
+        : { files: [], error: "序列帧一张都没读到" };
+    }
+
+    const img = await loadFrame(asset, 0);
+    if (!img) return { files: [], error: "图片读不到（文件可能已丢失）" };
+    const blob = await imageToPng(img);
+    return blob ? { files: [{ name: "main.png", blob }] } : { files: [], error: "转 PNG 失败" };
+  } catch (e) {
+    return { files: [], error: e instanceof Error ? e.message : String(e) };
   }
 }
