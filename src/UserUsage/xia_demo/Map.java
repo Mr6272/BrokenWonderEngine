@@ -63,8 +63,7 @@ public class Map extends Scene {
         BCA.halfWidth = box.transform.scale.x / 4 / 4 / 2;
         BCA.halfHeight = box.transform.scale.y / 4/ 4 / 2;
         BCA.isFrozen = true;
-        BCA.OnAdded(box);
-        box.Abilitys.add(BCA);
+        box.AddAbility(BCA);
     }
 
     private static void createroom1inside(GameSekai scene, float worldX, float worldY, Vector2 scale, float z, float rotation, MapObjectData obj) {
@@ -105,7 +104,6 @@ public class Map extends Scene {
         xia.transform.rotation = rotation;
         GameObject go = new GameObject();
         CameraAbility cm = new CameraAbility(xia.transform);
-        cm.OnAdded(go);
         cm.isFollowPlayer = true;
         go.AddAbility(cm);
     }

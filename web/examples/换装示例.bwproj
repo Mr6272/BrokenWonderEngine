@@ -1,0 +1,627 @@
+{
+  "format": 1,
+  "name": "换装示例",
+  "author": "BWE Studio",
+  "tileSize": 32,
+  "gridW": 20,
+  "gridH": 15,
+  "scenes": [
+    {
+      "id": "ab2fb64b-6795-4c56-8e68-fa90b49d48d1",
+      "name": "试衣间",
+      "originX": 0,
+      "originY": 0,
+      "widthTiles": 20,
+      "heightTiles": 15,
+      "layers": [
+        {
+          "id": "4e632d91-c9f1-4f9c-a10f-de9980165e8e",
+          "name": "地形",
+          "visible": true,
+          "locked": false,
+          "order": 0
+        },
+        {
+          "id": "b021f9fa-3271-409d-a841-d75b15fa6688",
+          "name": "物件",
+          "visible": true,
+          "locked": false,
+          "order": 0
+        },
+        {
+          "id": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "name": "角色",
+          "visible": true,
+          "locked": false,
+          "order": 0
+        }
+      ],
+      "objects": [
+        {
+          "id": "eb62e05d-773e-4424-900d-3a45d7b65f1a",
+          "name": "换装背景",
+          "kind": "PROP",
+          "x": 320,
+          "y": 240,
+          "z": -10,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 320,
+          "halfH": 240,
+          "layerId": "4e632d91-c9f1-4f9c-a10f-de9980165e8e",
+          "visible": true,
+          "locked": true,
+          "assetId": "cba76940-d222-44dc-abb1-ed1baf5863df",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [],
+          "props": {},
+          "tags": [
+            "背景"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "e353d350-6ee2-4fca-a685-4f3831124e93",
+          "name": "身体",
+          "kind": "ACTOR",
+          "x": 320,
+          "y": 300,
+          "z": 0,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 60,
+          "halfH": 110,
+          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "visible": true,
+          "locked": false,
+          "assetId": "29c87f6e-c10c-420f-9317-61a1b80fc2cd",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "game.dressPart",
+              "trigger": null,
+              "values": {
+                "slot": "身体 Body",
+                "options": "基础体 A,基础体 B",
+                "optionAssets": "身体-基础,身体-小麦",
+                "defaultIndex": "0",
+                "offsetX": "0",
+                "offsetY": "0",
+                "partScale": "1",
+                "fallbackColor": "#f2c9a0",
+                "followBody": "开"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {},
+          "tags": [
+            "换装部件"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "8ce16b2c-dadf-4934-810c-a2cda8b2b4bc",
+          "name": "下装",
+          "kind": "ACTOR",
+          "x": 320,
+          "y": 380,
+          "z": 1,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 60,
+          "halfH": 50,
+          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "visible": true,
+          "locked": false,
+          "assetId": "97ae603a-c601-4daf-84e6-3cf871331787",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "game.dressPart",
+              "trigger": null,
+              "values": {
+                "slot": "下装 Bottom",
+                "options": "牛仔裤,粉短裙,运动裤",
+                "optionAssets": "下装-牛仔裤,下装-粉短裙,下装-运动裤",
+                "defaultIndex": "0",
+                "offsetX": "0",
+                "offsetY": "0",
+                "partScale": "1",
+                "fallbackColor": "#3f6fb5",
+                "followBody": "开"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {},
+          "tags": [
+            "换装部件"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "1ff0bf42-6062-43d0-a51f-8c30eca4667e",
+          "name": "上装",
+          "kind": "ACTOR",
+          "x": 320,
+          "y": 315,
+          "z": 2,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 70,
+          "halfH": 60,
+          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "visible": true,
+          "locked": false,
+          "assetId": "3a05ef3f-5c69-4a40-b62a-24acece79252",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "game.dressPart",
+              "trigger": null,
+              "values": {
+                "slot": "上装 Top",
+                "options": "白衬衫,蓝连衣裙,红外套",
+                "optionAssets": "上装-白衬衫,上装-蓝裙,上装-红外套",
+                "defaultIndex": "0",
+                "offsetX": "0",
+                "offsetY": "0",
+                "partScale": "1",
+                "fallbackColor": "#f4f6fb",
+                "followBody": "开"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {},
+          "tags": [
+            "换装部件"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "7f68d728-ffe6-4127-ba0a-17fc3dd74320",
+          "name": "鞋子",
+          "kind": "ACTOR",
+          "x": 320,
+          "y": 415,
+          "z": 3,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 55,
+          "halfH": 20,
+          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "visible": true,
+          "locked": false,
+          "assetId": "5e15fc4e-b978-4654-9439-7db7f8c8b5ad",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "game.dressPart",
+              "trigger": null,
+              "values": {
+                "slot": "鞋子 Shoes",
+                "options": "运动鞋,皮鞋,靴子",
+                "optionAssets": "鞋子-运动鞋,鞋子-皮鞋,鞋子-靴子",
+                "defaultIndex": "0",
+                "offsetX": "0",
+                "offsetY": "0",
+                "partScale": "1",
+                "fallbackColor": "#f4f6fb",
+                "followBody": "开"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {},
+          "tags": [
+            "换装部件"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "da892746-64b7-450e-a15e-31c69f132b63",
+          "name": "头发",
+          "kind": "ACTOR",
+          "x": 320,
+          "y": 225,
+          "z": 4,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 70,
+          "halfH": 60,
+          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "visible": true,
+          "locked": false,
+          "assetId": "55a44e00-0553-4e3f-b40c-da54fcc617b1",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "game.dressPart",
+              "trigger": null,
+              "values": {
+                "slot": "发型 Hair",
+                "options": "短发,长发,马尾",
+                "optionAssets": "发型-短发棕,发型-长发明,发型-马尾橙",
+                "defaultIndex": "0",
+                "offsetX": "0",
+                "offsetY": "0",
+                "partScale": "1",
+                "fallbackColor": "#6b4a2f",
+                "followBody": "开"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {},
+          "tags": [
+            "换装部件"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "15011304-3771-4fe3-8e9a-fbf5caa27cc1",
+          "name": "配饰",
+          "kind": "ACTOR",
+          "x": 320,
+          "y": 235,
+          "z": 5,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 50,
+          "halfH": 30,
+          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "visible": true,
+          "locked": false,
+          "assetId": "f668c8ba-b961-4019-b2e5-d633bb977cde",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "game.dressPart",
+              "trigger": null,
+              "values": {
+                "slot": "配饰 Accessory",
+                "options": "无,蝴蝶结,猫耳",
+                "optionAssets": "配饰-无,配饰-蝴蝶结,配饰-猫耳",
+                "defaultIndex": "1",
+                "offsetX": "0",
+                "offsetY": "0",
+                "partScale": "1",
+                "fallbackColor": "transparent",
+                "followBody": "开"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {},
+          "tags": [
+            "换装部件"
+          ],
+          "parentId": null
+        },
+        {
+          "id": "ea468f7c-6bef-4e8a-92ae-21e8124cb203",
+          "name": "衣橱控制器",
+          "kind": "PROP",
+          "x": 560,
+          "y": 84,
+          "z": 9,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "halfW": 32,
+          "halfH": 32,
+          "layerId": "b021f9fa-3271-409d-a841-d75b15fa6688",
+          "visible": true,
+          "locked": false,
+          "assetId": "612ae8d4-746c-4e17-b1aa-745822e6279e",
+          "animMode": "默认",
+          "animFps": 8,
+          "modules": [
+            {
+              "defId": "game.dressup",
+              "trigger": "ON_START",
+              "values": {
+                "title": "换 装 间",
+                "backgroundAsset": "换装背景",
+                "partTag": "换装部件",
+                "showTabs": "开",
+                "allowReset": "开",
+                "persist": "关",
+                "stageWidth": "640",
+                "stageHeight": "480",
+                "fit": "等比缩放 Contain"
+              },
+              "enabled": true,
+              "collapsed": false
+            }
+          ],
+          "props": {},
+          "tags": [
+            "换装控制器"
+          ],
+          "parentId": null
+        }
+      ],
+      "onStartScript": "",
+      "bgmAssetId": ""
+    }
+  ],
+  "assets": [
+    {
+      "id": "cba76940-d222-44dc-abb1-ed1baf5863df",
+      "name": "换装背景",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22640%22%20height%3D%22480%22%20viewBox%3D%220%200%20640%20480%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22room%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%220%22%20y2%3D%221%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%233b3350%22%2F%3E%3Cstop%20offset%3D%220.55%22%20stop-color%3D%22%232b2740%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%231b1929%22%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22floor%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%220%22%20y2%3D%221%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23544a70%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%232a243c%22%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%20%20%3CradialGradient%20id%3D%22glow%22%20cx%3D%220.5%22%20cy%3D%220.35%22%20r%3D%220.6%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23ffe3b8%22%20stop-opacity%3D%220.22%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23ffe3b8%22%20stop-opacity%3D%220%22%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FradialGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22640%22%20height%3D%22480%22%20fill%3D%22url(%23room)%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20y%3D%22352%22%20width%3D%22640%22%20height%3D%22128%22%20fill%3D%22url(%23floor)%22%2F%3E%0A%20%20%20%20%20%20%3Cg%20stroke%3D%22%237f6fa8%22%20stroke-opacity%3D%220.25%22%20stroke-width%3D%221%22%3E%0A%20%20%20%20%20%20%20%20%3Cline%20x1%3D%220%22%20y1%3D%22352%22%20x2%3D%22640%22%20y2%3D%22352%22%2F%3E%0A%20%20%20%20%20%20%20%20%3Cline%20x1%3D%220%22%20y1%3D%22392%22%20x2%3D%22640%22%20y2%3D%22392%22%2F%3E%0A%20%20%20%20%20%20%20%20%3Cline%20x1%3D%220%22%20y1%3D%22436%22%20x2%3D%22640%22%20y2%3D%22436%22%2F%3E%0A%20%20%20%20%20%20%3C%2Fg%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%220%22%20y%3D%220%22%20width%3D%22640%22%20height%3D%22480%22%20fill%3D%22url(%23glow)%22%2F%3E%0A%20%20%20%20%20%20%3Cg%20opacity%3D%220.4%22%3E%0A%20%20%20%20%20%20%20%20%3Crect%20x%3D%2252%22%20y%3D%2272%22%20width%3D%2292%22%20height%3D%22128%22%20rx%3D%226%22%20fill%3D%22%231e1a2c%22%20stroke%3D%22%236f5f93%22%20stroke-width%3D%223%22%2F%3E%0A%20%20%20%20%20%20%20%20%3Crect%20x%3D%22496%22%20y%3D%2272%22%20width%3D%2292%22%20height%3D%22128%22%20rx%3D%226%22%20fill%3D%22%231e1a2c%22%20stroke%3D%22%236f5f93%22%20stroke-width%3D%223%22%2F%3E%0A%20%20%20%20%20%20%20%20%3Cpath%20d%3D%22M98%20200%20V264%20M542%20200%20V264%22%20stroke%3D%22%236f5f93%22%20stroke-width%3D%224%22%2F%3E%0A%20%20%20%20%20%20%3C%2Fg%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%22320%22%20cy%3D%22438%22%20rx%3D%22150%22%20ry%3D%2218%22%20fill%3D%22%230d0b16%22%20opacity%3D%220.55%22%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22320%22%20y%3D%2246%22%20text-anchor%3D%22middle%22%20font-family%3D%22Segoe%20UI%2C%20Microsoft%20YaHei%22%20font-size%3D%2220%22%20font-weight%3D%22700%22%20fill%3D%22%23cdbff5%22%20opacity%3D%220.75%22%3E%E8%AF%95%20%E8%A1%A3%20%E9%97%B4%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "换装背景",
+      "width": 640,
+      "height": 480,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "29c87f6e-c10c-420f-9317-61a1b80fc2cd",
+      "name": "身体-基础",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22220%22%20viewBox%3D%220%200%20120%20220%22%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2240%22%20rx%3D%2230%22%20ry%3D%2234%22%20fill%3D%22%23f2c9a0%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2250%22%20y%3D%2266%22%20width%3D%2220%22%20height%3D%2222%22%20fill%3D%22%23e7b88a%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M28%2088%20Q60%2074%2092%2088%20L100%20160%20Q60%20184%2020%20160%20Z%22%20fill%3D%22%23f2c9a0%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2235%22%20y%3D%22158%22%20width%3D%2220%22%20height%3D%2256%22%20rx%3D%2210%22%20fill%3D%22%23f2c9a0%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2265%22%20y%3D%22158%22%20width%3D%2220%22%20height%3D%2256%22%20rx%3D%2210%22%20fill%3D%22%23f2c9a0%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2246%22%20cy%3D%22214%22%20rx%3D%2213%22%20ry%3D%226%22%20fill%3D%22%23e3b184%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2274%22%20cy%3D%22214%22%20rx%3D%2213%22%20ry%3D%226%22%20fill%3D%22%23e3b184%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2249%22%20cy%3D%2238%22%20r%3D%223%22%20fill%3D%22%233a2b25%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2271%22%20cy%3D%2238%22%20r%3D%223%22%20fill%3D%22%233a2b25%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M53%2052%20Q60%2057%2067%2052%22%20stroke%3D%22%23b06a58%22%20stroke-width%3D%223%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "身体-基础",
+      "width": 120,
+      "height": 220,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "1290a5bb-ff1c-4832-a422-aaf3bb2b7bdc",
+      "name": "身体-小麦",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22220%22%20viewBox%3D%220%200%20120%20220%22%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2260%22%20cy%3D%2240%22%20rx%3D%2230%22%20ry%3D%2234%22%20fill%3D%22%23c98d5a%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2250%22%20y%3D%2266%22%20width%3D%2220%22%20height%3D%2222%22%20fill%3D%22%23b77a47%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M28%2088%20Q60%2074%2092%2088%20L100%20160%20Q60%20184%2020%20160%20Z%22%20fill%3D%22%23c98d5a%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2235%22%20y%3D%22158%22%20width%3D%2220%22%20height%3D%2256%22%20rx%3D%2210%22%20fill%3D%22%23c98d5a%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2265%22%20y%3D%22158%22%20width%3D%2220%22%20height%3D%2256%22%20rx%3D%2210%22%20fill%3D%22%23c98d5a%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2246%22%20cy%3D%22214%22%20rx%3D%2213%22%20ry%3D%226%22%20fill%3D%22%23a86f3f%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2274%22%20cy%3D%22214%22%20rx%3D%2213%22%20ry%3D%226%22%20fill%3D%22%23a86f3f%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2249%22%20cy%3D%2238%22%20r%3D%223%22%20fill%3D%22%232c1d16%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2271%22%20cy%3D%2238%22%20r%3D%223%22%20fill%3D%22%232c1d16%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M53%2052%20Q60%2057%2067%2052%22%20stroke%3D%22%238c4a36%22%20stroke-width%3D%223%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "身体-小麦",
+      "width": 120,
+      "height": 220,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "55a44e00-0553-4e3f-b40c-da54fcc617b1",
+      "name": "发型-短发棕",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22120%22%20viewBox%3D%220%200%20140%20120%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M26%2082%20Q24%2016%2070%2014%20Q116%2016%20114%2082%20Q104%2046%2070%2044%20Q36%2046%2026%2082%20Z%22%20fill%3D%22%236b4a2f%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M28%2078%20Q34%2056%2054%2050%20Q44%2070%2046%2088%20Q34%2092%2028%2078%20Z%22%20fill%3D%22%23573a24%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M112%2078%20Q106%2056%2086%2050%20Q96%2070%2094%2088%20Q106%2092%20112%2078%20Z%22%20fill%3D%22%23573a24%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M54%2018%20Q70%2010%2088%2016%22%20stroke%3D%22%238d6542%22%20stroke-width%3D%225%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20opacity%3D%220.7%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "发型-短发棕",
+      "width": 140,
+      "height": 120,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "80080b6f-fae9-4262-9dcd-50eab061b9c3",
+      "name": "发型-长发明",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22160%22%20viewBox%3D%220%200%20140%20160%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M22%20150%20Q16%2070%2026%2046%20Q36%2012%2070%2012%20Q104%2012%20114%2046%20Q124%2070%20118%20150%20Q104%20142%20100%2078%20Q92%2048%2070%2046%20Q48%2048%2040%2078%20Q36%20142%2022%20150%20Z%22%20fill%3D%22%23c9a15a%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M28%20138%20Q26%2076%2038%2050%20Q48%2072%2046%20132%20Q38%20138%2028%20138%20Z%22%20fill%3D%22%23ad8545%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M112%20138%20Q114%2076%20102%2050%20Q92%2072%2094%20132%20Q102%20138%20112%20138%20Z%22%20fill%3D%22%23ad8545%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M52%2018%20Q70%2010%2088%2017%22%20stroke%3D%22%23e2c07c%22%20stroke-width%3D%225%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20opacity%3D%220.7%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "发型-长发明",
+      "width": 140,
+      "height": 160,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "96c20d5c-ec1f-48fc-b08f-39057ba802ab",
+      "name": "发型-马尾橙",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22150%22%20height%3D%22140%22%20viewBox%3D%220%200%20150%20140%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M28%2084%20Q26%2018%2072%2016%20Q118%2018%20116%2084%20Q104%2048%2072%2046%20Q40%2048%2028%2084%20Z%22%20fill%3D%22%23c2662f%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M110%2056%20Q146%2066%20142%20104%20Q138%20132%20118%20138%20Q132%20108%20108%2084%20Z%22%20fill%3D%22%23a94f21%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M32%2080%20Q40%2054%2060%2048%20Q50%2072%2050%2090%20Q38%2094%2032%2080%20Z%22%20fill%3D%22%23a94f21%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M56%2020%20Q72%2012%2090%2018%22%20stroke%3D%22%23e28a4c%22%20stroke-width%3D%225%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20opacity%3D%220.7%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "发型-马尾橙",
+      "width": 150,
+      "height": 140,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "3a05ef3f-5c69-4a40-b62a-24acece79252",
+      "name": "上装-白衬衫",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22120%22%20viewBox%3D%220%200%20140%20120%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M42%2018%20L58%2030%20L70%2038%20L82%2030%20L98%2018%20L118%2038%20L108%2062%20L100%2056%20L104%20112%20Q70%20120%2036%20112%20L40%2056%20L32%2062%20L22%2038%20Z%22%20fill%3D%22%23f4f6fb%22%20stroke%3D%22%23cdd5e6%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M58%2030%20L70%2046%20L82%2030%20L78%2092%20L70%20100%20L62%2092%20Z%22%20fill%3D%22%23e2e8f4%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2270%22%20cy%3D%2260%22%20r%3D%223%22%20fill%3D%22%23aeb9ce%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2270%22%20cy%3D%2278%22%20r%3D%223%22%20fill%3D%22%23aeb9ce%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M100%2056%20L96%20102%22%20stroke%3D%22%23d5dcec%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "上装-白衬衫",
+      "width": 140,
+      "height": 120,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "fe881836-6999-4903-8d26-494f5a14ede2",
+      "name": "上装-蓝裙",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22150%22%20height%3D%22150%22%20viewBox%3D%220%200%20150%20150%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M46%2016%20L62%2028%20L75%2036%20L88%2028%20L104%2016%20L122%2040%20L112%2062%20L108%2054%20L118%20138%20Q75%20152%2032%20138%20L42%2054%20L38%2062%20L28%2040%20Z%22%20fill%3D%22%234c8dff%22%20stroke%3D%22%233569c9%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M62%2028%20L75%2044%20L88%2028%20L84%2058%20L66%2058%20Z%22%20fill%3D%22%233b74d8%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M44%20108%20Q75%20120%20106%20108%20L110%20134%20Q75%20146%2040%20134%20Z%22%20fill%3D%22%233b74d8%22%20opacity%3D%220.55%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2275%22%20cy%3D%2272%22%20r%3D%223.4%22%20fill%3D%22%23bcd6ff%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2275%22%20cy%3D%2292%22%20r%3D%223.4%22%20fill%3D%22%23bcd6ff%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "上装-蓝裙",
+      "width": 150,
+      "height": 150,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "25abd18f-b357-49f0-868a-ee8aac9a5d0a",
+      "name": "上装-红外套",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22150%22%20height%3D%22130%22%20viewBox%3D%220%200%20150%20130%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M40%2018%20L60%2030%20L75%2038%20L90%2030%20L110%2018%20L128%2044%20L116%2070%20L108%2062%20L112%20122%20Q75%20132%2038%20122%20L42%2062%20L34%2070%20L22%2044%20Z%22%20fill%3D%22%23e0525f%22%20stroke%3D%22%23b53a47%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M60%2030%20L75%2052%20L90%2030%20L86%20118%20L64%20118%20Z%22%20fill%3D%22%23c84451%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M75%2038%20V122%22%20stroke%3D%22%239e2e3a%22%20stroke-width%3D%222%22%20opacity%3D%220.6%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2246%22%20y%3D%2284%22%20width%3D%2214%22%20height%3D%228%22%20rx%3D%223%22%20fill%3D%22%23ffd0d4%22%20opacity%3D%220.75%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2290%22%20y%3D%2284%22%20width%3D%2214%22%20height%3D%228%22%20rx%3D%223%22%20fill%3D%22%23ffd0d4%22%20opacity%3D%220.75%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "上装-红外套",
+      "width": 150,
+      "height": 130,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "97ae603a-c601-4daf-84e6-3cf871331787",
+      "name": "下装-牛仔裤",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22100%22%20viewBox%3D%220%200%20120%20100%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M24%204%20H96%20L102%2040%20L88%2096%20H64%20L60%2048%20L56%2096%20H32%20L18%2040%20Z%22%20fill%3D%22%233f6fb5%22%20stroke%3D%22%232e5590%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2224%22%20y%3D%224%22%20width%3D%2272%22%20height%3D%2214%22%20fill%3D%22%232e5590%22%20opacity%3D%220.55%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M60%2020%20V48%22%20stroke%3D%22%237fa8e0%22%20stroke-width%3D%222%22%20opacity%3D%220.6%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2242%22%20cy%3D%2240%22%20r%3D%222.6%22%20fill%3D%22%23d7e5ff%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2278%22%20cy%3D%2240%22%20r%3D%222.6%22%20fill%3D%22%23d7e5ff%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "下装-牛仔裤",
+      "width": 120,
+      "height": 100,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "9f1baf2f-45b3-4c1c-9d61-1b1757187f7a",
+      "name": "下装-粉短裙",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22130%22%20height%3D%22100%22%20viewBox%3D%220%200%20130%20100%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M30%208%20H100%20L122%2088%20Q65%20104%208%2088%20Z%22%20fill%3D%22%23f27fae%22%20stroke%3D%22%23cf5c8c%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M30%208%20H100%20L104%2024%20H26%20Z%22%20fill%3D%22%23d9659a%22%2F%3E%0A%20%20%20%20%20%20%3Cg%20stroke%3D%22%23ffb6d3%22%20stroke-width%3D%222%22%20opacity%3D%220.8%22%3E%0A%20%20%20%20%20%20%20%20%3Cpath%20d%3D%22M44%2024%20L34%2088%22%2F%3E%3Cpath%20d%3D%22M65%2024%20L65%2094%22%2F%3E%3Cpath%20d%3D%22M86%2024%20L96%2088%22%2F%3E%0A%20%20%20%20%20%20%3C%2Fg%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "下装-粉短裙",
+      "width": 130,
+      "height": 100,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "ba325a1c-c267-4669-be56-3bda14a008ed",
+      "name": "下装-运动裤",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22100%22%20viewBox%3D%220%200%20120%20100%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M24%204%20H96%20L102%2042%20L90%2096%20H64%20L60%2050%20L56%2096%20H30%20L18%2042%20Z%22%20fill%3D%22%233a4256%22%20stroke%3D%22%23252b3a%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2224%22%20y%3D%224%22%20width%3D%2272%22%20height%3D%2212%22%20fill%3D%22%23252b3a%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M26%2044%20H44%20L40%2088%20H26%20Z%22%20fill%3D%22%232ecc8f%22%20opacity%3D%220.7%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M94%2044%20H76%20L80%2088%20H94%20Z%22%20fill%3D%22%232ecc8f%22%20opacity%3D%220.7%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M60%2020%20V50%22%20stroke%3D%22%2359627a%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "下装-运动裤",
+      "width": 120,
+      "height": 100,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "5e15fc4e-b978-4654-9439-7db7f8c8b5ad",
+      "name": "鞋子-运动鞋",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22110%22%20height%3D%2240%22%20viewBox%3D%220%200%20110%2040%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M8%2028%20Q8%2014%2026%2014%20L48%2014%20L58%2024%20L88%2024%20Q104%2024%20104%2032%20Q104%2036%2096%2036%20H18%20Q8%2036%208%2028%20Z%22%20fill%3D%22%23f4f6fb%22%20stroke%3D%22%23c3ccdd%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M8%2030%20H104%22%20stroke%3D%22%23aeb9ce%22%20stroke-width%3D%223%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M48%2016%20L58%2024%20L46%2024%20Z%22%20fill%3D%22%234c8dff%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M68%2018%20L76%2024%20L64%2024%20Z%22%20fill%3D%22%234c8dff%22%20opacity%3D%220.7%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "鞋子-运动鞋",
+      "width": 110,
+      "height": 40,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "a50d2d91-9fc1-44fa-a2f7-6dbd4ac27fc7",
+      "name": "鞋子-皮鞋",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22110%22%20height%3D%2240%22%20viewBox%3D%220%200%20110%2040%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M8%2028%20Q8%2012%2026%2012%20L46%2012%20L58%2026%20L88%2026%20Q104%2026%20104%2033%20Q104%2036%2096%2036%20H18%20Q8%2036%208%2028%20Z%22%20fill%3D%22%232a2d36%22%20stroke%3D%22%2314161c%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M8%2031%20H104%22%20stroke%3D%22%230f1115%22%20stroke-width%3D%223%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M56%2016%20Q70%2018%2082%2026%22%20stroke%3D%22%235a6070%22%20stroke-width%3D%222%22%20fill%3D%22none%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "鞋子-皮鞋",
+      "width": 110,
+      "height": 40,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "4a8cc92e-450d-4d36-87e5-b7ab4aacb440",
+      "name": "鞋子-靴子",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22110%22%20height%3D%2260%22%20viewBox%3D%220%200%20110%2060%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M22%204%20H48%20L52%2034%20L88%2034%20Q104%2034%20104%2044%20Q104%2052%2094%2052%20H18%20Q8%2052%208%2042%20V20%20Q8%204%2022%204%20Z%22%20fill%3D%22%23b53a47%22%20stroke%3D%22%238e2732%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M8%2040%20H104%22%20stroke%3D%22%236f1d26%22%20stroke-width%3D%223%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2222%22%20y%3D%228%22%20width%3D%2226%22%20height%3D%225%22%20rx%3D%222.5%22%20fill%3D%22%23e87982%22%20opacity%3D%220.7%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "鞋子-靴子",
+      "width": 110,
+      "height": 60,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "f668c8ba-b961-4019-b2e5-d633bb977cde",
+      "name": "配饰-无",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22100%22%20height%3D%2260%22%20viewBox%3D%220%200%20100%2060%22%3E%3Crect%20width%3D%22100%22%20height%3D%2260%22%20fill%3D%22none%22%2F%3E%3C%2Fsvg%3E",
+      "path": "配饰-无",
+      "width": 100,
+      "height": 60,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "6460d816-50e2-4833-be65-6d8407ffe8fa",
+      "name": "配饰-蝴蝶结",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22100%22%20height%3D%2260%22%20viewBox%3D%220%200%20100%2060%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M50%2030%20L22%2012%20Q10%2020%2014%2032%20Q18%2044%2032%2042%20Z%22%20fill%3D%22%23f27fae%22%20stroke%3D%22%23cf5c8c%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M50%2030%20L78%2012%20Q90%2020%2086%2032%20Q82%2044%2068%2042%20Z%22%20fill%3D%22%23f27fae%22%20stroke%3D%22%23cf5c8c%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2250%22%20cy%3D%2230%22%20r%3D%228%22%20fill%3D%22%23e05f97%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2247%22%20cy%3D%2227%22%20r%3D%222.4%22%20fill%3D%22%23ffc2d9%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "配饰-蝴蝶结",
+      "width": 100,
+      "height": 60,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "4aa1ffc1-cdf8-4f8c-905b-c4532f207772",
+      "name": "配饰-猫耳",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22100%22%20height%3D%2260%22%20viewBox%3D%220%200%20100%2060%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M18%2044%20L26%208%20L48%2030%20Z%22%20fill%3D%22%233a4256%22%20stroke%3D%22%23252b3a%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M82%2044%20L74%208%20L52%2030%20Z%22%20fill%3D%22%233a4256%22%20stroke%3D%22%23252b3a%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M26%2030%20L30%2015%20L40%2028%20Z%22%20fill%3D%22%23f27fae%22%20opacity%3D%220.8%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M74%2030%20L70%2015%20L60%2028%20Z%22%20fill%3D%22%23f27fae%22%20opacity%3D%220.8%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M34%2046%20Q50%2054%2066%2046%22%20stroke%3D%22%233a4256%22%20stroke-width%3D%226%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "配饰-猫耳",
+      "width": 100,
+      "height": 60,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    },
+    {
+      "id": "612ae8d4-746c-4e17-b1aa-745822e6279e",
+      "name": "衣橱图标",
+      "kind": "IMAGE",
+      "src": "url",
+      "url": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2264%22%20height%3D%2264%22%20viewBox%3D%220%200%2064%2064%22%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%226%22%20y%3D%2210%22%20width%3D%2252%22%20height%3D%2246%22%20rx%3D%227%22%20fill%3D%22%234a3d68%22%20stroke%3D%22%238b78b8%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%2212%22%20y%3D%2216%22%20width%3D%2240%22%20height%3D%2234%22%20rx%3D%224%22%20fill%3D%22%232a2340%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M32%2016%20V50%22%20stroke%3D%22%238b78b8%22%20stroke-width%3D%222%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2227%22%20cy%3D%2233%22%20r%3D%222.4%22%20fill%3D%22%23d8c8ff%22%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%2237%22%20cy%3D%2233%22%20r%3D%222.4%22%20fill%3D%22%23d8c8ff%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M22%206%20L32%2013%20L42%206%22%20stroke%3D%22%238b78b8%22%20stroke-width%3D%223%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%0A%20%20%20%20%3C%2Fsvg%3E",
+      "path": "衣橱图标",
+      "width": 64,
+      "height": 64,
+      "group": "换装示例",
+      "hiddenFrames": [],
+      "frameDurations": []
+    }
+  ],
+  "packs": [],
+  "scripts": {},
+  "variables": {
+    "换装.当前组合": "",
+    "换装.已解锁套数": "1"
+  },
+  "masterVolume": 0.8
+}

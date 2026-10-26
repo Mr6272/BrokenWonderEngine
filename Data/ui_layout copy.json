@@ -6,15 +6,15 @@
         {
           "type": "panel",
           "name": "hud_panel",
-          "position": { "x": 60, "y": 680 },
-          "size": { "width": 840, "height": 140 },
+          "position": { "x": 700, "y": 50 },
+          "size": { "width": 840, "height": 800 },
           "background": "#1e1e1ecc",
           "border": { "color": "#ffffff80", "thickness": 2 },
           "children": [
             {
               "type": "label",
               "name": "hud_title",
-              "text": "Example HUD",
+              "text": "测试用的 HUD，这是一首",
               "position": { "x": 16, "y": 110 },
               "color": "#ffffffff"
             },

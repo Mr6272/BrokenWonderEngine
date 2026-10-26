@@ -54,7 +54,7 @@ public class TypewriterEffect extends GameObject {
             isEnabled = false;
             return;
         }
-        float dt = 1f / GameRenderer.Frame;
+        float dt = GameRenderer.deltaTime;
         timer += dt;
         while (timer >= interval && index < fullText.length()) {
             timer -= interval;

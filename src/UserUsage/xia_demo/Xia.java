@@ -15,7 +15,7 @@ import UI.UIManager;
 import UI.UITweens;
 import UI.UITween.Ease;
 
-import com.jogamp.newt.event.KeyEvent;
+import com.jogamp.newt.event.KeyEvent;//中尉米诺陶
 
 public class Xia extends GameObject {
 
@@ -44,16 +44,14 @@ public class Xia extends GameObject {
         renderer.Frame = 60;
         renderer.order = -0.5f;
         renderer.SpriteObj = sprRun;
-        renderer.OnAdded(this);
-        super.Abilitys.add(renderer);
+        AddAbility(renderer);
         transform = ((TransformAbility)Abilitys.get(0));
         transform.position = new Vector2(50, 100);
         transform.scale = new Vector2(40f, 40f);
         BoxColliderAbility BCA = new BoxColliderAbility();
         BCA.halfHeight = 40f / 4;
         BCA.halfWidth = 40f / 4;
-        super.Abilitys.add(BCA);
-        BCA.OnAdded( this);
+        AddAbility(BCA);
         boxCollider = BCA;
         
         UIButton btn = new UIButton("Button", "start", 100, 100, 100, 100);
@@ -71,10 +69,10 @@ public class Xia extends GameObject {
         
         if (isThrowing)
         {
-            ThrowTimer += 1f;
-            if (ThrowTimer >= 95 / 2 && kuwu != null)
+            ThrowTimer += GameRenderer.deltaTime; // 秒（固定步长内为 1/60）
+            if (ThrowTimer >= 95f / 120f && kuwu != null) // 原 47.5 帧 @60fps ≈ 0.79s
                 kuwu.isEnabled = true;
-            if (ThrowTimer >= 66*2)
+            if (ThrowTimer >= 132f / 60f) // 原 132 帧 @60fps = 2.2s
             {
                 if (kuwu != null)
                 {
@@ -109,9 +107,7 @@ public class Xia extends GameObject {
         else if (MainWindow.keyManager.isKeyHeld(KeyEvent.VK_M))
         {
             Log.d(GameSekai.GameObjects.size() + " - game objects");
-            Map map = new Map("Data/level_02.json");
-            gameWindow.scene.genMap();
-            SceneManagement.Reduce(map);
+            SceneManagement.Reduce(new Map("Data/level_02.json"));
             Log.d(GameSekai.GameObjects.size() + " - game objects");
         }
 
@@ -119,7 +115,7 @@ public class Xia extends GameObject {
         {
             isRunning = true;
             faceDir = 1;
-            Move(0, 120f * 1 / GameRenderer.Frame, 180);
+            Move(0, 120f * GameRenderer.deltaTime, 180);
 //            transform.position.y += 60f * 1 / GameRenderer.Frame;
 //            transform.rotation = 180f;
 
@@ -133,7 +129,7 @@ public class Xia extends GameObject {
         {
             isRunning = true;
             faceDir = -1;
-            Move(0, 120f * -1 / GameRenderer.Frame, 0);
+            Move(0, 120f * -GameRenderer.deltaTime, 0);
 
             if (renderer.SpriteObj != sprRun)
             {
@@ -145,7 +141,7 @@ public class Xia extends GameObject {
         {
             isRunning = true;
             faceDir = 2;
-            Move(120f * 1 / GameRenderer.Frame, 0, 90f);
+            Move(120f * GameRenderer.deltaTime, 0, 90f);
 
             if (renderer.SpriteObj != sprRun)
             {
@@ -157,7 +153,7 @@ public class Xia extends GameObject {
         {
             isRunning = true;
             faceDir = -2;
-            Move(120f * -1 / GameRenderer.Frame, 0, -90);
+            Move(120f * -GameRenderer.deltaTime, 0, -90);
 
             if (renderer.SpriteObj != sprRun)
             {

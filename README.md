@@ -1,32 +1,127 @@
-## Getting Started
+# BrokenWonderEngine (BWE)
 
-Welcome to the VS Code Java world. Here is a guideline to help you get started to write Java code in Visual Studio Code.
+一个用 Java + JOGL 写的轻量 2D 游戏引擎，采用**能力组件（Ability）**架构：
+游戏对象（`GameObject`）是一组能力的容器，行为通过组合 `TransformAbility`、
+`Renderer2DAbility`、`BoxColliderAbility`、`CameraAbility` 等能力获得。
 
-## Folder Structure
+物理基于 [JBox2D](https://github.com/jbox2d/jbox2d)，渲染基于 JOGL 2.1（OpenGL 2.1 固定管线），
+UI 是 JSON 驱动的屏幕空间组件系统（支持 F5 热重载与补间动画）。
 
-The workspace contains two folders by default, where:
+## 目录结构
 
-- `src`: the folder to maintain sources
-- `lib`: the folder to maintain dependencies
+```
+src/
+├── AbstractLayer/       窗口与启动（MainWindow、MapGen 关卡生成接口）
+├── Core/                核心循环（GameSekai 更新管线、GameRenderer 渲染、场景、碰撞、协程、Vector2）
+│   └── Physics/Collider/ JBox2D 封装（ColliderWorld、BoxCollider2D）
+├── Framework/           能力组件（GameObject、Transform/Renderer/Collider/Camera）
+│   └── MapData/         关卡 JSON 数据模型 + MapLoader
+├── TypeStructure/       数据类型（Sprite、SpriteAtlas、Tag）
+├── Tool/                工具（Log、KeyManager、ImgLoader、TextureCache、FileManager）
+├── UI/                  屏幕空间 UI（JSON 布局加载、按钮/标签/图片/补间）
+└── UserUsage/           使用示例（xia_demo 侠客 Demo、FightMengpo 孟婆 Demo）
+Data/                    关卡与 UI 布局 JSON
+Art/                     美术资源
+lib/                     依赖 jar（jogl、gluegen、jbox2d、gson）
+test/                    单元测试
+web/                     BWE Studio（Web 版 RPG 编辑器，源码在 web/src）
+```
 
-Meanwhile, the compiled output files will be generated in the `bin` folder by default.
+## 构建与运行
 
-> If you want to customize the folder structure, open `.vscode/settings.json` and update the related settings there.
+依赖：JDK 8+（JOGL 2.1 使用 `javax.media.opengl` 旧包名，不要升级 JOGL 主版本）。
 
-## Dependency Management
+VS Code 内 `Ctrl+Shift+B`（build），任务面板选择：
 
-The `JAVA PROJECTS` view allows you to manage your dependencies. More details can be found [here](https://github.com/microsoft/vscode-java-dependency#manage-dependencies).
+| 任务 | 说明 |
+|------|------|
+| `build` | 编译全部源码到 `bin/`（自动解压 native dll 到 `bin/natives`） |
+| `package` | 打包 `BrokenWonder.jar` |
+| `run` | 运行侠客 Demo（`UserUsage.xia_demo.gameWindow`） |
+| `test` | 编译并运行单元测试（`test/CollisionSystemTest`） |
 
-## UI System
+命令行等价操作：
 
-This project includes a complete UI system with the following components:
-- UIButton: Button component with hover and click effects
-- UIPanel: Container for grouping UI elements
-- UILabel: Text display component with alignment options
-- UIProgressBar: Progress bar with customizable colors
-- UIManager: Singleton manager for handling UI components and events
-- UIIntegration: Integration class connecting the UI system with the game engine
+```powershell
+javac -d bin -encoding utf-8 -cp "lib/*" (Get-ChildItem -Recurse -Path src -Filter *.java)
+java -cp "bin;lib/*" -Djava.library.path=lib UserUsage.xia_demo.gameWindow
+```
 
-To use the UI system, refer to the UIExamples.java and UIUsageGuide.java files in the src/UI directory.
+## 核心概念
 
-打包方法：CTRL+SHIFT+B后，按 Ctrl+Shift+P 打开命令面板，输入“Tasks: Run Task”，选择“package”任务即可打包。
+### 能力组件（Ability）
+
+```java
+GameObject go = new GameObject();          // 自动附带 TransformAbility
+Renderer2DAbility renderer = new Renderer2DAbility();
+renderer.SpriteObj = new Sprite(SpriteWrapMode.Clamp, "Art/角色", "待机", 66);
+go.AddAbility(renderer);                   // 统一入口：OnInit -> OnAdded -> 加入列表
+```
+
+`IAbility` 生命周期：`OnInit()` → `OnAdded(go)` → 每帧 `OnUpdate()` → 销毁时 `OnRemove()`。
+
+### 更新管线（固定步长）
+
+`GameSekai.Update()` 按**固定步长 1/60 秒**推进（真实时间累积 + accumulator），
+因此逻辑、物理、协程与帧率无关：掉帧时游戏不会变慢，高刷屏也不会变快。
+渲染侧的 UI 补间与精灵动画使用真实 `GameRenderer.deltaTime` 推进。
+
+每帧固定步长内的顺序：
+
+1. 逻辑更新（`GameObject.Update` → 各能力 `OnUpdate`，快照迭代，安全增删对象）
+2. Transform → JBox2D Body
+3. 物理步进（速度/位置迭代 8/3）
+4. Body → Transform（全部物体同步，离屏物体保持物理一致）
+5. 自定义碰撞检测（两两配对，快照迭代）
+6. 协程推进
+
+### 纹理缓存
+
+`Tool.TextureCache` 以资源路径为 key 缓存 GPU 纹理并带引用计数：
+同一张图片整个引擎只上传一次显存；`GameRenderer.RecycleTex / DeleteTexture`
+释放时引用计数减一，归零才真正删除。多帧命名约定：`头名称1.png ... 头名称N.png`，
+`textures[frame-1]` 即第 frame 帧。
+
+### UI 系统
+
+- `UIManager.loadLayoutFromJson("Data/ui_layout.json")` 加载 JSON 布局（panel/label/button/image）
+- F5 热重载：改 JSON 后按 F5 即时生效
+- `UITweens.moveTo(...)` 做补间动画
+- 分辨率自适应：用 `UIManager.getViewportWidth/Height()` 获取当前视口
+
+## 关卡数据
+
+`Data/level_01.json` 格式（`Framework.MapData.MapData`）：
+
+```json
+{
+  "width": 20, "height": 15, "cellSize": 40,
+  "objects": [
+    { "type": "player", "x": 50, "y": 100, "rotation": 0, "scaleX": 1, "scaleY": 1, "z": 0 }
+  ]
+}
+```
+
+对象类型通过 `SceneObjReg.register(type, factory)` 注册，`Map.build` 里按类型实例化。
+`Data/ui_layout.json` 与 `Data/DialogueData.json` 分别为 UI 布局与对话数据。
+
+### BWE Studio（Web 编辑器）
+
+```powershell
+npm install
+npm run dev        # 构建并在 http://localhost:5273 打开
+npm run typecheck
+npm run gen:examples
+```
+
+- 工程文件为 `.bwproj`，`Ctrl+S` 保存，浏览器本地也会自动保存
+- 内置示例：`文件 → 扫雷示例 / 换装示例`，对应 `web/examples/*.bwproj`
+- 扫雷的行数、列数、地雷数，以及换装每个部位的造型，都在「模块编辑器」（工具栏「模块」或 `M`）里调
+- 挂上 `game.minesweeper` / `game.dressup` 模块后，点「预览」可直接试玩
+
+## 已知边界
+
+- 渲染为 OpenGL 立即模式（`glBegin/glEnd`），同屏对象多时是性能瓶颈；后续可迁移到 VBO/图集批处理
+- 两套碰撞入口并存：JBox2D 接触（物理）+ `CollisionSystem` 配对（每帧触发，无 enter/stay/exit 语义）
+- 协程是回调式接口（`Coroutine.update()`），不是语言级 yield 协程
+- 全局状态较多（`GameSekai.GameObjects` 等 static 字段），单窗口 Demo 够用，多场景/多窗口需收敛为实例

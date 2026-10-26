@@ -10,22 +10,27 @@ import java.io.IOException;
 
 public class Scene {
     protected MapData data;
+
     public Scene(String path)
     {
+        // 构造时即加载关卡数据；genMap 只负责实例化对象
+        try {
+            data = MapLoader.loadFromJsonFile(path);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
         MainWindow.scene = () -> {
-            try {
-                data = MapLoader.loadFromJsonFile(path);
-                build(GameRenderer.sekai, data);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+            build(GameRenderer.sekai, data);
         };
     }
 
     public void build(GameSekai scene, MapData data)
     {
+        if (data == null || data.objects == null) {
+            return;
+        }
         for (MapObjectData obj : data.objects) {
             SceneObjReg.createObject(obj.type, scene, obj);
-        }   
+        }
     }
 }

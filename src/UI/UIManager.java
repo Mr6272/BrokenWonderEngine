@@ -174,7 +174,7 @@ public class UIManager {
     }
 
     public void update() {
-        float dt = 1f / GameRenderer.Frame;
+        float dt = GameRenderer.deltaTime;
         UITweenManager.get().update(dt);
         hotReloadIfNeeded();
         if (roots.isEmpty()) {

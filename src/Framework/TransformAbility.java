@@ -3,8 +3,8 @@ package Framework;
 import Core.Vector2;
 
 /*
-* 这个方法必须存在于GO上，并且被渲染器识别与调用
-* 必须是-1
+* 变换组件：位置/旋转/缩放。
+* 每个 GameObject 构造时自动附带一个，通常位于能力列表第 0 位。
 * */
 public class TransformAbility implements IAbility {
     public Vector2 position = new Vector2(0,0);
@@ -15,16 +15,6 @@ public class TransformAbility implements IAbility {
     public TransformAbility()
     {
         position = new Vector2(0, 0);
-    }
-
-    @Override
-    public void SetIndex(int index) {
-        //transform组件永远为-1
-    }
-
-    @Override
-    public int GetIndex() {
-        return -1;
     }
 
     @Override

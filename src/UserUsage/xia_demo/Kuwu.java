@@ -26,9 +26,8 @@ public class Kuwu extends GameObject {
         sprRun = new Sprite(SpriteWrapMode.Clamp, "Art/Weapon", "苦无");
         renderer.Frame = 60;
         renderer.SpriteObj = sprRun;
-        renderer.OnAdded(this);
         renderer.order = 0f;
-        super.Abilitys.add(renderer);
+        AddAbility(renderer);
         transform = ((TransformAbility)Abilitys.get(0));
 
         if (Dir == 2)
@@ -51,8 +50,7 @@ public class Kuwu extends GameObject {
         BoxColliderAbility BCA = new BoxColliderAbility();
         BCA.halfWidth = 20f / 4;
         BCA.halfHeight = 20f / 4;
-        BCA.OnAdded( this);
-        super.Abilitys.add(BCA);
+        AddAbility(BCA);
     }
 
     @Override
@@ -79,19 +77,19 @@ public class Kuwu extends GameObject {
             return;
         if (Dir == 2)
         {
-            Move(300f * 1 / GameRenderer.Frame, 0, -90);
+            Move(300f * GameRenderer.deltaTime, 0, -90);
         }
         else if (Dir == -2)
         {
-            Move(300f * -1 / GameRenderer.Frame, 0, 90);
+            Move(300f * -GameRenderer.deltaTime, 0, 90);
         }
         else if (Dir == 1)
         {
-            Move(0, 300f * 1 / GameRenderer.Frame, 0);
+            Move(0, 300f * GameRenderer.deltaTime, 0);
         }
         else if (Dir == -1)
         {
-            Move(0, 300f * -1 / GameRenderer.Frame, -180);
+            Move(0, 300f * -GameRenderer.deltaTime, -180);
         }
     }
 

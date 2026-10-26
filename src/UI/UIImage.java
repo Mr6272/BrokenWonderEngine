@@ -140,7 +140,7 @@ public class UIImage extends UIElement {
             gl.glColor4f(1f, 1f, 1f, 1f);
             drawQuad(gl, 0f, 0f, 1f, 1f);
         } else if (sprite != null && sprite.SpType == SpriteType.Multiple) {
-            int idx = Math.min(Math.max(currentFrame, 1), sprite.textures.length - 1);
+            int idx = Math.min(Math.max(currentFrame - 1, 0), sprite.textures.length - 1); // 帧 1..N -> 下标 0..N-1
             gl.glBindTexture(GL2.GL_TEXTURE_2D, sprite.textures[idx]);
             gl.glColor4f(1f, 1f, 1f, 1f);
             drawQuad(gl, 0f, 0f, 1f, 1f);
@@ -208,7 +208,7 @@ public class UIImage extends UIElement {
         }
         if (sprite.SpType == SpriteType.Multiple && sprite.textures != null && sprite.textures.length > 1) {
             currentFrame++;
-            if (currentFrame >= sprite.textures.length) {
+            if (currentFrame > sprite.textures.length) {
                 currentFrame = 1;
             }
         } else if (sprite.SpType == SpriteType.Atlas && sprite.Atlas != null) {

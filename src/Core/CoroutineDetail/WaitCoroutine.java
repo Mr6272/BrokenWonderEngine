@@ -28,7 +28,7 @@ public class WaitCoroutine implements Coroutine {
         if (onUpdate != null) {
             onUpdate.run();
         }
-        remaining -= 1 / GameRenderer.Frame;
+        remaining -= GameRenderer.deltaTime; // 真实时间（固定步长内为 1/60）
         if (remaining <= 0f) {
             if (onDone != null) {
                 onDone.run();

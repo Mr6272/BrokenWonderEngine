@@ -1,6 +1,7 @@
 package Core;
 
 import Framework.GameObject;
+import Tool.TextureCache;
 import UI.UIManager;
 import AbstractLayer.MainWindow;
 
@@ -12,17 +13,24 @@ import javax.media.opengl.GLEventListener;
 public class GameRenderer implements GLEventListener {
     private static GL2 glu;
     public static GameSekai sekai;
+    /** FPSAnimator 目标帧率 */
     public static float Frame = 60;
-    private float DeltaTimer;
+    /** 上一帧真实耗时（秒），供逻辑 / UI / 协程 / 动画使用；已钳制防止卡顿后跳变 */
+    public static float deltaTime = 1f / 60f;
+    /** 世界视图尺寸（reshape 中按窗口计算），相机偏移与可见性剔除与 glOrtho 保持一致 */
+    public static float viewWorldW = 480f;
+    public static float viewWorldH = 270f;
     public static GameObject Camera;
-    
+
+    private long lastFrameNanos = System.nanoTime();
+
     public GameRenderer()
     {
         sekai = new GameSekai();
     }
+
     @Override
     public void init(GLAutoDrawable glAutoDrawable) {
-        //TODO 列表正序循环的时候，删除列表内元素会报严重BUG，尽可能倒序。
         final GL2 gl = glAutoDrawable.getGL().getGL2();
         gl.glShadeModel(GL2.GL_SMOOTH);
         // 设置背景颜色为深灰色（降低亮度，避免灰蒙蒙的效果）
@@ -38,6 +46,12 @@ public class GameRenderer implements GLEventListener {
 
     @Override
     public void display(GLAutoDrawable glAutoDrawable) {
+        // 测量真实帧耗时，钳制到 [0.0001, 0.1] 秒，防止卡顿/恢复瞬间逻辑跳变
+        long now = System.nanoTime();
+        float rawDt = (now - lastFrameNanos) / 1_000_000_000f;
+        lastFrameNanos = now;
+        deltaTime = Math.max(0.0001f, Math.min(rawDt, 0.1f));
+
         GL2 gl = glAutoDrawable.getGL().getGL2();
         glu = gl;
         UIManager uiManager = UIManager.getInstance();
@@ -52,7 +66,8 @@ public class GameRenderer implements GLEventListener {
         gl.glMatrixMode(GL2.GL_MODELVIEW);
         gl.glLoadIdentity();
         if (Camera != null)
-            gl.glTranslatef(-Camera.transform.position.x + 234f, -Camera.transform.position.y + 140f, -5f);
+            gl.glTranslatef(-Camera.transform.position.x + viewWorldW * 0.5f,
+                    -Camera.transform.position.y + viewWorldH * 0.5f, -5f);
 
         if(!GameSekai.GameObjects.isEmpty()){
             sekai.Update();
@@ -75,17 +90,28 @@ public class GameRenderer implements GLEventListener {
         gl.glOrtho(0, width * 0.3f, 0, height * 0.3f, -100.0, 100.0);
         gl.glMatrixMode(GL2.GL_MODELVIEW);
         gl.glLoadIdentity();
+        viewWorldW = width * 0.3f;
+        viewWorldH = height * 0.3f;
     }
 
-    // 释放（显存）
+    /** 释放一张纹理（引用计数归零才真正删除显存）。 */
+    public static void DeleteTexture(int tex) {
+        TextureCache.release(glu, tex);
+    }
+
+    // 释放（显存）并移除对象
     public static void RecycleTex(int[] tex, GameObject gameObject) {
-        glu.glDeleteTextures(1, tex, 0);
+        if (tex != null) {
+            for (int t : tex) {
+                TextureCache.release(glu, t);
+            }
+        }
         GameSekai.GameObjects.remove(gameObject);
     }
 
-    // 释放（显存）
+    // 释放（显存）并移除对象
     public static void RecycleTex(int tex, GameObject gameObject) {
-        glu.glDeleteTextures(1, new int[] {tex}, 0);
+        TextureCache.release(glu, tex);
         GameSekai.GameObjects.remove(gameObject);
         gameObject.isEnabled = false;
     }
@@ -101,10 +127,11 @@ public class GameRenderer implements GLEventListener {
         float bottom = obj.transform.position.y - halfH;
         float top    = obj.transform.position.y + halfH;
 
-        float camLeft   = Camera.transform.position.x - 700 * 0.5f;
-        float camRight  = Camera.transform.position.x + 700 * 0.5f;
-        float camBottom = Camera.transform.position.y - 400 * 0.5f;
-        float camTop    = Camera.transform.position.y + 400 * 0.5f;
+        // 剔除视锥与 glOrtho 保持一致
+        float camLeft   = Camera.transform.position.x - viewWorldW * 0.5f;
+        float camRight  = Camera.transform.position.x + viewWorldW * 0.5f;
+        float camBottom = Camera.transform.position.y - viewWorldH * 0.5f;
+        float camTop    = Camera.transform.position.y + viewWorldH * 0.5f;
 
         // 轴对齐 AABB 相交判断
         return !(right  < camLeft  ||

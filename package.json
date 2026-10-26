@@ -1,0 +1,19 @@
+{
+  "name": "bwe-studio",
+  "version": "0.2.0",
+  "private": true,
+  "description": "BWE Studio —— 完全俯视角 RPG 可视化编辑器（Web 版）",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild web/src/main.ts --bundle --outfile=web/dist/studio.js --format=esm --log-level=warning",
+    "watch": "esbuild web/src/main.ts --bundle --outfile=web/dist/studio.js --format=esm --watch --log-level=warning",
+    "serve": "node web/tools/serve.mjs 5273",
+    "dev": "npm run build && npm run serve",
+    "gen:examples": "node web/tools/gen-examples.ts",
+    "typecheck": "tsc --noEmit -p web/tsconfig.json"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -11,5 +11,14 @@
         "d:\\githubdesktop\\BrokenWonderEngine\\lib\\jbox2d-library-2.1.2.jar",
         "d:\\githubdesktop\\BrokenWonderEngine\\lib\\jogl-all-2.1.2.jar"
     ],
-    "java.format.settings.url": ".vscode/java-formatter.xml"
+    "java.format.settings.url": ".vscode/java-formatter.xml",
+    // 引擎目标运行环境是 JDK 8（jdk1.8.0_211），让 VS Code 的增量编译也产出 v52 字节码，
+    // 避免扩展用新 JDK 编译出高版本 class 导致运行时 UnsupportedClassVersionError
+    "java.configuration.runtimes": [
+        {
+            "name": "JavaSE-1.8",
+            "path": "C:\\Program Files\\Java\\jdk1.8.0_211",
+            "default": true
+        }
+    ]
 }

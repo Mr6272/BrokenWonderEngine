@@ -23,3 +23,8 @@ hs_err_pid*
 replay_pid*
 
 .fake
+
+# 编译产物
+bin/
+web/dist/
+node_modules/

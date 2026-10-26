@@ -25,17 +25,15 @@ public class SunAttack extends GameObject {
         sprRun = new Sprite(SpriteWrapMode.Clamp, "Art/日冕", "日冕", 61);
         renderer.Frame = 60;
         renderer.SpriteObj = sprRun;
-        renderer.OnAdded(this);
         renderer.order = 0.5f;
-        super.Abilitys.add(renderer);
+        AddAbility(renderer);
         transform = ((TransformAbility) Abilitys.get(0));
         transform.scale = new Vector2(100f, 100f);
         BoxColliderAbility BCA = new BoxColliderAbility();
         BCA.halfWidth = 100f / 4;
         BCA.halfHeight = 100f / 4;
         BCA.isTrigger = true;
-        BCA.OnAdded(this);
-        super.Abilitys.add(BCA);
+        AddAbility(BCA);
 
         if (Dir == 2) {
             transform.position = new Vector2(Owner.transform.position.x + 35, Owner.transform.position.y);
@@ -70,7 +68,7 @@ public class SunAttack extends GameObject {
         if (!isEnabled) {
             return;
         }
-        timer += 1f / 60f;
+        timer += GameRenderer.deltaTime; // 秒
         if (timer >= 1.8f) {
             Owner.Sun = null;
             for (int i = 0; i < Abilitys.size(); i++) {

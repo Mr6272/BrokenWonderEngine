@@ -2,29 +2,16 @@ package Framework;
 
 import Core.GameRenderer;
 
-import javax.media.opengl.GL2;
-import javax.media.opengl.GLAutoDrawable;
-
 public class CameraAbility implements IAbility {
     public GameObject gameObject;
     public TransformAbility transform;
     public boolean Enable = true;
-    public int index;
     public TransformAbility playerTransform;
     public boolean isFollowPlayer = false;
 
     public CameraAbility(TransformAbility player)
     {
         playerTransform = player;
-    }
-    @Override
-    public void SetIndex(int index) {
-        this.index = index;
-    }
-
-    @Override
-    public int GetIndex() {
-        return index;
     }
 
     @Override

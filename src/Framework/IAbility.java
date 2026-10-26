@@ -12,8 +12,6 @@ package Framework;
 *
 * */
 public interface IAbility {
-    public void SetIndex(int index);
-    public int GetIndex();
     public void OnAdded(GameObject gameObject);
     public void OnInit();
     public void SetEnable(boolean value);

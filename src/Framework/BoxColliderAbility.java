@@ -24,21 +24,10 @@ public class BoxColliderAbility implements IAbility, ICollider {
     public float density = 1.0f;
     public boolean isTrigger = false;
 
-    // 关联�?jbox2d 封装
+    // 关联 jbox2d 封装
     public BoxCollider2D collider2D = new BoxCollider2D();
 
-    private int abilityIndex = 0;
     private boolean isActive = true;
-
-    @Override
-    public void SetIndex(int index) {
-        abilityIndex = index;
-    }
-
-    @Override
-    public int GetIndex() {
-        return abilityIndex;
-    }
 
     @Override
     public void OnAdded(GameObject go) {
@@ -52,7 +41,7 @@ public class BoxColliderAbility implements IAbility, ICollider {
         }
 
         if (transform == null) {
-            System.err.println("BoxColliderAbility: 找不�?TransformAbility");
+            System.err.println("BoxColliderAbility: 找不到 TransformAbility");
             return;
         }
 
@@ -70,7 +59,7 @@ public class BoxColliderAbility implements IAbility, ICollider {
                 this
         );
 
-        // 注册到自己的碰撞系统（如果你还需要自己的 CollisionSystem�?
+        // 注册到自己的碰撞系统
         CollisionSystem.get().register(this);
         if (collider2D.body != null) {
             collider2D.body.setActive(true);
@@ -90,7 +79,7 @@ public class BoxColliderAbility implements IAbility, ICollider {
         return isActive;
     }
 
-    // �?逻辑阶段：Transform -> Body
+    // 逻辑阶段：Transform -> Body
     public void syncTransformToBody() {
         if (collider2D.body == null || transform == null) return;
 
@@ -126,7 +115,6 @@ public class BoxColliderAbility implements IAbility, ICollider {
         }
     }
 
-
     @Override
     public boolean overlaps(ICollider other) {
         if (!(other instanceof BoxColliderAbility)) return false;
@@ -156,5 +144,3 @@ public class BoxColliderAbility implements IAbility, ICollider {
         }
     }
 }
-
-

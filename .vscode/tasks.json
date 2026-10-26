@@ -28,7 +28,7 @@
             "command": "powershell",
             "args": [
                 "-Command",
-                "javac -d bin -encoding utf-8 -cp \"lib/*\" (Get-ChildItem -Recurse -Path src -Filter *.java | Select-Object -ExpandProperty FullName)"
+                "if(!(Test-Path -Path bin)){New-Item -ItemType Directory -Force -Path bin | Out-Null}; javac --release 8 -d bin -encoding utf-8 -cp \"lib/*\" (Get-ChildItem -Recurse -Path src -Filter *.java | Select-Object -ExpandProperty FullName)"
             ],
             "group": {
                 "kind": "build",
@@ -40,6 +40,20 @@
             "problemMatcher": [
                 "$javac"
             ]
+        },
+        {
+            "label": "test",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "javac --release 8 -d bin -encoding utf-8 -cp \"bin;lib/*\" test/CollisionSystemTest.java; java -cp \"bin;lib/*\" CollisionSystemTest"
+            ],
+            "dependsOn": [
+                "build"
+            ],
+            "group": "test",
+            "problemMatcher": []
         },
         {
             "label": "package",

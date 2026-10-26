@@ -59,6 +59,21 @@ public class Vector2 {
         y /= mag;
     }
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Vector2)) return false;
+        Vector2 v = (Vector2) o;
+        return Float.compare(v.x, x) == 0 && Float.compare(v.y, y) == 0;
+    }
+
+    @Override
+    public int hashCode() {
+        int result = Float.floatToIntBits(x);
+        result = 31 * result + Float.floatToIntBits(y);
+        return result;
+    }
+
     public String ToString()
     {
         return "Vector2(" + x + ", " + y + ")";

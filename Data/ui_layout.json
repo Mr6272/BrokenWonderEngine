@@ -23,7 +23,7 @@
               "type": "text",
               "name": "tip_text",
               "position": { "x": 100, "y": 150 },
-              "text": "Multi-line Text\\n支持换行与自动换行，默认左对齐。Multi-line Text支持换行与自动换行，默认左对齐。Multi-line Text支持换行与自动换行，默认左对齐。 Text支持换行与自动换行，默认左对齐。Text支持换行与自动换行，默认左对齐。",
+              "text": "Multi-line Text\\提示：支持换行与自动换行，默认左对齐。Multi-line Text支持换行与自动换行，默认左对齐。Multi-line Text支持换行与自动换行，默认左对齐。 Text支持换行与自动换行，默认左对齐。Text支持换行与自动换行，默认左对齐。",
               "color": "#fff",
               "maxWidth": 600,
               "lineSpacing": 15,

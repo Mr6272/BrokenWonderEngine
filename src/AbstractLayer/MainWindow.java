@@ -50,6 +50,10 @@ public class MainWindow extends JFrame
         glcanvas.addMouseListener(UIMouse.get());
         glcanvas.addMouseMotionListener(UIMouse.get());
         glcanvas.addMouseWheelListener(UIMouse.get());
+        // 关键：FPSAnimator 驱动渲染时禁用 AWT 自动重绘，
+        // 否则 GLCanvas.paint 与 FPSAnimator 会双线程并发调用 display()，
+        // 造成 GameObjects/Abilitys 在迭代中被并发修改（ConcurrentModificationException）
+        glcanvas.setIgnoreRepaint(true);
         
         JFrame frame = new JFrame("BWE");
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);

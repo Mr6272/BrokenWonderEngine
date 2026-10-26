@@ -33,16 +33,14 @@ public class Xia2 extends GameObject {
         renderer.Frame = 60;
         renderer.order = -0.5f;
         renderer.SpriteObj = sprIdle;
-        renderer.OnAdded(this);
-        super.Abilitys.add(renderer);
+        AddAbility(renderer);
         transform = ((TransformAbility)Abilitys.get(0));
         transform.position = new Vector2(50, 100);
         transform.scale = new Vector2(40f, 40f);
         BoxColliderAbility BCA = new BoxColliderAbility();
         BCA.halfHeight = 40f / 4;
         BCA.halfWidth = 40f / 4;
-        super.Abilitys.add(BCA);
-        BCA.OnAdded( this);
+        AddAbility(BCA);
         boxCollider = BCA;
     }
 
@@ -51,10 +49,10 @@ public class Xia2 extends GameObject {
         super.Update();
         if (isThrowing)
         {
-            ThrowTimer += 1f;
-            if (ThrowTimer >= 45)
+            ThrowTimer += GameRenderer.deltaTime; // 秒
+            if (ThrowTimer >= 45f / 60f) // 原 45 帧 @60fps = 0.75s
                 kuwu.isEnabled = true;
-            if (ThrowTimer >= 132)
+            if (ThrowTimer >= 132f / 60f) // 原 132 帧 @60fps = 2.2s
             {
                 GameRenderer.RecycleTex(kuwu.renderer.SpriteObj.texture, kuwu);
                 kuwu = null;
@@ -78,7 +76,7 @@ public class Xia2 extends GameObject {
         else if (MainWindow.keyManager.isKeyHeld(KeyEvent.VK_W))
         {
             faceDir = 1;
-            Move(0, 120f * 1 / GameRenderer.Frame, 180);
+            Move(0, 120f * GameRenderer.deltaTime, 180);
 //            transform.position.y += 60f * 1 / GameRenderer.Frame;
 //            transform.rotation = 180f;
 
@@ -91,7 +89,7 @@ public class Xia2 extends GameObject {
         else if (MainWindow.keyManager.isKeyHeld(KeyEvent.VK_S))
         {
             faceDir = -1;
-            Move(0, 120f * -1 / GameRenderer.Frame, 0);
+            Move(0, 120f * -GameRenderer.deltaTime, 0);
 
             if (renderer.SpriteObj.Atlas != sprRun.Atlas)
             {
@@ -102,7 +100,7 @@ public class Xia2 extends GameObject {
         else if (MainWindow.keyManager.isKeyHeld(KeyEvent.VK_D))
         {
             faceDir = 2;
-            Move(120f * 1 / GameRenderer.Frame, 0, 90f);
+            Move(120f * GameRenderer.deltaTime, 0, 90f);
 
             if (renderer.SpriteObj.Atlas != sprRun.Atlas)
             {
@@ -113,7 +111,7 @@ public class Xia2 extends GameObject {
         else if (MainWindow.keyManager.isKeyHeld(KeyEvent.VK_A))
         {
             faceDir = -2;
-            Move(120f * -1 / GameRenderer.Frame, 0, -90);
+            Move(120f * -GameRenderer.deltaTime, 0, -90);
 
             if (renderer.SpriteObj.Atlas != sprRun.Atlas)
             {

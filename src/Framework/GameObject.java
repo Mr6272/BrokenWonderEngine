@@ -24,9 +24,9 @@ public class GameObject {
         TransformAbility tr = new TransformAbility();
         tr.OnInit();
         tr.OnAdded(this);
-        Abilitys.add(tr);transform = tr;
-        GameSekai.GameObjects.add(this);
+        Abilitys.add(tr);
         transform = tr;
+        GameSekai.GameObjects.add(this);
     }
 
     public void Update()
@@ -43,7 +43,8 @@ public class GameObject {
     {
         if (!isEnabled)
             return;
-        for (int i = Abilitys.size() - 1; i > 0; i--)
+        // 遍历全部能力，按类型判断是否渲染（修复：旧实现硬编码跳过索引 0）
+        for (int i = Abilitys.size() - 1; i >= 0; i--)
         {
             IAbility tg = Abilitys.get(i);
             if (tg instanceof IRenderer)

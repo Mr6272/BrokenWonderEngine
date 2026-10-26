@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BWE Studio — 俯视角 RPG 编辑器</title>
+  <link rel="stylesheet" href="styles/app.css">
+</head>
+
+<body>
+  <!-- 整个编辑器由 app/Editor.ts 挂载到这个根节点上；
+       首页只保留最少的静态骨架，避免 JS 出错时页面完全空白 -->
+  <div id="root" class="app-root">
+    <div class="boot-screen">
+      <div class="boot-logo">BWE</div>
+      <div class="boot-title">BWE Studio</div>
+      <div class="boot-sub">正在加载编辑器…</div>
+      <div class="boot-bar"><i></i></div>
+      <noscript>
+        <p class="boot-error">这个编辑器需要启用 JavaScript 才能运行。</p>
+      </noscript>
+    </div>
+  </div>
+  <script type="module" src="dist/studio.js"></script>
+</body>
+
+</html>
