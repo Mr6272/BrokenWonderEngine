@@ -7,7 +7,7 @@
   "gridH": 15,
   "scenes": [
     {
-      "id": "ab2fb64b-6795-4c56-8e68-fa90b49d48d1",
+      "id": "7682e9ca-4a54-40b1-a83e-de777381dbe2",
       "name": "试衣间",
       "originX": 0,
       "originY": 0,
@@ -15,21 +15,21 @@
       "heightTiles": 15,
       "layers": [
         {
-          "id": "4e632d91-c9f1-4f9c-a10f-de9980165e8e",
+          "id": "6ac21126-1ad1-4a91-bb2f-2e5fba69773a",
           "name": "地形",
           "visible": true,
           "locked": false,
           "order": 0
         },
         {
-          "id": "b021f9fa-3271-409d-a841-d75b15fa6688",
+          "id": "26b8aeaf-afef-4ce1-afc1-1c2d431a7f6f",
           "name": "物件",
           "visible": true,
           "locked": false,
           "order": 0
         },
         {
-          "id": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "id": "d6d9e807-6229-4367-964c-4a17ff051bbe",
           "name": "角色",
           "visible": true,
           "locked": false,
@@ -38,7 +38,7 @@
       ],
       "objects": [
         {
-          "id": "eb62e05d-773e-4424-900d-3a45d7b65f1a",
+          "id": "cc19dde3-23eb-4c41-a955-da673d775439",
           "name": "换装背景",
           "kind": "PROP",
           "x": 320,
@@ -49,10 +49,10 @@
           "scaleY": 1,
           "halfW": 320,
           "halfH": 240,
-          "layerId": "4e632d91-c9f1-4f9c-a10f-de9980165e8e",
+          "layerId": "6ac21126-1ad1-4a91-bb2f-2e5fba69773a",
           "visible": true,
           "locked": true,
-          "assetId": "cba76940-d222-44dc-abb1-ed1baf5863df",
+          "assetId": "f92d5612-3b56-4c63-83f8-2a2fad36998b",
           "animMode": "默认",
           "animFps": 8,
           "modules": [],
@@ -63,7 +63,7 @@
           "parentId": null
         },
         {
-          "id": "e353d350-6ee2-4fca-a685-4f3831124e93",
+          "id": "18ba9a38-46c5-4b18-9e3f-a7ac14ee2541",
           "name": "身体",
           "kind": "ACTOR",
           "x": 320,
@@ -74,10 +74,10 @@
           "scaleY": 1,
           "halfW": 60,
           "halfH": 110,
-          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "layerId": "d6d9e807-6229-4367-964c-4a17ff051bbe",
           "visible": true,
           "locked": false,
-          "assetId": "29c87f6e-c10c-420f-9317-61a1b80fc2cd",
+          "assetId": "8b6709c6-778a-479d-805b-d2136c62e940",
           "animMode": "默认",
           "animFps": 8,
           "modules": [
@@ -106,7 +106,7 @@
           "parentId": null
         },
         {
-          "id": "8ce16b2c-dadf-4934-810c-a2cda8b2b4bc",
+          "id": "784c1d9b-1a9e-4d7b-baf3-265fe72cce8e",
           "name": "下装",
           "kind": "ACTOR",
           "x": 320,
@@ -117,10 +117,10 @@
           "scaleY": 1,
           "halfW": 60,
           "halfH": 50,
-          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "layerId": "d6d9e807-6229-4367-964c-4a17ff051bbe",
           "visible": true,
           "locked": false,
-          "assetId": "97ae603a-c601-4daf-84e6-3cf871331787",
+          "assetId": "e7bb7185-7e40-47bc-b2e2-8f8537b48cf0",
           "animMode": "默认",
           "animFps": 8,
           "modules": [
@@ -149,7 +149,7 @@
           "parentId": null
         },
         {
-          "id": "1ff0bf42-6062-43d0-a51f-8c30eca4667e",
+          "id": "1ec55ac4-9892-42f8-bf65-7a70b2f4ec8d",
           "name": "上装",
           "kind": "ACTOR",
           "x": 320,
@@ -160,10 +160,10 @@
           "scaleY": 1,
           "halfW": 70,
           "halfH": 60,
-          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "layerId": "d6d9e807-6229-4367-964c-4a17ff051bbe",
           "visible": true,
           "locked": false,
-          "assetId": "3a05ef3f-5c69-4a40-b62a-24acece79252",
+          "assetId": "29d3a15f-cfe6-40a0-afa9-04e1a7f72167",
           "animMode": "默认",
           "animFps": 8,
           "modules": [
@@ -192,7 +192,7 @@
           "parentId": null
         },
         {
-          "id": "7f68d728-ffe6-4127-ba0a-17fc3dd74320",
+          "id": "bfffb7ae-218e-4f3a-9917-a53295f62ffb",
           "name": "鞋子",
           "kind": "ACTOR",
           "x": 320,
@@ -203,10 +203,10 @@
           "scaleY": 1,
           "halfW": 55,
           "halfH": 20,
-          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "layerId": "d6d9e807-6229-4367-964c-4a17ff051bbe",
           "visible": true,
           "locked": false,
-          "assetId": "5e15fc4e-b978-4654-9439-7db7f8c8b5ad",
+          "assetId": "e2a58427-c794-4ef7-9b39-b8d3bc430957",
           "animMode": "默认",
           "animFps": 8,
           "modules": [
@@ -235,7 +235,7 @@
           "parentId": null
         },
         {
-          "id": "da892746-64b7-450e-a15e-31c69f132b63",
+          "id": "6721653b-2b6c-4df6-867f-b181732a45cf",
           "name": "头发",
           "kind": "ACTOR",
           "x": 320,
@@ -246,10 +246,10 @@
           "scaleY": 1,
           "halfW": 70,
           "halfH": 60,
-          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "layerId": "d6d9e807-6229-4367-964c-4a17ff051bbe",
           "visible": true,
           "locked": false,
-          "assetId": "55a44e00-0553-4e3f-b40c-da54fcc617b1",
+          "assetId": "135c1939-483e-4b59-8f15-b0f9a4a5364f",
           "animMode": "默认",
           "animFps": 8,
           "modules": [
@@ -278,7 +278,7 @@
           "parentId": null
         },
         {
-          "id": "15011304-3771-4fe3-8e9a-fbf5caa27cc1",
+          "id": "27fad512-0f66-46d8-94c4-a69925deb2db",
           "name": "配饰",
           "kind": "ACTOR",
           "x": 320,
@@ -289,10 +289,10 @@
           "scaleY": 1,
           "halfW": 50,
           "halfH": 30,
-          "layerId": "9a5b6e0c-047a-41c9-8458-d8a21997916d",
+          "layerId": "d6d9e807-6229-4367-964c-4a17ff051bbe",
           "visible": true,
           "locked": false,
-          "assetId": "f668c8ba-b961-4019-b2e5-d633bb977cde",
+          "assetId": "047d6dbe-f496-404f-bac8-3827f86741e1",
           "animMode": "默认",
           "animFps": 8,
           "modules": [
@@ -321,7 +321,7 @@
           "parentId": null
         },
         {
-          "id": "ea468f7c-6bef-4e8a-92ae-21e8124cb203",
+          "id": "cd1db15b-54bc-40e7-9261-7bf87ceb5084",
           "name": "衣橱控制器",
           "kind": "PROP",
           "x": 560,
@@ -332,10 +332,10 @@
           "scaleY": 1,
           "halfW": 32,
           "halfH": 32,
-          "layerId": "b021f9fa-3271-409d-a841-d75b15fa6688",
+          "layerId": "26b8aeaf-afef-4ce1-afc1-1c2d431a7f6f",
           "visible": true,
           "locked": false,
-          "assetId": "612ae8d4-746c-4e17-b1aa-745822e6279e",
+          "assetId": "1ca1c88e-584f-4a9d-9857-bfe97bd63252",
           "animMode": "默认",
           "animFps": 8,
           "modules": [
@@ -370,7 +370,7 @@
   ],
   "assets": [
     {
-      "id": "cba76940-d222-44dc-abb1-ed1baf5863df",
+      "id": "f92d5612-3b56-4c63-83f8-2a2fad36998b",
       "name": "换装背景",
       "kind": "IMAGE",
       "src": "url",
@@ -383,7 +383,7 @@
       "frameDurations": []
     },
     {
-      "id": "29c87f6e-c10c-420f-9317-61a1b80fc2cd",
+      "id": "8b6709c6-778a-479d-805b-d2136c62e940",
       "name": "身体-基础",
       "kind": "IMAGE",
       "src": "url",
@@ -396,7 +396,7 @@
       "frameDurations": []
     },
     {
-      "id": "1290a5bb-ff1c-4832-a422-aaf3bb2b7bdc",
+      "id": "97d84187-a2e8-488a-825b-99f5d1e13a2d",
       "name": "身体-小麦",
       "kind": "IMAGE",
       "src": "url",
@@ -409,7 +409,7 @@
       "frameDurations": []
     },
     {
-      "id": "55a44e00-0553-4e3f-b40c-da54fcc617b1",
+      "id": "135c1939-483e-4b59-8f15-b0f9a4a5364f",
       "name": "发型-短发棕",
       "kind": "IMAGE",
       "src": "url",
@@ -422,7 +422,7 @@
       "frameDurations": []
     },
     {
-      "id": "80080b6f-fae9-4262-9dcd-50eab061b9c3",
+      "id": "f1f2e600-a985-4a23-918b-0c1c7ddc3c92",
       "name": "发型-长发明",
       "kind": "IMAGE",
       "src": "url",
@@ -435,7 +435,7 @@
       "frameDurations": []
     },
     {
-      "id": "96c20d5c-ec1f-48fc-b08f-39057ba802ab",
+      "id": "3787f7a7-333e-4c4e-a275-e182fb92c857",
       "name": "发型-马尾橙",
       "kind": "IMAGE",
       "src": "url",
@@ -448,7 +448,7 @@
       "frameDurations": []
     },
     {
-      "id": "3a05ef3f-5c69-4a40-b62a-24acece79252",
+      "id": "29d3a15f-cfe6-40a0-afa9-04e1a7f72167",
       "name": "上装-白衬衫",
       "kind": "IMAGE",
       "src": "url",
@@ -461,7 +461,7 @@
       "frameDurations": []
     },
     {
-      "id": "fe881836-6999-4903-8d26-494f5a14ede2",
+      "id": "eefdedc3-0e5a-4640-9414-e39b3ee8dc1f",
       "name": "上装-蓝裙",
       "kind": "IMAGE",
       "src": "url",
@@ -474,7 +474,7 @@
       "frameDurations": []
     },
     {
-      "id": "25abd18f-b357-49f0-868a-ee8aac9a5d0a",
+      "id": "9891fd3f-e3e8-4d36-abc9-c29832fc4bc1",
       "name": "上装-红外套",
       "kind": "IMAGE",
       "src": "url",
@@ -487,7 +487,7 @@
       "frameDurations": []
     },
     {
-      "id": "97ae603a-c601-4daf-84e6-3cf871331787",
+      "id": "e7bb7185-7e40-47bc-b2e2-8f8537b48cf0",
       "name": "下装-牛仔裤",
       "kind": "IMAGE",
       "src": "url",
@@ -500,7 +500,7 @@
       "frameDurations": []
     },
     {
-      "id": "9f1baf2f-45b3-4c1c-9d61-1b1757187f7a",
+      "id": "2293c93f-ac8c-4af5-833b-d36abe3b57d7",
       "name": "下装-粉短裙",
       "kind": "IMAGE",
       "src": "url",
@@ -513,7 +513,7 @@
       "frameDurations": []
     },
     {
-      "id": "ba325a1c-c267-4669-be56-3bda14a008ed",
+      "id": "d2471a21-25bf-4f1d-b805-45e769a8580c",
       "name": "下装-运动裤",
       "kind": "IMAGE",
       "src": "url",
@@ -526,7 +526,7 @@
       "frameDurations": []
     },
     {
-      "id": "5e15fc4e-b978-4654-9439-7db7f8c8b5ad",
+      "id": "e2a58427-c794-4ef7-9b39-b8d3bc430957",
       "name": "鞋子-运动鞋",
       "kind": "IMAGE",
       "src": "url",
@@ -539,7 +539,7 @@
       "frameDurations": []
     },
     {
-      "id": "a50d2d91-9fc1-44fa-a2f7-6dbd4ac27fc7",
+      "id": "82152026-e315-4bd3-9acf-d6d361aa374f",
       "name": "鞋子-皮鞋",
       "kind": "IMAGE",
       "src": "url",
@@ -552,7 +552,7 @@
       "frameDurations": []
     },
     {
-      "id": "4a8cc92e-450d-4d36-87e5-b7ab4aacb440",
+      "id": "86bcaebd-62b2-4ef9-8b39-68ad238ea0f1",
       "name": "鞋子-靴子",
       "kind": "IMAGE",
       "src": "url",
@@ -565,7 +565,7 @@
       "frameDurations": []
     },
     {
-      "id": "f668c8ba-b961-4019-b2e5-d633bb977cde",
+      "id": "047d6dbe-f496-404f-bac8-3827f86741e1",
       "name": "配饰-无",
       "kind": "IMAGE",
       "src": "url",
@@ -578,7 +578,7 @@
       "frameDurations": []
     },
     {
-      "id": "6460d816-50e2-4833-be65-6d8407ffe8fa",
+      "id": "c3fecc88-a625-4b02-b574-7707293e8727",
       "name": "配饰-蝴蝶结",
       "kind": "IMAGE",
       "src": "url",
@@ -591,7 +591,7 @@
       "frameDurations": []
     },
     {
-      "id": "4aa1ffc1-cdf8-4f8c-905b-c4532f207772",
+      "id": "b9733be0-a3b7-44c9-852a-f22b2307f46c",
       "name": "配饰-猫耳",
       "kind": "IMAGE",
       "src": "url",
@@ -604,7 +604,7 @@
       "frameDurations": []
     },
     {
-      "id": "612ae8d4-746c-4e17-b1aa-745822e6279e",
+      "id": "1ca1c88e-584f-4a9d-9857-bfe97bd63252",
       "name": "衣橱图标",
       "kind": "IMAGE",
       "src": "url",

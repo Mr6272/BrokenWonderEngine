@@ -423,6 +423,9 @@ bwe.target.inFront(e, range) // 角色面前 1 格/range 像素内的格子或�
    在脚本里用 `if (!G.hook) { G.hook = bwe.ai.onAlert(...) }` 只注册一次。
 5. **引擎不给材质/火焰上色**：想让玩家「看见」草地/油/水/火，要么把地形画进底图素材，要么脚本里每帧用 `bwe.draw.rect` 叠一层
    （`bwe.field.burning()` 返回燃烧格，直接按格子画即可）。
+6. **状态对象要把字段列全**：脚本里的 `var S = { hp: 100 }` 之后又写 `S.level = 1`，编辑器的类型检查会报
+   「Property 'level' does not exist」。JS 运行时不在乎，但面板会一片红。习惯：初始化时把可能用到的字段都写上
+   （`S = { hp: 100, level: 1, xp: 0, menu: "" }`），临时字段也给个 `0`/`""`/`[]` 占位。
 
 ## 7. Phase 划分
 

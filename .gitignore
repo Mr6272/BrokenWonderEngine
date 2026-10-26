@@ -28,3 +28,6 @@ replay_pid*
 bin/
 web/dist/
 node_modules/
+
+# 打包/试跑的中间产物（含「VS Code 打开脚本」的镜像文件 web/.build/scripts/）
+web/.build/

@@ -15,7 +15,7 @@
 
 import { el, input, button, segmented } from "../core/dom.ts";
 import { I } from "../ui/icons.ts";
-import { ok } from "../ui/toast.ts";
+import { ok, warn } from "../ui/toast.ts";
 import { store } from "../core/store.ts";
 import {
   defaultScriptFile,
@@ -25,6 +25,76 @@ import {
   type ScriptLang
 } from "../core/model.ts";
 import { API_DOCS, apiDocsByGroup, searchApiDocs, type ApiDoc } from "../data/apiDocs.ts";
+
+// ============================================================================
+// 「用 VS Code 打开」：脚本存在 .bwproj 里，服务端把它镜像成真实文件再拉起编辑器
+// ============================================================================
+
+interface MirrorInfo {
+  file: string;
+  mtimeMs: number;
+  content?: string;
+}
+
+/** 每个脚本最近一次的镜像信息，用来判断「VS Code 里改过没有」。 */
+const mirrorInfo = new Map<string, MirrorInfo>();
+let mirrorPoll: number | null = null;
+
+function stopMirrorPoll(): void {
+  if (mirrorPoll !== null) {
+    window.clearInterval(mirrorPoll);
+    mirrorPoll = null;
+  }
+}
+
+function projectScope(): string {
+  return store.project?.name ?? "";
+}
+
+async function postOpenInVscode(name: string, source: string, lang: ScriptLang, line = 1): Promise<void> {
+  let payload: { ok?: boolean; file?: string; error?: string; hint?: string };
+  try {
+    const resp = await fetch("/api/open-in-vscode", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, source, lang, line, project: projectScope() })
+    });
+    payload = (await resp.json()) as typeof payload;
+  } catch {
+    warn("需要本地服务：先运行 npm run serve，再点「VS Code 打开」");
+    return;
+  }
+  if (payload.ok && payload.file) {
+    ok(`已用 VS Code 打开：${payload.file.split(/[\\/]/).slice(-2).join("/")}`);
+    // 记录基线 mtime（这次是脚本写进文件的时刻），之后 mtime 变了就说明 VS Code 里改过
+    const mirror = await fetchMirror(name, lang);
+    if (mirror) mirrorInfo.set(`${lang}:${name}`, mirror);
+    return;
+  }
+  if (payload.file && payload.error) {
+    // 找不到 code 命令：文件已经写好了，给出可执行的下一步，而不是只说失败
+    warn(`${payload.error}`);
+    return;
+  }
+  warn(payload.error || "打开 VS Code 失败");
+}
+
+async function fetchMirror(name: string, lang: ScriptLang): Promise<MirrorInfo | null> {
+  try {
+    const resp = await fetch(
+      `/api/script-file?name=${encodeURIComponent(name)}&lang=${lang}` +
+        `&project=${encodeURIComponent(projectScope())}`,
+      { cache: "no-store" }
+    );
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { file?: string; mtimeMs?: number; content?: string };
+    if (!data.file || typeof data.mtimeMs !== "number") return null;
+    return { file: data.file, mtimeMs: data.mtimeMs, content: data.content };
+  } catch {
+    return null;
+  }
+}
+
 
 interface YarnNode {
   title: string;
@@ -68,6 +138,8 @@ let apiOpen = true;
 
 export function renderScriptPanel(host: HTMLElement): void {
   host.replaceChildren();
+  // 每次重渲染都重建 VS Code 轮询，避免旧面板的 interval 越积越多
+  stopMirrorPoll();
   const wrap = el("div", { class: "col" });
   wrap.style.padding = "10px";
 
@@ -182,17 +254,93 @@ export function renderScriptPanel(host: HTMLElement): void {
     return;
   }
 
-  if (currentLang === "js") renderJsEditor(wrap, script);
-  else renderYarnEditor(wrap, script);
+  if (currentLang === "js") renderJsEditor(wrap, script, () => renderScriptPanel(host));
+  else renderYarnEditor(wrap, script, () => renderScriptPanel(host));
 
   host.appendChild(wrap);
+}
+
+// ============================================================================
+// VS Code 工具条（JS / Yarn 共用）
+// ============================================================================
+
+/**
+ * 「VS Code 打开」+「载入 VS Code 改动」。
+ *
+ * 脚本存在 .bwproj 里，所以服务端会把它镜像成 web/.build/scripts/<名字>.js；
+ * 这里轮询镜像文件的 mtime，VS Code 里保存后就能一键取回（不自动覆盖，避免吞掉编辑器里正在敲的内容）。
+ */
+function renderVsCodeBar(
+  wrap: HTMLElement,
+  name: string,
+  lang: ScriptLang,
+  currentText: () => string,
+  applyIncoming: (text: string) => void
+): void {
+  const bar = el("div", { class: "row" });
+  bar.style.margin = "4px 0 8px";
+  bar.appendChild(
+    button("VS Code 打开", () => void postOpenInVscode(name, currentText(), lang), {
+      size: "sm",
+      variant: "outline",
+      iconPath: I.open,
+      title: "把脚本写到 web/.build/scripts/ 并用本机 VS Code 打开（需要 npm run serve）"
+    })
+  );
+
+  const status = el("span", { class: "hint" }, "");
+  status.style.marginLeft = "10px";
+  bar.appendChild(status);
+
+  bar.appendChild(el("div", { class: "spacer" }));
+
+  let pending: string | null = null;
+  const pull = button("载入 VS Code 改动", () => {
+    const text = pending;
+    if (text == null) return;
+    pending = null;
+    pull.style.display = "none";
+    status.textContent = "";
+    applyIncoming(text);
+    ok("已载入 VS Code 里的改动");
+  }, { size: "sm", variant: "primary" });
+  pull.style.display = "none";
+  bar.appendChild(pull);
+
+  wrap.appendChild(bar);
+
+  const key = `${lang}:${name}`;
+  let baseline = mirrorInfo.get(key)?.mtimeMs ?? 0;
+
+  const tick = async (): Promise<void> => {
+    const mirror = await fetchMirror(name, lang);
+    if (!mirror) return;
+    if (baseline === 0) {
+      baseline = mirror.mtimeMs;
+      return;
+    }
+    if (mirror.mtimeMs <= baseline) return;
+    baseline = mirror.mtimeMs;
+    // 文件变了：只有内容和编辑器里不一样才提示，避免自己刚写过就弹「载入」
+    if (typeof mirror.content !== "string") return;
+    if (mirror.content.replace(/\r\n/g, "\n") === currentText().replace(/\r\n/g, "\n")) {
+      status.textContent = "";
+      return;
+    }
+    pending = mirror.content;
+    status.textContent = "VS Code 里的文件已更新";
+    pull.style.display = "";
+  };
+
+  mirrorPoll = window.setInterval(() => void tick(), 2000);
 }
 
 // ============================================================================
 // JS 模式
 // ============================================================================
 
-function renderJsEditor(wrap: HTMLElement, script: ScriptEntry): void {
+function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => void): void {
+  void rerender; // JS 模式取回改动直接改 textarea，不需要整面板重渲染
   const edHead = el("div", { class: "row" });
   edHead.appendChild(el("div", { class: "group-label" }, "源码 JavaScript"));
   edHead.appendChild(el("div", { class: "spacer" }));
@@ -266,6 +414,23 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry): void {
   ta.addEventListener("click", updateStats);
   ta.addEventListener("keyup", updateStats);
   ta.addEventListener("select", updateStats);
+
+  // VS Code 工具条：打开镜像文件 / 从镜像文件取回改动
+  renderVsCodeBar(
+    wrap,
+    script.name || currentScript,
+    "js",
+    () => ta.value,
+    (text) => {
+      ta.value = text;
+      script.source = text;
+      store.markDirty();
+      refreshGutter();
+      syncScroll();
+      updateStats();
+      scheduleCheck();
+    }
+  );
 
   ta.addEventListener("keydown", (e) => {
     // Ctrl/Cmd+S：保存整个工程（全局快捷键对 textarea 是放行的，这里必须自己接住）
@@ -722,7 +887,7 @@ function buildInsert(item: ApiDoc): { text: string; caret: number } {
 // Yarn 模式（原有能力，保持不变）
 // ============================================================================
 
-function renderYarnEditor(wrap: HTMLElement, script: ScriptEntry): void {
+function renderYarnEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => void): void {
   const edHead = el("div", { class: "row" });
   edHead.style.marginTop = "8px";
   edHead.appendChild(el("div", { class: "group-label" }, "源码 Yarn"));
@@ -740,6 +905,20 @@ function renderYarnEditor(wrap: HTMLElement, script: ScriptEntry): void {
     store.markDirty();
     scheduleCheck();
   });
+
+  // VS Code 工具条（Yarn 剧本也能拿 VS Code 编辑，扩展名 .yarn）
+  renderVsCodeBar(
+    wrap,
+    script.name || currentScript,
+    "yarn",
+    () => ta.value,
+    (text) => {
+      script.source = text;
+      store.markDirty();
+      rerender();
+    }
+  );
+
   wrap.appendChild(ta);
 
   // 检查结果

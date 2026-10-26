@@ -13,6 +13,11 @@
 import type { AssetEntry, Project } from "../core/model.ts";
 import { createProject, createScene, createObject, uid } from "../core/model.ts";
 import { makeInstance, moduleDef } from "./modules.ts";
+// 两个脚本向示例体量大（100KB+），直接引用 web/examples 下的 .bwproj 本体（esbuild 用 json loader 打进包），
+// 保证「菜单里点开的就是磁盘上那份文件」，不会出现代码生成版与 .bwproj 两套数据。
+import topDownJsProject from "../../examples/俯视角JS示例.bwproj";
+import emergenceProject from "../../examples/涌现沙盘.bwproj";
+import vampireProject from "../../examples/吸血鬼幸存者.bwproj";
 
 // ---------------- 内联素材 ----------------
 
@@ -432,9 +437,23 @@ export function createDressupProject(): Project {
   return p;
 }
 
-export type ExampleId = "minesweeper" | "dressup";
+export type ExampleId = "minesweeper" | "dressup" | "topdown-js" | "emergence" | "vampire";
+
+/** 深拷贝：示例工程每次载入都要是一份新对象，避免用户在编辑器里的改动污染模块缓存。 */
+function cloneProject(p: unknown): Project {
+  return JSON.parse(JSON.stringify(p)) as Project;
+}
 
 export function buildExample(id: ExampleId): { project: Project; fileName: string } {
   if (id === "dressup") return { project: createDressupProject(), fileName: "换装示例.bwproj" };
+  if (id === "topdown-js") {
+    return { project: cloneProject(topDownJsProject), fileName: "俯视角JS示例.bwproj" };
+  }
+  if (id === "emergence") {
+    return { project: cloneProject(emergenceProject), fileName: "涌现沙盘.bwproj" };
+  }
+  if (id === "vampire") {
+    return { project: cloneProject(vampireProject), fileName: "吸血鬼幸存者.bwproj" };
+  }
   return { project: createMinesweeperProject(), fileName: "扫雷示例.bwproj" };
 }

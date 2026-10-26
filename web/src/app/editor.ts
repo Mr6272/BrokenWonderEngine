@@ -91,6 +91,9 @@ export class Editor {
         { label: "新建示例工程", onClick: () => this.newExampleProject(), hint: "内置主角、敌人、箱子、触发区，直接可用" },
         { label: "扫雷示例（.bwproj）", onClick: () => this.newBuiltinExample("minesweeper"), hint: "引擎内可试玩；行数、列数、地雷数都在模块参数里改" },
         { label: "换装示例（.bwproj）", onClick: () => this.newBuiltinExample("dressup"), hint: "角色拆成若干部件，点标签页即可换装" },
+        { label: "俯视角 JS 示例（.bwproj）", onClick: () => this.newBuiltinExample("topdown-js"), hint: "WASD 移动 / 相机跟随 / A* 追击 / 交互对话 / HUD，全部由 JS 脚本驱动" },
+        { label: "涌现沙盘示例（.bwproj）", onClick: () => this.newBuiltinExample("emergence"), hint: "材质→火/水/烟→感知AI→物理：亲手点火，看火烧穿木栅、引爆油桶、引来守卫" },
+        { label: "吸血鬼幸存者（.bwproj）", onClick: () => this.newBuiltinExample("vampire"), hint: "WASD 走位 + 自动开火 + 升级三选一：活过一波又一波，直到被围死" },
         { divider: true },
         { label: "打包到 BWE（Windows EXE）…", onClick: () => void openBwePackager(), hint: "需要本地 npm run serve；输出含 exe 的 zip" },
         { label: "工程设置", onClick: () => this.leftTab.focus("settings") },
@@ -473,10 +476,14 @@ export class Editor {
 
   private newBuiltinExample(id: ExampleId): void {
     const built = buildExample(id);
-    const tip = id === "minesweeper"
-      ? "扫雷示例已载入：点「预览」直接试玩；行数、列数、地雷数在工具栏「模块」→「扫雷棋盘」里改。"
-      : "换装示例已载入：点「预览」试玩；每个部位的造型和素材在「模块」→「换装部件」里改。";
-    this.loadExampleProject(() => built.project, built.fileName, tip);
+    const tips: Record<ExampleId, string> = {
+      minesweeper: "扫雷示例已载入：点「预览」直接试玩；行数、列数、地雷数在工具栏「模块」→「扫雷棋盘」里改。",
+      dressup: "换装示例已载入：点「预览」试玩；每个部位的造型和素材在「模块」→「换装部件」里改。",
+      "topdown-js": "俯视角 JS 示例已载入：脚本在「剧本」面板切到 JS 看 player/chaser/npc/hud/system；点「试跑」直接开窗口。",
+      emergence: "涌现沙盘已载入：脚本在「剧本」面板（world/player/guard/civilian/bottle/hud）。点火看火势蔓延、烧穿木栅开路，守卫会被噪音引来——规则都在 bwe.material / bwe.field / bwe.ai 里组合。",
+      vampire: "吸血鬼幸存者已载入：点「预览」直接开打。WASD 走位、武器自动开火、1/2/3 选强化、R 重开；六个脚本（player/enemy/bullet/gem/director/hud）都在「剧本」面板里。"
+    };
+    this.loadExampleProject(() => built.project, built.fileName, tips[id]);
   }
 
   private loadExampleProject(build: () => Project, fileName: string, tip: string): void {

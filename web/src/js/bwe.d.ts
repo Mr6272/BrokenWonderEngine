@@ -170,8 +170,8 @@ declare namespace bwe {
     /** 回血 */
     heal(n: number): void;
 
-    /** 注册实体事件；同名事件重复注册会覆盖 */
-    on(event: EntityEvent, fn: (payload?: unknown) => void): void;
+    /** 注册实体事件；同名事件重复注册会覆盖。载荷形状由派发方决定，所以是 any。 */
+    on(event: EntityEvent, fn: (payload?: any) => void): void;
   }
 
   // ==========================================================================
@@ -244,12 +244,12 @@ declare namespace bwe {
     /** 时间缩放（1 = 正常） */
     timeScale: number;
 
-    /** 全局事件总线：注册 */
-    on(name: string, fn: (payload?: unknown) => void): void;
+    /** 全局事件总线：注册。载荷是你 emit 时自己定的对象，所以是 any（不要依赖引擎猜测形状）。 */
+    on(name: string, fn: (payload?: any) => void): void;
     /** 全局事件总线：取消 */
-    off(name: string, fn?: (payload?: unknown) => void): void;
+    off(name: string, fn?: (payload?: any) => void): void;
     /** 全局事件总线：派发 */
-    emit(name: string, payload?: unknown): void;
+    emit(name: string, payload?: any): void;
 
     /** 图层信息（Phase 2，Phase 1 返回空数组） */
     layers(): { id: string; name: string; visible: boolean; locked: boolean; order: number }[];
@@ -649,10 +649,10 @@ declare namespace bwe {
   /** 跨脚本调用入口（与 bwe.call 等价） */
   const scripts: Scripts;
 
-  /** 注册全局钩子：`"update" | "draw" | "keydown" | "click"`，也可以是自定义事件名 */
-  function on(name: string, fn: (payload?: unknown) => void): void;
+  /** 注册全局钩子：`"update" | "draw" | "keydown" | "click"`，也可以是自定义事件名（载荷 any） */
+  function on(name: string, fn: (payload?: any) => void): void;
   /** 取消全局钩子 */
-  function off(name: string, fn?: (payload?: unknown) => void): void;
+  function off(name: string, fn?: (payload?: any) => void): void;
 
   /** 延时执行一次，返回可取消的 id */
   function after(sec: number, fn: () => void): number;

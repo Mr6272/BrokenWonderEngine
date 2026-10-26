@@ -12,7 +12,7 @@
 import { createServer } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, appendFileSync } from "node:fs";
-import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,6 +115,45 @@ async function readJsonBody(req) {
   return JSON.parse(text);
 }
 
+// ---------------- 「用 VS Code 打开脚本」 ----------------
+//
+// 脚本存在 .bwproj 的 JSON 里，不是磁盘上的 .js 文件，所以这里把它**镜像**成真实文件：
+//   web/.build/scripts/<脚本名>.js|.yarn
+// 这样 VS Code 能正常编辑、看 diff、用 ESLint；编辑器再通过 /api/script-file 把它取回来。
+// 镜像是「单向写入 + 按需读回」，不做文件监听（跨平台可靠、也不会和编辑器里的输入打架）。
+
+const scriptMirrorDir = join(webRoot, ".build", "scripts");
+const SAFE_SCRIPT_NAME = /[\\/:*?"<>|\u0000-\u001f]/g;
+
+function scriptMirrorPath(name, lang, project) {
+  const base = String(name ?? "").replace(SAFE_SCRIPT_NAME, "_").trim() || "script";
+  const ext = lang === "yarn" ? ".yarn" : ".js";
+  const file = base.endsWith(ext) ? base : base + ext;
+  // 按工程分目录：两个工程都有「player」时不会互相覆盖
+  const scope = String(project ?? "").replace(SAFE_SCRIPT_NAME, "_").trim();
+  return scope ? join(scriptMirrorDir, scope, file) : join(scriptMirrorDir, file);
+}
+
+/** 找 VS Code 的命令：优先 code.cmd（PATH 上的），再试 code-insiders / cursor。 */
+async function findEditorCommand() {
+  for (const candidate of ["code", "code-insiders", "cursor"]) {
+    if (await which(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** 后台拉起 VS Code（detached：服务退出也不带走编辑器窗口）。 */
+function launchEditor(command, filePath, line) {
+  const target = line > 0 ? `${filePath}:${line}` : filePath;
+  const isWin = process.platform === "win32";
+  const args = ["-g", target];
+  const child = isWin
+    ? spawn("cmd.exe", ["/c", command, ...args], { detached: true, stdio: "ignore", windowsHide: true })
+    : spawn(command, args, { detached: true, stdio: "ignore" });
+  child.on("error", () => {});
+  child.unref();
+}
+
 function jobPublic(job) {
   return {
     id: job.id,
@@ -202,9 +241,11 @@ async function checkJsSource(body) {
     noImplicitAny: false,
     skipLibCheck: true,
     types: [],
-    // 只用 ES5 标准库：DOM / Node 的全局名字（window/document/require）在 Rhino 里并不存在，
-    // 让它们「通过诊断」反而会误导用户。
-    lib: ["lib.es5.d.ts"]
+    // 标准库用 ES2020：内嵌 Rhino 1.7.15 实测支持 Array.includes / Object.entries /
+    // String.padStart / String.replaceAll / Array.flat / globalThis 等（见 docs/scripting-api.md §0）。
+    // 之前只给 lib.es5，会把 `.includes()` 这类完全能跑的写法报成错误，误导用户。
+    // 仍然不给 DOM/Node 的 lib：window / document / require 在运行时并不存在，让它们通过反而更糟。
+    lib: ["lib.es2020.d.ts"]
   };
 
   const host = {
@@ -680,6 +721,68 @@ async function handleApi(req, res, url) {
   if (path === "/api/quick-run/stop" && req.method === "POST") {
     const result = await stopQuickRun();
     json(res, 200, { ...result, running: quickRunRunning(), logTail: await readLogTail() });
+    return true;
+  }
+
+  // ---------- /api/open-in-vscode：把脚本落到磁盘文件并用本机编辑器打开 ----------
+  if (path === "/api/open-in-vscode" && req.method === "POST") {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      json(res, 400, { ok: false, error: e.message });
+      return true;
+    }
+    if (typeof body?.name !== "string" || !body.name.trim()) {
+      json(res, 400, { ok: false, error: "缺少 name（脚本名）" });
+      return true;
+    }
+    const lang = body.lang === "yarn" ? "yarn" : "js";
+    const file = scriptMirrorPath(body.name, lang, body.project);
+    try {
+      await mkdir(dirname(file), { recursive: true });
+      if (typeof body.source === "string") {
+        await writeFile(file, body.source, "utf8");
+      } else if (!existsSync(file)) {
+        json(res, 400, { ok: false, error: "脚本没有源码，且镜像文件不存在" });
+        return true;
+      }
+      const command = await findEditorCommand();
+      if (!command) {
+        json(res, 200, {
+          ok: false,
+          file,
+          error:
+            "本机没找到 VS Code 命令（code）。装了 VS Code 但命令不可用时，" +
+            "在 VS Code 里执行「Shell Command: Install 'code' command in PATH」，或手动打开下面这个文件。",
+          hint: "文件已写到磁盘，可以直接用任意编辑器打开"
+        });
+        return true;
+      }
+      launchEditor(command, file, Number(body.line) || 1);
+      json(res, 200, { ok: true, file, command, lang });
+    } catch (e) {
+      json(res, 500, { ok: false, error: e?.message || String(e), file });
+    }
+    return true;
+  }
+
+  // ---------- /api/script-file：读回镜像文件（VS Code 里改完，编辑器用它同步） ----------
+  if (path === "/api/script-file" && req.method === "GET") {
+    const name = url.searchParams.get("name") ?? "";
+    const lang = url.searchParams.get("lang") === "yarn" ? "yarn" : "js";
+    if (!name.trim()) {
+      json(res, 400, { ok: false, error: "缺少 name" });
+      return true;
+    }
+    const file = scriptMirrorPath(name, lang, url.searchParams.get("project") ?? "");
+    try {
+      const info = await stat(file);
+      const content = await readFile(file, "utf8");
+      json(res, 200, { ok: true, file, content, mtimeMs: info.mtimeMs });
+    } catch {
+      json(res, 404, { ok: false, file, error: "镜像文件不存在（先点「VS Code 打开」）" });
+    }
     return true;
   }
 
