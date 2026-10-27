@@ -160,8 +160,21 @@ const RUNTIME_MODULES = new Set([
   "game.dressPart"
 ]);
 
-function unsupportedModules(p: Project): string[] {
+/**
+ * 扫描工程里运行期不执行的模块。
+ *
+ * 注意预制体（prefabs）也要扫：预制体虽然「这一刻还没被摆进场景」，但导出后会进
+ * boot.json 的 `prefabs[]`，运行期 `bwe.prefab.spawn()` 一调就真的会生成对象。
+ * 只看场景对象会漏掉「模板里挂了一个运行时不认的模块」这种情况 —— 用户会以为
+ * 预制体是干净的，一生成才发现行为不对。
+ *
+ * 返回 `{ ids, inPrefab }`：
+ *   ids      —— 所有不支持的 defId（去重）
+ *   inPrefab —— 其中至少出现在某个预制体里的（用于把提示说得更准）
+ */
+function unsupportedModules(p: Project): { ids: string[]; inPrefab: Set<string> } {
   const out = new Set<string>();
+  const inPrefab = new Set<string>();
   for (const scene of p.scenes) {
     for (const obj of scene.objects) {
       for (const m of obj.modules) {
@@ -170,7 +183,16 @@ function unsupportedModules(p: Project): string[] {
       }
     }
   }
-  return [...out];
+  for (const prefab of p.prefabs ?? []) {
+    for (const m of prefab.modules ?? []) {
+      if (!m.enabled) continue;
+      if (!RUNTIME_MODULES.has(m.defId)) {
+        out.add(m.defId);
+        inPrefab.add(m.defId);
+      }
+    }
+  }
+  return { ids: [...out], inPrefab };
 }
 
 function formatBytes(n: number): string {
@@ -250,6 +272,7 @@ export async function openBwePackager(): Promise<void> {
 
   const unsupported = unsupportedModules(p);
   const multipleScenes = p.scenes.length > 1;
+  const prefabCount = (p.prefabs ?? []).length;
 
   modal({
     title: "打包到 BWE · Windows EXE",
@@ -282,12 +305,23 @@ export async function openBwePackager(): Promise<void> {
             `注意：当前运行时会加载第一张场景「${p.scenes[0]?.name ?? ""}」，多场景切换模块暂未实现。`)
         );
       }
-      if (unsupported.length > 0) {
-        const names = unsupported.slice(0, 12).map((id) => moduleDef(id)?.title ?? id);
+      // 预制体也会进 boot.json，运行期 bwe.prefab.spawn() 一调就真的生成对象，
+      // 所以这里报一句「它们会被导出」比让用户猜要清楚。
+      if (prefabCount > 0) {
+        const withBad = unsupported.inPrefab.size;
+        wrap.appendChild(
+          el("div", { class: "hint" },
+            withBad > 0
+              ? `工程里有 ${prefabCount} 个预制体会一起导出；其中 ${withBad} 种模块运行期不执行（预制体数据保留，生成出来的对象不会带这块行为）。`
+              : `工程里有 ${prefabCount} 个预制体会一起导出，运行期可以用 bwe.prefab.spawn("名字") 生成。`)
+        );
+      }
+      if (unsupported.ids.length > 0) {
+        const names = unsupported.ids.slice(0, 12).map((id) => moduleDef(id)?.title ?? id);
         wrap.appendChild(
           el("div", { class: "hint pkg-warn" },
-            `以下 ${unsupported.length} 个模块在打包运行时里不会执行（工程数据保留，不会报错）：`
-              + names.join("、") + (unsupported.length > 12 ? "…" : ""))
+            `以下 ${unsupported.ids.length} 个模块在打包运行时里不会执行（工程数据保留，不会报错）：`
+              + names.join("、") + (unsupported.ids.length > 12 ? "…" : ""))
         );
       }
 

@@ -39,7 +39,16 @@ final class ScriptAudio {
 
     // ---------------- 播放 ----------------
 
-    long play(String name, float vol, boolean loop) {
+    /**
+     * 播放音效。
+     *
+     * @param pitch 音高倍数（1 = 原调，2 = 高一个八度，0.5 = 低一个八度）。
+     *              Java Sound 的 {@link Clip} <b>没有</b>变调控制，所以这里用
+     *              <b>改变采样率</b>实现：采样率乘 pitch ⇒ 播放速率与音高同比变化
+     *              （与「变速不变调」相反，这正是游戏里要的效果：受击/拾取随机音高）。
+     *              pitch 缺失或 == 1 时走原始 Clip 快路径，零额外开销。
+     */
+    long play(String name, float vol, boolean loop, float pitch) {
         if (name == null || name.isEmpty()) {
             return -1;
         }
@@ -50,6 +59,9 @@ final class ScriptAudio {
         }
         try {
             AudioInputStream in = AudioSystem.getAudioInputStream(f);
+            if (Math.abs(pitch - 1f) > 0.001f) {
+                in = detune(in, pitch);
+            }
             Clip clip = AudioSystem.getClip();
             clip.open(in);
             long id = nextId++;
@@ -65,6 +77,54 @@ final class ScriptAudio {
         } catch (Throwable t) {
             warnOnce(name, "音频不可用「" + name + "」：" + t.getMessage());
             return -1;
+        }
+    }
+
+    long play(String name, float vol, boolean loop) {
+        return play(name, vol, loop, 1f);
+    }
+
+    /**
+     * 变调（真正改变音高，不是「变速不变调」）。
+     *
+     * <p><b>踩过的坑（实测记录）</b>：最初的写法是「造一个新采样率格式，让
+     * {@code AudioSystem.getAudioInputStream(dst, in)} 去重采样」。
+     * 结果输出速率确实变成了 22050→33075，但<b>时长仍是 1.0001 秒，音高没变</b> ——
+     * 因为 AudioSystem 做的是「重采样保时长」（resample preserving duration），
+     * 它按时间轴插值，频率成分原样保留。所以那种写法等于白做。
+     *
+     * <p>正确做法：把原始 PCM 数据<b>原样保留</b>，只把「采样率」这个标称值乘上 pitch。
+     * 播放器按新采样率解释同一串样本 ⇒ 每秒消耗的样本数变了 ⇒
+     * 时长变 1/pitch、音高变 pitch 倍。这正是音效变调要的效果。
+     *
+     * <p>只支持 PCM（8/16/24/32 位）；非 PCM 原样返回，不崩。
+     */
+    private static AudioInputStream detune(AudioInputStream in, float pitch) {
+        try {
+            javax.sound.sampled.AudioFormat src = in.getFormat();
+            if (src.getEncoding() != javax.sound.sampled.AudioFormat.Encoding.PCM_SIGNED
+                    && src.getEncoding() != javax.sound.sampled.AudioFormat.Encoding.PCM_UNSIGNED) {
+                return in;
+            }
+            // 先把流读进内存：AudioInputStream 需要已知长度，Clip.open 才接受。
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                bos.write(buf, 0, n);
+            }
+            byte[] data = bos.toByteArray();
+            float newRate = Math.max(1000f, Math.min(192000f, src.getSampleRate() * pitch));
+            int frameSize = Math.max(1, src.getFrameSize());
+            // 采样率变了，其余（编码/位深/声道/帧大小）不变。
+            javax.sound.sampled.AudioFormat dst = new javax.sound.sampled.AudioFormat(
+                    src.getEncoding(), newRate, src.getSampleSizeInBits(),
+                    src.getChannels(), frameSize,
+                    newRate, src.isBigEndian());
+            return new AudioInputStream(new java.io.ByteArrayInputStream(data),
+                    dst, Math.max(1, data.length / frameSize));
+        } catch (Throwable t) {
+            return in;
         }
     }
 

@@ -36,6 +36,26 @@ final class ScriptApi {
     private ScriptJs.Flex drawObj;
     private ScriptJs.Flex saveObj;
     private ScriptJs.Flex audioObj;
+    private ScriptJs.Flex prefabObj;
+    private ScriptJs.Flex poolObj;
+
+    /** 预制体 / 对象池（{@code bwe.prefab} / {@code bwe.pool}）。 */
+    private ScriptPrefab prefabs;
+
+    /** 实体染色（{@code e.setColor} / {@code e.setAlpha}）直接存在 {@code Actor.tint} 上（渲染热字段）。 */
+
+    /**
+     * 父子关系（{@code e.parent} / {@code e.children()}）。
+     *
+     * <p>只有<b>脚本层</b>的归属关系：父子各自仍是独立 Actor（参与物理/绘制/查找），
+     * 不是真正的坐标继承场景图 —— v1 的取舍，写进文档。
+     */
+    private final Map<TopDownRuntime.Actor, TopDownRuntime.Actor> parents =
+            new IdentityHashMap<TopDownRuntime.Actor, TopDownRuntime.Actor>();
+
+    /** {@code e.locked}：纯脚本侧状态（宿主 Actor 没有该字段，v1 只做「记住这个值」）。 */
+    private final Map<TopDownRuntime.Actor, Boolean> lockedActors =
+            new IdentityHashMap<TopDownRuntime.Actor, Boolean>();
 
     /** Actor ↔ 实体包装（同一 Actor 永远同一个 JS 对象）。 */
     private final Map<TopDownRuntime.Actor, ScriptableObject> entities =
@@ -66,6 +86,7 @@ final class ScriptApi {
     void build(Context cx) {
         bwe = ScriptJs.flex(shared);
         buildRootFns();
+        buildPrefab();
         buildWorld();
         buildInput();
         buildCamera();
@@ -142,6 +163,19 @@ final class ScriptApi {
     /** 新建一个 JS 函数值（可回传给用户当句柄）。 */
     Function newFn(String name, ScriptJs.Fn body) {
         return fn(name, body);
+    }
+
+    /**
+     * 自检专用：按脚本视角读一次 {@code bwe.input.mouse.wheel}。
+     *
+     * <p>刻意走<b>和脚本完全相同</b>的 getter 路径（不是直接读宿主字段），
+     * 这样断言才覆盖到「getter 真的接上了宿主事件源」。
+     * 注意它有副作用：契约是「本帧增量」，读一次即清零。
+     */
+    int readWheel() {
+        Object mouse = ScriptJs.get(inputObj, "mouse");
+        Object w = ScriptJs.get(mouse, "wheel");
+        return ScriptJs.inum(w, -999);
     }
 
     /** 把对象挂到 bwe.<name> 命名空间。 */
@@ -373,6 +407,207 @@ final class ScriptApi {
         return (int) ScriptJs.num(len, 0);
     }
 
+    // ---------------- bwe.prefab / bwe.pool ----------------
+
+    /**
+     * 预制体与对象池：{@link ScriptPrefab} 负责模板/实例/池的全部数据，
+     * 这里只做「挂命名空间 + 提供唯一的生成入口」。
+     */
+    private void buildPrefab() {
+        try {
+            prefabs = ScriptPrefab.install(this);
+            prefabObj = prefabs.prefabNamespace();
+            poolObj = prefabs.poolNamespace();
+            bwe.values.put("prefab", prefabObj);
+            bwe.values.put("pool", poolObj);
+        } catch (Throwable t) {
+            engine.host.scriptLog("[脚本] prefab/pool 注册失败: " + t);
+        }
+    }
+
+    /**
+     * <b>唯一的实体生成入口</b>：{@code bwe.world.spawn} / {@code bwe.prefab.spawn} / clone /
+     * pool.acquire 全部走这里，保证「生成出来的东西」只有一套行为。
+     *
+     * <p>{@code opts} 是可选的 {@code ScriptableObject}（键名见 docs/scripting-api.md §2.1），
+     * 支持的字段：x,y,asset,name,kind,z,layer,halfW,halfH,scaleX,scaleY,rotation,visible,
+     * animMode,animFps,script,tags,modules,props,parent。
+     */
+    TopDownRuntime.Actor spawnActor(Object opts) {
+        Scriptable o = opts instanceof Scriptable ? (Scriptable) opts : null;
+        if (o == null) {
+            return null;
+        }
+        float x = ScriptJs.fnum(ScriptJs.get(o, "x"), 0f);
+        float y = ScriptJs.fnum(ScriptJs.get(o, "y"), 0f);
+        String asset = ScriptJs.str(ScriptJs.get(o, "asset"), "");
+        String name = ScriptJs.str(ScriptJs.get(o, "name"), "");
+        String kind = ScriptJs.str(ScriptJs.get(o, "kind"), "PROP");
+        int z = ScriptJs.inum(ScriptJs.get(o, "z"), 0);
+        float halfW = ScriptJs.fnum(ScriptJs.get(o, "halfW"), 0f);
+        float halfH = ScriptJs.fnum(ScriptJs.get(o, "halfH"), 0f);
+        String script = ScriptJs.str(ScriptJs.get(o, "script"), "");
+        List<String> tags = new ArrayList<String>();
+        Object tagv = ScriptJs.get(o, "tags");
+        if (tagv instanceof Scriptable) {
+            int n = lengthOf(tagv);
+            for (int i = 0; i < n; i++) {
+                String t = ScriptJs.str(ScriptableObject.getProperty((Scriptable) tagv, i), "");
+                if (!t.isEmpty() && !tags.contains(t)) {
+                    tags.add(t);
+                }
+            }
+        }
+        List<GameData.RtModule> modules = new ArrayList<GameData.RtModule>();
+        Object modv = ScriptJs.get(o, "modules");
+        if (modv instanceof Scriptable) {
+            int n = lengthOf(modv);
+            for (int i = 0; i < n; i++) {
+                GameData.RtModule m = parseModule(ScriptableObject.getProperty((Scriptable) modv, i));
+                if (m != null) {
+                    modules.add(m);
+                }
+            }
+        }
+        TopDownRuntime.Actor a = engine.spawnScripted(x, y, asset, name, kind, z, halfW, halfH,
+                script, tags, modules);
+        if (a == null) {
+            return null;
+        }
+        // 宿主 spawnScripted 只填了基础字段，其余在返回后补齐（都是包内可见字段，不需要改宿主）。
+        if (o != null) {
+            Object v = ScriptJs.get(o, "layer");
+            if (!ScriptJs.isMissing(v)) {
+                a.o.layer = ScriptJs.inum(v, 0);
+            }
+            v = ScriptJs.get(o, "scaleX");
+            if (!ScriptJs.isMissing(v)) {
+                a.o.scaleX = ScriptJs.fnum(v, 1f);
+            }
+            v = ScriptJs.get(o, "scaleY");
+            if (!ScriptJs.isMissing(v)) {
+                a.o.scaleY = ScriptJs.fnum(v, 1f);
+            }
+            v = ScriptJs.get(o, "rotation");
+            if (!ScriptJs.isMissing(v)) {
+                a.o.rotation = ScriptJs.fnum(v, 0f);
+            }
+            v = ScriptJs.get(o, "visible");
+            if (!ScriptJs.isMissing(v)) {
+                a.o.visible = ScriptJs.bool(v, true);
+            }
+            v = ScriptJs.get(o, "animMode");
+            if (!ScriptJs.isMissing(v)) {
+                a.o.animMode = normalizeAnimMode(ScriptJs.str(v, "默认"));
+            }
+            v = ScriptJs.get(o, "animFps");
+            if (!ScriptJs.isMissing(v)) {
+                a.o.animFps = ScriptJs.fnum(v, 8f);
+            }
+            Object props = ScriptJs.get(o, "props");
+            if (props instanceof ScriptableObject) {
+                for (Object keyObj : ScriptableObject.getPropertyIds((ScriptableObject) props)) {
+                    String k = Context.toString(keyObj);
+                    a.o.props.put(k, propText(
+                            ScriptableObject.getProperty((ScriptableObject) props, k)));
+                }
+            }
+            Object parent = ScriptJs.get(o, "parent");
+            if (!ScriptJs.isMissing(parent)) {
+                setParent(a, parent);
+            }
+        }
+        return a;
+    }
+
+    /** {@code e.attach} 的 Java 版（预制体的 children 复用同一套子精灵数据）。 */
+    ScriptEngine.Attachment attachSprite(TopDownRuntime.Actor a, String asset, float dx, float dy,
+                                         int z, float rotation, float alpha, float w, float h) {
+        if (a == null) {
+            return null;
+        }
+        ScriptEngine.Attachment at = new ScriptEngine.Attachment(a);
+        at.assetName = asset == null ? "" : asset;
+        at.dx = dx;
+        at.dy = dy;
+        at.z = z;
+        at.rotation = rotation;
+        at.alpha = alpha;
+        at.w = w;
+        at.h = h;
+        at.id = nextAttachId++;
+        engine.attachments.add(at);
+        attachHandles.put(Long.valueOf(at.id), at);
+        return at;
+    }
+
+    /** 实体染色（0~1）；null = 未染色（渲染侧原样画）。状态存在宿主 Actor 上，这里只读。 */
+    float[] tintOf(TopDownRuntime.Actor a) {
+        return a == null ? null : a.tint;
+    }
+
+    /** 设置父子关系（{@code null} = 脱离父级）。 */
+    void setParent(TopDownRuntime.Actor child, Object parentValue) {
+        if (child == null) {
+            return;
+        }
+        TopDownRuntime.Actor parent = unwrap(parentValue);
+        if (parent == null) {
+            parents.remove(child);
+            return;
+        }
+        if (parent == child || isAncestor(parent, child)) {
+            return;
+        }
+        parents.put(child, parent);
+    }
+
+    /** 取父级（没有返回 null）。 */
+    TopDownRuntime.Actor parentOf(TopDownRuntime.Actor child) {
+        return child == null ? null : parents.get(child);
+    }
+
+    /** 取所有直接子级（顺序 = 设置顺序，不保证稳定）。 */
+    List<TopDownRuntime.Actor> childrenOf(TopDownRuntime.Actor parent) {
+        List<TopDownRuntime.Actor> out = new ArrayList<TopDownRuntime.Actor>();
+        if (parent == null) {
+            return out;
+        }
+        for (Map.Entry<TopDownRuntime.Actor, TopDownRuntime.Actor> e : parents.entrySet()) {
+            if (e.getValue() == parent && !e.getKey().dead) {
+                out.add(e.getKey());
+            }
+        }
+        return out;
+    }
+
+    /** candidate 是否在 node 的祖先链上（防环）。 */
+    private boolean isAncestor(TopDownRuntime.Actor candidate, TopDownRuntime.Actor node) {
+        TopDownRuntime.Actor cur = parents.get(node);
+        int guard = 0;
+        while (cur != null && guard++ < 256) {
+            if (cur == candidate) {
+                return true;
+            }
+            cur = parents.get(cur);
+        }
+        return false;
+    }
+
+    /** 编辑器里的中文动画枚举归一化（{@code "first"/"once"/"loop"} 也认）。 */
+    static String normalizeAnimMode(String mode) {
+        if (mode == null || mode.isEmpty()) {
+            return "默认";
+        }
+        if ("first".equalsIgnoreCase(mode) || "只显示首帧".equals(mode)) {
+            return "只显示首帧";
+        }
+        if ("once".equalsIgnoreCase(mode) || "单次播放".equals(mode)) {
+            return "单次播放";
+        }
+        return "默认";
+    }
+
     // ---------------- bwe.world ----------------
 
     private void buildWorld() {
@@ -416,6 +651,136 @@ final class ScriptApi {
             return array(list);
         });
         method(worldObj, "spawn", (cx, thisObj, args) -> spawn(ScriptJs.arg(args, 0)));
+        // ---- 批量生成 / 克隆 ----
+        method(worldObj, "spawnMany", (cx, thisObj, args) -> {
+            List<Object> out = new ArrayList<Object>();
+            Object list = ScriptJs.arg(args, 0);
+            if (list instanceof Scriptable) {
+                int n = lengthOf(list);
+                for (int i = 0; i < n; i++) {
+                    Scriptable e = spawn(ScriptableObject.getProperty((Scriptable) list, i));
+                    if (e != null) {
+                        out.add(e);
+                    }
+                }
+            }
+            return array(out);
+        });
+        method(worldObj, "spawnAt", (cx, thisObj, args) -> {
+            ScriptableObject opts = argObj(ScriptJs.arg(args, 0));
+            if (opts == null) {
+                return null;
+            }
+            // 不复制 opts，直接在其上补 x/y：调用方通常是一次性字面量。
+            ScriptJs.Flex merged = obj();
+            if (opts instanceof ScriptJs.Flex) {
+                merged.values.putAll(((ScriptJs.Flex) opts).values);
+                for (Map.Entry<String, ScriptJs.Getter> e : ((ScriptJs.Flex) opts).getters.entrySet()) {
+                    merged.getters.put(e.getKey(), e.getValue());
+                }
+                for (Map.Entry<String, ScriptJs.Setter> e : ((ScriptJs.Flex) opts).setters.entrySet()) {
+                    merged.setters.put(e.getKey(), e.getValue());
+                }
+            }
+            merged.values.put("x", Double.valueOf(ScriptJs.num(ScriptJs.arg(args, 1), 0)));
+            merged.values.put("y", Double.valueOf(ScriptJs.num(ScriptJs.arg(args, 2), 0)));
+            return spawn(merged);
+        });
+        method(worldObj, "clone", (cx, thisObj, args) -> {
+            TopDownRuntime.Actor src = unwrap(ScriptJs.arg(args, 0));
+            if (src == null || src.dead) {
+                return null;
+            }
+            if (prefabs == null) {
+                return null;
+            }
+            ScriptPrefab.Def spec = prefabs.capture(src, true);
+            ScriptableObject opts = argObj(ScriptJs.arg(args, 1));
+            ScriptJs.Flex merged = obj();
+            merged.values.put("x", Double.valueOf(src.x));
+            merged.values.put("y", Double.valueOf(src.y));
+            merged.values.put("name", src.o.name);
+            if (opts != null) {
+                if (opts instanceof ScriptJs.Flex) {
+                    merged.values.putAll(((ScriptJs.Flex) opts).values);
+                } else {
+                    for (Object keyObj : ScriptableObject.getPropertyIds(opts)) {
+                        String k = Context.toString(keyObj);
+                        merged.values.put(k, ScriptableObject.getProperty(opts, k));
+                    }
+                }
+            }
+            TopDownRuntime.Actor a = prefabs.spawnFromSpec(spec, merged, false);
+            return a == null ? null : entity(a);
+        });
+        // ---- 批量销毁 ----
+        method(worldObj, "clear", (cx, thisObj, args) -> {
+            for (TopDownRuntime.Actor a : new ArrayList<TopDownRuntime.Actor>(host.actors)) {
+                if (!a.dead) {
+                    engine.destroyEntity(a);
+                }
+            }
+            return null;
+        });
+        method(worldObj, "clearTag", (cx, thisObj, args) -> {
+            String tag = ScriptJs.str(ScriptJs.arg(args, 0), "");
+            if (tag.isEmpty()) {
+                return null;
+            }
+            for (TopDownRuntime.Actor a : new ArrayList<TopDownRuntime.Actor>(host.actors)) {
+                if (!a.dead && a.o.tags.contains(tag)) {
+                    engine.destroyEntity(a);
+                }
+            }
+            return null;
+        });
+        method(worldObj, "destroyAll", (cx, thisObj, args) -> {
+            Object q = ScriptJs.arg(args, 0);
+            List<TopDownRuntime.Actor> targets = ScriptJs.isMissing(q)
+                    ? new ArrayList<TopDownRuntime.Actor>(host.actors)
+                    : new ArrayList<TopDownRuntime.Actor>(filtered(q));
+            int n = 0;
+            for (TopDownRuntime.Actor a : targets) {
+                if (!a.dead) {
+                    engine.destroyEntity(a);
+                    n++;
+                }
+            }
+            return Double.valueOf(n);
+        });
+        method(worldObj, "count", (cx, thisObj, args) -> {
+            Object q = ScriptJs.arg(args, 0);
+            if (ScriptJs.isMissing(q)) {
+                int n = 0;
+                for (TopDownRuntime.Actor a : host.actors) {
+                    if (!a.dead) {
+                        n++;
+                    }
+                }
+                return Double.valueOf(n);
+            }
+            return Double.valueOf(filtered(q).size());
+        });
+        method(worldObj, "each", (cx, thisObj, args) -> {
+            Object q = ScriptJs.arg(args, 0);
+            Function fn = ScriptJs.fnArg(ScriptJs.arg(args, 1));
+            if (fn == null) {
+                return null;
+            }
+            // 先拍快照：回调里 spawn/destroy 不会破坏迭代。
+            List<TopDownRuntime.Actor> list = ScriptJs.isMissing(q)
+                    ? new ArrayList<TopDownRuntime.Actor>(host.actors)
+                    : filtered(q);
+            for (TopDownRuntime.Actor a : list) {
+                if (a.dead) {
+                    continue;
+                }
+                engine.invoke(engine.def(engine.currentScriptName()), fn, shared,
+                        new Object[]{entity(a)});
+            }
+            return null;
+        });
+
         method(worldObj, "destroy", (cx, thisObj, args) -> {
             TopDownRuntime.Actor a = unwrap(ScriptJs.arg(args, 0));
             if (a != null) {
@@ -441,8 +806,24 @@ final class ScriptApi {
             engine.emitWorld(ScriptJs.str(ScriptJs.arg(args, 0), ""), ScriptJs.arg(args, 1));
             return null;
         });
-        // Phase 2 占位：返回空数组，脚本可以先探测而不会崩。
-        method(worldObj, "layers", (cx, thisObj, args) -> array(new ArrayList<Object>()));
+        // 图层表：从 scene_*.json 顶层 "layers" 解析（GameData.RtScene.layers）。
+        // 之前这里是「返回空数组」的 Phase 2 占位，而数据其实一直有导出 —— 现在真的返回。
+        // 旧 Build 没有 layers 字段时返回空数组（向后兼容，脚本可先探测 length）。
+        method(worldObj, "layers", (cx, thisObj, args) -> {
+            List<Scriptable> out = new ArrayList<Scriptable>();
+            if (host.scene != null) {
+                for (GameData.RtLayer rl : host.scene.layers) {
+                    ScriptJs.Flex o = obj();
+                    o.values.put("id", rl.id);
+                    o.values.put("name", rl.name);
+                    o.values.put("visible", Boolean.valueOf(rl.visible));
+                    o.values.put("locked", Boolean.valueOf(rl.locked));
+                    o.values.put("order", Double.valueOf(rl.order));
+                    out.add(o);
+                }
+            }
+            return array(out);
+        });
         ScriptJs.put(bwe, "world", worldObj);
     }
 
@@ -498,42 +879,8 @@ final class ScriptApi {
         return out;
     }
 
-    private Object spawn(Object opts) {
-        if (!(opts instanceof Scriptable)) {
-            return null;
-        }
-        Scriptable o = (Scriptable) opts;
-        float x = ScriptJs.fnum(ScriptJs.get(o, "x"), 0f);
-        float y = ScriptJs.fnum(ScriptJs.get(o, "y"), 0f);
-        String asset = ScriptJs.str(ScriptJs.get(o, "asset"), "");
-        String name = ScriptJs.str(ScriptJs.get(o, "name"), "");
-        String kind = ScriptJs.str(ScriptJs.get(o, "kind"), "PROP");
-        int z = ScriptJs.inum(ScriptJs.get(o, "z"), 0);
-        float halfW = ScriptJs.fnum(ScriptJs.get(o, "halfW"), 0f);
-        float halfH = ScriptJs.fnum(ScriptJs.get(o, "halfH"), 0f);
-        String script = ScriptJs.str(ScriptJs.get(o, "script"), "");
-        List<String> tags = new ArrayList<String>();
-        Object tagv = ScriptJs.get(o, "tags");
-        if (tagv instanceof Scriptable) {
-            int n = lengthOf(tagv);
-            for (int i = 0; i < n; i++) {
-                tags.add(ScriptJs.str(ScriptableObject.getProperty((Scriptable) tagv, i), ""));
-            }
-        }
-        List<GameData.RtModule> modules = new ArrayList<GameData.RtModule>();
-        Object modv = ScriptJs.get(o, "modules");
-        if (modv instanceof Scriptable) {
-            int n = lengthOf(modv);
-            for (int i = 0; i < n; i++) {
-                Object item = ScriptableObject.getProperty((Scriptable) modv, i);
-                GameData.RtModule m = parseModule(item);
-                if (m != null) {
-                    modules.add(m);
-                }
-            }
-        }
-        TopDownRuntime.Actor a = engine.spawnScripted(x, y, asset, name, kind, z, halfW, halfH,
-                script, tags, modules);
+    private Scriptable spawn(Object opts) {
+        TopDownRuntime.Actor a = spawnActor(opts);
         return a == null ? null : entity(a);
     }
 
@@ -612,11 +959,14 @@ final class ScriptApi {
             o.values.put("left", Boolean.valueOf(engine.mouseNow[0] || engine.mousePressed[0]));
             o.values.put("middle", Boolean.valueOf(engine.mouseNow[1] || engine.mousePressed[1]));
             o.values.put("right", Boolean.valueOf(engine.mouseNow[2] || engine.mousePressed[2]));
-            o.values.put("wheel", Double.valueOf(0));
+            o.values.put("wheel", Double.valueOf(host.takeWheel()));
             return o;
         });
-        // 宿主没有暴露光标接口：Phase 1 记录意图但不改变系统光标（不崩、不报错）。
-        method(inputObj, "cursor", (cx, thisObj, args) -> null);
+        // 光标显示/隐藏：真的改 AWT 组件光标（之前是空实现 -> null，文档却承诺有行为）。
+        method(inputObj, "cursor", (cx, thisObj, args) -> {
+            host.setCursorVisible(ScriptJs.bool(ScriptJs.arg(args, 0), true));
+            return null;
+        });
         ScriptJs.put(bwe, "input", inputObj);
     }
 
@@ -920,7 +1270,12 @@ final class ScriptApi {
             ScriptableObject opts = argObj(ScriptJs.arg(args, 1));
             float volume = opts == null ? 1f : ScriptJs.fnum(ScriptJs.get(opts, "volume"), 1f);
             boolean loop = opts != null && ScriptJs.bool(ScriptJs.get(opts, "loop"), false);
-            return Double.valueOf(audio == null ? -1 : audio.play(name, volume, loop));
+            // pitch: 音高倍数（1 = 原调）。之前完全不读，d.ts/apiDocs 却声明了 —— 现在真的生效。
+            float pitch = opts == null ? 1f : ScriptJs.fnum(ScriptJs.get(opts, "pitch"), 1f);
+            if (!(pitch > 0f)) {
+                pitch = 1f;
+            }
+            return Double.valueOf(audio == null ? -1 : audio.play(name, volume, loop, pitch));
         });
         method(audioObj, "stop", (cx, thisObj, args) -> {
             if (audio != null) {
@@ -1252,6 +1607,36 @@ final class ScriptApi {
         e.setters.put("scaleY", v -> a.o.scaleY = ScriptJs.fnum(v, a.o.scaleY));
         e.getters.put("visible", () -> Boolean.valueOf(a.o.visible));
         e.setters.put("visible", v -> a.o.visible = ScriptJs.bool(v, a.o.visible));
+        e.getters.put("layer", () -> Double.valueOf(a.o.layer));
+        e.setters.put("layer", v -> a.o.layer = ScriptJs.inum(v, a.o.layer));
+        e.getters.put("locked", () -> Boolean.valueOf(lockedActors.containsKey(a)));
+        e.setters.put("locked", v -> {
+            if (ScriptJs.bool(v, false)) {
+                lockedActors.put(a, Boolean.TRUE);
+            } else {
+                lockedActors.remove(a);
+            }
+        });
+        e.getters.put("animMode", () -> a.o.animMode);
+        e.setters.put("animMode", v -> a.o.animMode = normalizeAnimMode(ScriptJs.str(v, a.o.animMode)));
+        e.getters.put("animFps", () -> Double.valueOf(a.o.animFps));
+        e.setters.put("animFps", v -> {
+            a.o.animFps = ScriptJs.fnum(v, a.o.animFps);
+            // 改 fps 时把帧锁定解除，否则会继续被 applyFrameLocks 钉住。
+            frameLocks.remove(a);
+        });
+        e.getters.put("asset", () -> a.o.assetName);
+        e.setters.put("asset", v -> {
+            String name = ScriptJs.str(v, a.o.assetName);
+            if (name != null && !name.isEmpty() && !name.equals(a.o.assetName)) {
+                if (host.applyAsset(a, name)) {
+                    // applyAsset 只换纹理，不改 assetName：这里同步，否则 e.asset 读回还是旧名。
+                    a.o.assetName = name;
+                } else {
+                    engine.log("精灵素材不存在：" + name);
+                }
+            }
+        });
         e.getters.put("alive", () -> Boolean.valueOf(!a.dead));
         e.getters.put("hp", () -> Double.valueOf(a.hp));
         e.setters.put("hp", v -> a.hp = ScriptJs.fnum(v, a.hp));
@@ -1269,6 +1654,16 @@ final class ScriptApi {
             o.values.put("w", Double.valueOf(host.drawWidth(a)));
             o.values.put("h", Double.valueOf(host.drawHeight(a)));
             return o;
+        });
+        e.setters.put("size", v -> {
+            Scriptable s = v instanceof Scriptable ? (Scriptable) v : null;
+            if (s == null) {
+                return;
+            }
+            float w = ScriptJs.fnum(ScriptJs.get(s, "w"), host.drawWidth(a));
+            float h = ScriptJs.fnum(ScriptJs.get(s, "h"), host.drawHeight(a));
+            a.o.halfW = w / 2f;
+            a.o.halfH = h / 2f;
         });
 
         method(e, "setPos", (c, thisObj, args) -> {
@@ -1358,6 +1753,163 @@ final class ScriptApi {
             }
             a.o.props.put(key, propText(ScriptJs.arg(args, 1)));
             return null;
+        });
+        // ---- props 整体读写 ----
+        method(e, "props", (c, thisObj, args) -> {
+            ScriptJs.Flex o = obj();
+            for (Map.Entry<String, String> entry : a.o.props.entrySet()) {
+                o.values.put(entry.getKey(), entry.getValue());
+            }
+            return o;
+        });
+        method(e, "setProps", (c, thisObj, args) -> {
+            ScriptableObject src = argObj(ScriptJs.arg(args, 0));
+            if (src == null) {
+                return null;
+            }
+            for (Object keyObj : ScriptableObject.getPropertyIds(src)) {
+                String k = Context.toString(keyObj);
+                a.o.props.put(k, propText(ScriptableObject.getProperty(src, k)));
+            }
+            return null;
+        });
+        // ---- 标签 ----
+        method(e, "addTag", (c, thisObj, args) -> {
+            String t = ScriptJs.str(ScriptJs.arg(args, 0), "");
+            if (!t.isEmpty() && !a.o.tags.contains(t)) {
+                a.o.tags.add(t);
+            }
+            return Boolean.valueOf(a.o.tags.contains(t));
+        });
+        method(e, "removeTag", (c, thisObj, args) -> {
+            String t = ScriptJs.str(ScriptJs.arg(args, 0), "");
+            boolean removed = !t.isEmpty() && a.o.tags.remove(t);
+            return Boolean.valueOf(removed);
+        });
+        method(e, "hasTag", (c, thisObj, args) ->
+                Boolean.valueOf(a.o.tags.contains(ScriptJs.str(ScriptJs.arg(args, 0), ""))));
+        method(e, "setTags", (c, thisObj, args) -> {
+            a.o.tags.clear();
+            Object v = ScriptJs.arg(args, 0);
+            if (v instanceof Scriptable) {
+                int n = lengthOf(v);
+                for (int i = 0; i < n; i++) {
+                    String t = ScriptJs.str(ScriptableObject.getProperty((Scriptable) v, i), "");
+                    if (!t.isEmpty() && !a.o.tags.contains(t)) {
+                        a.o.tags.add(t);
+                    }
+                }
+            }
+            return null;
+        });
+        // ---- 模块增删 ----
+        method(e, "addModule", (c, thisObj, args) -> {
+            String def = ScriptJs.str(ScriptJs.arg(args, 0), "");
+            if (def.isEmpty()) {
+                return Boolean.FALSE;
+            }
+            GameData.RtModule m = moduleOf(a, def);
+            if (m == null) {
+                m = new GameData.RtModule();
+                m.def = def;
+                m.when = "ALWAYS";
+                a.o.modules.add(m);
+            }
+            Object params = ScriptJs.arg(args, 1);
+            if (params instanceof ScriptableObject) {
+                for (Object keyObj : ScriptableObject.getPropertyIds((ScriptableObject) params)) {
+                    String k = Context.toString(keyObj);
+                    m.params.put(k, propText(ScriptableObject.getProperty((ScriptableObject) params, k)));
+                }
+            }
+            String when = ScriptJs.str(ScriptJs.arg(args, 2), "");
+            if (!when.isEmpty()) {
+                m.when = when;
+            }
+            // ⚠ 运行时加 combat.health 后必须重算血量，否则 hpMax 还停在上一次的值
+            // （与 spawnScripted 里的 applyHealthModule 同一份语义）。
+            engine.applyHealthModule(a);
+            return Boolean.TRUE;
+        });
+        method(e, "removeModule", (c, thisObj, args) -> {
+            GameData.RtModule m = moduleOf(a, ScriptJs.str(ScriptJs.arg(args, 0), ""));
+            if (m == null) {
+                return Boolean.FALSE;
+            }
+            a.o.modules.remove(m);
+            Map<String, ScriptableObject> cache = moduleWrappers.get(a);
+            if (cache != null) {
+                cache.remove(m.def);
+            }
+            // 移掉血量模块后 hpMax 不该再跟着旧值走：回到"无模块"语义（保留当前值不重置）。
+            return Boolean.TRUE;
+        });
+        // ---- 父子关系 ----
+        e.getters.put("parent", () -> {
+            TopDownRuntime.Actor p = parentOf(a);
+            return p == null || p.dead ? null : entity(p);
+        });
+        e.setters.put("parent", v -> setParent(a, v));
+        method(e, "children", (c, thisObj, args) -> {
+            List<Scriptable> list = new ArrayList<Scriptable>();
+            for (TopDownRuntime.Actor child : childrenOf(a)) {
+                list.add(entity(child));
+            }
+            return array(list);
+        });
+        // ---- 染色 / 透明度 ----
+        method(e, "setColor", (c, thisObj, args) -> {
+            Object first = ScriptJs.arg(args, 0);
+            float r;
+            float g;
+            float b;
+            float alpha = ScriptJs.fnum(ScriptJs.arg(args, 3), 1f);
+            if (first instanceof Scriptable && args.length <= 2) {
+                // setColor({r, g, b, a}) 也认
+                Scriptable o = (Scriptable) first;
+                r = ScriptJs.fnum(ScriptJs.get(o, "r"), 1f);
+                g = ScriptJs.fnum(ScriptJs.get(o, "g"), 1f);
+                b = ScriptJs.fnum(ScriptJs.get(o, "b"), 1f);
+                alpha = ScriptJs.fnum(ScriptJs.get(o, "a"), 1f);
+            } else {
+                r = ScriptJs.fnum(first, 1f);
+                g = ScriptJs.fnum(ScriptJs.arg(args, 1), 1f);
+                b = ScriptJs.fnum(ScriptJs.arg(args, 2), 1f);
+            }
+            // 0~1 与 0~255 都认（任意通道 > 1 视作 0~255）。
+            if (r > 1f || g > 1f || b > 1f || alpha > 1f) {
+                r /= 255f;
+                g /= 255f;
+                b /= 255f;
+                alpha /= 255f;
+            }
+            host.setActorTint(a, new float[]{clamp01(r), clamp01(g), clamp01(b), clamp01(alpha)});
+            return null;
+        });
+        method(e, "setAlpha", (c, thisObj, args) -> {
+            float v = ScriptJs.fnum(ScriptJs.arg(args, 0), 1f);
+            if (v > 1f) {
+                v /= 255f;
+            }
+            float[] cur = a.tint;
+            float r = cur == null ? 1f : cur[0];
+            float g = cur == null ? 1f : cur[1];
+            float b = cur == null ? 1f : cur[2];
+            host.setActorTint(a, new float[]{r, g, b, clamp01(v)});
+            return null;
+        });
+        method(e, "clearColor", (c, thisObj, args) -> {
+            host.setActorTint(a, null);
+            return null;
+        });
+        e.getters.put("color", () -> {
+            float[] t = a.tint;
+            ScriptJs.Flex o = obj();
+            o.values.put("r", Double.valueOf(t == null ? 1f : t[0]));
+            o.values.put("g", Double.valueOf(t == null ? 1f : t[1]));
+            o.values.put("b", Double.valueOf(t == null ? 1f : t[2]));
+            o.values.put("a", Double.valueOf(t == null ? 1f : t[3]));
+            return o;
         });
         method(e, "hasModule", (c, thisObj, args) ->
                 Boolean.valueOf(moduleOf(a, ScriptJs.str(ScriptJs.arg(args, 0), "")) != null));
@@ -1637,7 +2189,31 @@ final class ScriptApi {
         }
         if (a.dead) {
             entities.remove(a);
+            wrapperActor.remove(entities.get(a));
+            moduleWrappers.remove(a);
+            lockedActors.remove(a);
+            parents.remove(a);
+            // 父子：被销毁节点若还有子级，子级一并脱钩（不级联销毁，避免意外连锁）。
+            List<TopDownRuntime.Actor> orphans = new ArrayList<TopDownRuntime.Actor>();
+            for (Map.Entry<TopDownRuntime.Actor, TopDownRuntime.Actor> e : parents.entrySet()) {
+                if (e.getValue() == a) {
+                    orphans.add(e.getKey());
+                }
+            }
+            for (TopDownRuntime.Actor orphan : orphans) {
+                parents.remove(orphan);
+            }
+            frameLocks.remove(a);
+            entityHandlers.remove(a);
+            if (prefabs != null) {
+                prefabs.onActorDestroyed(a);
+            }
         }
+    }
+
+    /** 0~1 夹取（setColor/setAlpha 用）。 */
+    private static float clamp01(float v) {
+        return v < 0f ? 0f : (v > 1f ? 1f : v);
     }
 
     // ---------------- ctx ----------------

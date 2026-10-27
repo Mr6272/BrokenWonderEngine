@@ -10,6 +10,7 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -61,6 +62,21 @@ final class ScriptRender {
 
     /** 文字纹理缓存：key = 字号|颜色|阴影|内容。 */
     private final Map<String, TopDownRuntime.Texture> textCache = new HashMap<String, TopDownRuntime.Texture>();
+    /**
+     * LRU 顺序表（最近使用的在最后）。{@link #textCache} 单靠 HashMap 无上限：
+     * HUD 里 {@code "FPS 62"}、{@code "金币 37"}、计时器这类<b>每秒都变</b>的文本
+     * 会让缓存无限增长 —— 每一条都是「一张 AWT 图片 + 一个 GL 纹理」，
+     * 跑几分钟就是几千张纹理、几十 MB 显存，而且是纯泄漏（永不释放）。
+     * 这里加硬上限 + 淘汰，把缓存变成真正的有界缓存。
+     */
+    private static final int TEXT_CACHE_MAX = 256;
+    private final LinkedHashMap<String, TopDownRuntime.Texture> textLru =
+            new LinkedHashMap<String, TopDownRuntime.Texture>(16, 0.75f, true);
+    /** 被淘汰的纹理：登记给宿主，下一帧在 GL 线程里真正 glDeleteTextures。 */
+    private final java.util.ArrayDeque<TopDownRuntime.Texture> evicted =
+            new java.util.ArrayDeque<TopDownRuntime.Texture>();
+    /** 累计创建过的文本纹理数（只增不减，用于证明「有界」而不是「没创建」）。 */
+    private int textCreated;
 
     ScriptRender(ScriptEngine engine) {
         this.engine = engine;
@@ -219,6 +235,7 @@ final class ScriptRender {
         String key = fs + "|" + c.color + "|" + (c.shadow ? "1" : "0") + "|" + c.text;
         TopDownRuntime.Texture cached = textCache.get(key);
         if (cached != null) {
+            textLru.get(key); // 触碰：把这个 key 移到 LRU 末尾
             return cached;
         }
         BufferedImage img = textImage(c.text, fs, parseColor(c.color, Color.WHITE), c.shadow);
@@ -229,11 +246,59 @@ final class ScriptRender {
             TopDownRuntime.Texture t = host.textureFromImage(img);
             if (t != null) {
                 textCache.put(key, t);
+                textLru.put(key, t);
+                textCreated++;
+                trimTextCache();
             }
             return t;
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /** 超上限时按 LRU 淘汰，并把旧纹理登记给宿主销毁（避免显存泄漏）。 */
+    private void trimTextCache() {
+        while (textCache.size() > TEXT_CACHE_MAX) {
+            java.util.Iterator<Map.Entry<String, TopDownRuntime.Texture>> it =
+                    textLru.entrySet().iterator();
+            if (!it.hasNext()) {
+                return;
+            }
+            Map.Entry<String, TopDownRuntime.Texture> eldest = it.next();
+            it.remove();
+            textCache.remove(eldest.getKey());
+            if (eldest.getValue() != null) {
+                evicted.add(eldest.getValue());
+            }
+        }
+    }
+
+    /** 宿主每帧在 GL 线程里调：把淘汰掉的文本纹理真正删掉。 */
+    void releaseEvicted(GL2 gl) {
+        if (evicted.isEmpty() || gl == null) {
+            return;
+        }
+        while (!evicted.isEmpty()) {
+            TopDownRuntime.Texture t = evicted.poll();
+            if (t != null && t.id >= 0) {
+                int[] ids = {t.id};
+                try {
+                    gl.glDeleteTextures(1, ids, 0);
+                } catch (Throwable ignored) {
+                }
+                t.id = -1;
+            }
+        }
+    }
+
+    /** 自检/基准专用：当前文本纹理缓存条目数（有界缓存，稳定值应 ≤ 256）。 */
+    int debugTextCacheSize() {
+        return textCache.size();
+    }
+
+    /** 自检/基准专用：累计创建过的文本纹理数（证明「确实在创建」而不是缓存假象）。 */
+    int debugTextCreated() {
+        return textCreated;
     }
 
     private static Font font(int size) {

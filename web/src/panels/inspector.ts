@@ -10,7 +10,7 @@
  */
 
 import type { SceneObject } from "../core/model.ts";
-import { scriptLang, scriptNamesOfLang } from "../core/model.ts";
+import { scriptLang, scriptNamesOfLang, findPrefabOf, resetObjectToPrefab } from "../core/model.ts";
 import { moduleDef, categoryOf, moduleSummary, makeInstance } from "../data/modules.ts";
 import { store } from "../core/store.ts";
 import { el, input, button, select, switchToggle, fieldRow, numText } from "../core/dom.ts";
@@ -44,6 +44,9 @@ export function renderInspector(host: HTMLElement): void {
 
   const obj = sel[0];
   wrap.appendChild(identityCard(obj));
+  // 只有「来自预制体」的对象才加这张卡片，普通对象不占位置
+  const linkCard = prefabLinkCard(obj);
+  if (linkCard) wrap.appendChild(linkCard);
   wrap.appendChild(placeCard(obj));
   wrap.appendChild(modulesCard(obj));
   wrap.appendChild(scriptCard(obj));
@@ -135,6 +138,86 @@ function sceneScriptCard(): HTMLElement {
   );
   box.appendChild(row);
   return cardBox("场景脚本 Scene Script", box, I.script);
+}
+
+// ---------------- 预制体链接 ----------------
+
+/**
+ * 「来自预制体」卡片。
+ *
+ * 只在这一对象确实来自某个预制体时才出现，不占普通对象的位置。
+ * 卡片职责非常明确：显示链接 + 两个手动操作。
+ *
+ * **v1 不做自动同步**：改模板不会回头改这里，改这里也不会污染模板。
+ * 这一句必须写在卡片上 —— 否则用户会按 Unity 的习惯预期「改模板就全同步」，
+ * 然后发现没生效却不知道该点哪个按钮。
+ */
+function prefabLinkCard(obj: SceneObject): HTMLElement | null {
+  const prefab = findPrefabOf(store.project, obj);
+  const linkedId = obj.prefabId;
+
+  // 没链接：不显示卡片（普通对象不需要被提醒「你没有预制体」）
+  if (!linkedId) return null;
+
+  // 链接指向的模板被删了：显示成明确的失效状态，而不是静默当没链接
+  if (!prefab) {
+    const box = el("div", { class: "col" });
+    box.appendChild(
+      el("div", { class: "hint" },
+        `这个对象原先来自预制体 ${linkedId.slice(0, 8)}…，但那个模板已经被删掉了。对象本身完好，可以继续用。`)
+    );
+    box.appendChild(
+      button("断开这个失效链接", () => {
+        obj.prefabId = null;
+        store.markDirty();
+        window.dispatchEvent(new CustomEvent("bwe:refresh"));
+      }, { size: "sm", variant: "outline" })
+    );
+    return cardBox("预制体链接 Prefab（已失效）", box, I.puzzle);
+  }
+
+  const box = el("div", { class: "col" });
+  box.appendChild(
+    el("div", { class: "hint" },
+      `这个对象是从预制体「${prefab.name}」放出来的。改模板不会自动改它 —— `
+      + "想回到模板的样子，点下面的「还原为默认值」。")
+  );
+
+  const row = el("div", { class: "row tight" });
+  row.appendChild(
+    button("还原为预制体默认值", () => {
+      void confirmDialog(
+        `把「${obj.name || "这个对象"}」恢复成预制体「${prefab.name}」的样子？`,
+        "素材、模块、标签、属性、缩放、碰撞体都会按模板重置。"
+          + "对象自己的名字、位置和图层会保留。这一步不能撤销。",
+        "还原",
+        true
+      ).then((yes) => {
+        if (!yes) return;
+        resetObjectToPrefab(obj, prefab);
+        store.markDirty();
+        ok(`已还原成预制体「${prefab.name}」的默认值`);
+        window.dispatchEvent(new CustomEvent("bwe:refresh"));
+        window.dispatchEvent(new CustomEvent("bwe:repaint"));
+      });
+    }, {
+      size: "sm",
+      iconPath: I.undo,
+      title: "把外观与模块恢复成模板的样子（保留位置、名字、图层）"
+    })
+  );
+  row.appendChild(
+    button("断开链接", () => {
+      obj.prefabId = null;
+      store.markDirty();
+      info("已断开：现在它是普通对象了，改模板不会再和它有半点关系");
+      window.dispatchEvent(new CustomEvent("bwe:refresh"));
+      window.dispatchEvent(new CustomEvent("bwe:repaint"));
+    }, { size: "sm", variant: "ghost", title: "不再跟随这个预制体（对象本身不做任何改动）" })
+  );
+  box.appendChild(row);
+
+  return cardBox("预制体链接 Prefab", box, I.puzzle);
 }
 
 // ---------------- 身份 ----------------
@@ -301,11 +384,20 @@ function placeCard(obj: SceneObject): HTMLElement {
     labeledSwitch("锁定 Locked", obj.locked, (v) => {
       obj.locked = v;
       store.markDirty();
-      window.dispatchEvent(new CustomEvent("bwe:hint", { detail: v ? "已锁定，画布上点不到它了" : "已解锁" }));
+      window.dispatchEvent(new CustomEvent("bwe:hint", { detail: v ? "已锁定，画布上点不到它了（Alt+点击可选中）" : "已解锁" }));
       window.dispatchEvent(new CustomEvent("bwe:repaint"));
+      window.dispatchEvent(new CustomEvent("bwe:refresh"));
     })
   );
   box.appendChild(toggles);
+
+  // 锁定状态给一句明确的"怎么回来"，否则用户会以为对象卡死了
+  if (obj.locked) {
+    const tip = el("div", { class: "hint" });
+    tip.style.marginTop = "6px";
+    tip.textContent = "这个对象是锁定的：画布上普通点击点不到它。按住 Alt 在画布上点它就能重新选中；也可以在画布空白处右键「解锁全部对象」。";
+    box.appendChild(tip);
+  }
 
   // 动画设置
   const sprite = store.findAsset(obj.assetId);

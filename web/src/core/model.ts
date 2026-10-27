@@ -144,6 +144,14 @@ export interface SceneObject {
   tags: string[];
   /** 父对象 id：用于把地面块挂到关卡根节点下。null 表示挂在场景根下 */
   parentId?: string | null;
+  /**
+   * 这个对象是从哪个预制体放出来的（PrefabDef.id）。
+   *
+   * v1 只用于两件事：画布/Inspector 上的「来自某某预制体」标记，
+   * 以及「还原为预制体默认值」「断开预制体链接」两个手动操作。
+   * **不做自动同步**：改了预制体不会改已放置的对象，反之亦然（Unity 的 override 语义太复杂，v1 明确不做）。
+   */
+  prefabId?: string | null;
 }
 
 export interface SceneModel {
@@ -197,6 +205,46 @@ export function defaultScriptFile(name: string, lang: ScriptLang): string {
   return `Scripts/${name}.${lang === "js" ? "js" : "yarn"}`;
 }
 
+/**
+ * 预制体（Prefab）—— 可以反复往场景里摆放的「对象模板」。
+ *
+ * 与 SceneObject 的核心差异只有三点：
+ *   1. 没有 x / y：位置是放置那一刻由用户或随机散布决定的偏移（见 spawnJitter）；
+ *   2. 没有 id / layerId / visible / locked / parentId：这些是「放进场景之后」才有意义的东西；
+ *   3. 多一个 name（也就是运行期 `bwe.prefab.spawn("小怪")` 用的 key）和一行说明。
+ *
+ * 其余字段与 SceneObject 同名同义，导出时直接改写成 boot.json 的 `prefabs[]`。
+ */
+export interface PrefabDef {
+  id: string;
+  /** 唯一名，运行期 bwe.prefab.define / spawn 用的 key */
+  name: string;
+  /** 一行说明：这个模板是干什么用的 */
+  blurb?: string;
+  /** 模板本体：对象类型 */
+  kind: GameObjectKind;
+  assetId: string;
+  /** 排序层级（与 SceneObject.z 同义） */
+  z: number;
+  /** 缺省图层在场景里的序号，运行时按它排队；0 表示默认 */
+  layer?: number;
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
+  /** 碰撞体半宽半高；0 = 不参与碰撞，绘制尺寸走素材尺寸 */
+  halfW: number;
+  halfH: number;
+  animMode: string;
+  animFps: number;
+  tags: string[];
+  modules: ModuleInstance[];
+  props: Record<string, string>;
+  /** 对象脚本名（script.js 模块 params.script 的值，运行期按名字查 scripts[]） */
+  script: string;
+  /** 放置时的随机位置散布：x/y 各自在 ±该值内偏移。全 0 表示固定落点 */
+  spawnJitter?: { x: number; y: number };
+}
+
 /** 规则包（模块组合的封装）。 */
 export interface RulePack {
   id: string;
@@ -217,6 +265,8 @@ export interface Project {
   gridH: number;
   scenes: SceneModel[];
   assets: AssetEntry[];
+  /** 预制体模板。旧工程没有这个字段，normalizeProject 会补成空数组 */
+  prefabs: PrefabDef[];
   packs: RulePack[];
   scripts: Record<string, ScriptEntry>;
   variables: Record<string, string>;
@@ -263,6 +313,7 @@ export function createProject(name = "未命名工程"): Project {
     gridH: 40,
     scenes: [createScene("场景 1")],
     assets: [],
+    prefabs: [],
     packs: [],
     scripts: {},
     variables: {},
@@ -292,8 +343,157 @@ export function createObject(kind: GameObjectKind, x: number, y: number): SceneO
     modules: [],
     props: {},
     tags: [],
-    parentId: null
+    parentId: null,
+    prefabId: null
   };
+}
+
+/** 空预制体。名字留空，由调用方填一个场景内唯一的名字。 */
+export function createPrefab(name = "新预制体"): PrefabDef {
+  return {
+    id: uid(),
+    name,
+    blurb: "",
+    kind: "PROP",
+    assetId: "",
+    z: 0,
+    layer: 0,
+    rotation: 0,
+    scaleX: 1,
+    scaleY: 1,
+    halfW: 0,
+    halfH: 0,
+    animMode: "默认",
+    animFps: 8,
+    tags: [],
+    modules: [],
+    props: {},
+    script: "",
+    spawnJitter: { x: 0, y: 0 }
+  };
+}
+
+/** 深拷贝一份模块实例列表（预制体和场景对象之间互不共享引用）。 */
+export function cloneModules(list: ModuleInstance[]): ModuleInstance[] {
+  return list.map((m) => ({
+    defId: m.defId,
+    label: m.label,
+    trigger: m.trigger ?? null,
+    values: { ...m.values },
+    enabled: m.enabled,
+    collapsed: m.collapsed
+  }));
+}
+
+/**
+ * 从场景对象抓一个预制体（坐标归零）。
+ *
+ * 抓的是「模板」不是「这一份」：x / y / layerId / visible / locked / parentId
+ * 这些只在具体场景里才有意义的东西一律丢掉，剩下的才是可复用的部分。
+ */
+export function prefabFromObject(obj: SceneObject, name: string): PrefabDef {
+  return {
+    id: uid(),
+    name,
+    blurb: "",
+    kind: obj.kind,
+    assetId: obj.assetId,
+    z: obj.z,
+    layer: 0,
+    rotation: obj.rotation,
+    scaleX: obj.scaleX,
+    scaleY: obj.scaleY,
+    halfW: obj.halfW,
+    halfH: obj.halfH,
+    animMode: obj.animMode,
+    animFps: obj.animFps,
+    tags: [...obj.tags],
+    modules: cloneModules(obj.modules),
+    props: { ...obj.props },
+    // 对象脚本：scene 里它挂在 script.js 模块的 values.script 上，模板里单独存一份，
+    // 方便面板显示与运行期 define 时不必再翻模块参数。
+    script: obj.modules.find((m) => m.defId === "script.js")?.values["script"] ?? "",
+    spawnJitter: { x: 0, y: 0 }
+  };
+}
+
+/**
+ * 用预制体在场景里放一个对象。
+ *
+ * 位置由调用方给（通常是视图中心或鼠标落点）；模块/属性/标签全部深拷贝，
+ * 之后场景对象和预制体各自独立 —— 改预制体不会回头影响已经放下去的对象（v1 无自动同步）。
+ */
+export function objectFromPrefab(
+  prefab: PrefabDef,
+  x: number,
+  y: number,
+  layerId: string
+): SceneObject {
+  const obj = createObject(prefab.kind, x, y);
+  obj.name = prefab.name;
+  obj.z = prefab.z;
+  obj.rotation = prefab.rotation;
+  obj.scaleX = prefab.scaleX;
+  obj.scaleY = prefab.scaleY;
+  obj.halfW = prefab.halfW;
+  obj.halfH = prefab.halfH;
+  obj.assetId = prefab.assetId;
+  obj.animMode = prefab.animMode;
+  obj.animFps = prefab.animFps;
+  obj.tags = [...prefab.tags];
+  obj.modules = cloneModules(prefab.modules);
+  obj.props = { ...prefab.props };
+  obj.layerId = layerId;
+  obj.prefabId = prefab.id;
+  return obj;
+}
+
+/**
+ * 把场景对象还原成预制体默认值。
+ *
+ * 保留对象自己的身份与位置（id / name / x / y / layerId / parentId），
+ * 其余（素材、模块、标签、属性、动画、缩放、碰撞体）全部按预制体重置。
+ * 名字只在对象还没起名时才跟随，避免把用户起的名字冲掉。
+ */
+export function resetObjectToPrefab(obj: SceneObject, prefab: PrefabDef): void {
+  obj.kind = prefab.kind;
+  obj.z = prefab.z;
+  obj.rotation = prefab.rotation;
+  obj.scaleX = prefab.scaleX;
+  obj.scaleY = prefab.scaleY;
+  obj.halfW = prefab.halfW;
+  obj.halfH = prefab.halfH;
+  obj.assetId = prefab.assetId;
+  obj.animMode = prefab.animMode;
+  obj.animFps = prefab.animFps;
+  obj.tags = [...prefab.tags];
+  obj.modules = cloneModules(prefab.modules);
+  obj.props = { ...prefab.props };
+  if (!obj.name) obj.name = prefab.name;
+}
+
+/** 找到对象所属的预制体（断链的、被删掉的返回 undefined）。 */
+export function findPrefabOf(p: Project | null | undefined, obj: SceneObject): PrefabDef | undefined {
+  const id = obj.prefabId;
+  if (!id) return undefined;
+  return (p?.prefabs ?? []).find((x) => x.id === id);
+}
+
+/** 所有预制体名字（「从场景对象创建」时要避开重名）。 */
+export function prefabNames(p: Project | null | undefined): string[] {
+  return (p?.prefabs ?? []).map((x) => x.name);
+}
+
+/** 生成一个不与现有预制体重名的新名字：小怪 → 小怪 2 → 小怪 3 */
+export function uniquePrefabName(p: Project | null | undefined, base: string): string {
+  const taken = new Set(prefabNames(p));
+  const stem = (base || "新预制体").trim() || "新预制体";
+  if (!taken.has(stem)) return stem;
+  for (let i = 2; i < 1000; i++) {
+    const next = `${stem} ${i}`;
+    if (!taken.has(next)) return next;
+  }
+  return `${stem} ${uid().slice(0, 4)}`;
 }
 
 // ---------------- 查询与校验 ----------------
@@ -355,6 +555,7 @@ export function normalizeProject(raw: unknown): Project {
     gridH: p.gridH ?? 40,
     scenes: [],
     assets: [],
+    prefabs: [],
     packs: Array.isArray(p.packs) ? p.packs : [],
     scripts: normalizeScripts(p.scripts),
     variables: p.variables ?? {},
@@ -407,7 +608,10 @@ export function normalizeProject(raw: unknown): Project {
           : [],
         props: o.props ?? {},
         tags: Array.isArray(o.tags) ? o.tags : [],
-        parentId: o.parentId ?? null
+        parentId: o.parentId ?? null,
+        // 旧工程没有这个字段 → null（不来自任何预制体）。有但指向已删预制体也保留，
+        // 由面板显示成「链接已失效」，不在这里静默清掉（用户可能只是想先删模板再补回来）。
+        prefabId: typeof o.prefabId === "string" && o.prefabId ? o.prefabId : null
       });
     }
     out.scenes.push(sc);
@@ -439,6 +643,63 @@ export function normalizeProject(raw: unknown): Project {
       note: a.note
     });
   }
+
+  // ---------- 预制体 ----------
+  // 旧工程没有 prefabs 字段：补成空数组，打开不报错、保存后字段自动齐全。
+  // 逐字段兜底照 scenes / assets 的写法来，宁可给默认值也不让 undefined 漏到面板里。
+  const prefabSeen = new Set<string>();
+  const prefabNameSeen = new Set<string>();
+  for (const raw of Array.isArray(p.prefabs) ? p.prefabs : []) {
+    if (!raw || typeof raw !== "object") continue;
+    const pf = raw as Partial<PrefabDef>;
+    let id = typeof pf.id === "string" && pf.id ? pf.id : uid();
+    if (prefabSeen.has(id)) id = uid();
+    prefabSeen.add(id);
+    // 名字是运行期 spawn 的 key，必须非空且不重名；重名的后来者加序号而不是丢弃。
+    let name = typeof pf.name === "string" && pf.name.trim() ? pf.name.trim() : "预制体";
+    if (prefabNameSeen.has(name)) {
+      let i = 2;
+      while (prefabNameSeen.has(`${name} ${i}`)) i++;
+      name = `${name} ${i}`;
+    }
+    prefabNameSeen.add(name);
+    out.prefabs.push({
+      id,
+      name,
+      blurb: typeof pf.blurb === "string" ? pf.blurb : "",
+      kind: pf.kind || "PROP",
+      assetId: typeof pf.assetId === "string" ? pf.assetId : "",
+      z: typeof pf.z === "number" ? pf.z : 0,
+      layer: typeof pf.layer === "number" ? Math.round(pf.layer) : 0,
+      rotation: typeof pf.rotation === "number" ? pf.rotation : 0,
+      scaleX: typeof pf.scaleX === "number" ? pf.scaleX : 1,
+      scaleY: typeof pf.scaleY === "number" ? pf.scaleY : 1,
+      halfW: typeof pf.halfW === "number" ? pf.halfW : 0,
+      halfH: typeof pf.halfH === "number" ? pf.halfH : 0,
+      animMode: typeof pf.animMode === "string" && pf.animMode ? pf.animMode : "默认",
+      animFps: typeof pf.animFps === "number" ? pf.animFps : 8,
+      tags: Array.isArray(pf.tags) ? pf.tags.filter((t): t is string => typeof t === "string") : [],
+      modules: Array.isArray(pf.modules)
+        ? pf.modules
+          .filter((m) => m && typeof m === "object")
+          .map((m) => ({
+            defId: m.defId,
+            label: m.label,
+            trigger: m.trigger ?? null,
+            values: m.values ?? {},
+            enabled: m.enabled !== false,
+            collapsed: m.collapsed !== false
+          }))
+        : [],
+      props: pf.props && typeof pf.props === "object" ? pf.props : {},
+      script: typeof pf.script === "string" ? pf.script : "",
+      spawnJitter: {
+        x: typeof pf.spawnJitter?.x === "number" ? pf.spawnJitter.x : 0,
+        y: typeof pf.spawnJitter?.y === "number" ? pf.spawnJitter.y : 0
+      }
+    });
+  }
+
   return out;
 }
 

@@ -16,6 +16,7 @@
  */
 
 import type { SceneObject } from "../core/model.ts";
+import { objectFromPrefab } from "../core/model.ts";
 import { store } from "../core/store.ts";
 import { contextMenu, type MenuItem } from "../ui/toast.ts";
 import { clamp } from "../core/dom.ts";
@@ -23,6 +24,14 @@ import { loadFrame } from "../data/assets.ts";
 import { sizeOf, boundsOf, paintObject, paintGrid, type PaintCtx } from "./painter.ts";
 
 type Mode = "none" | "move" | "marquee" | "pan" | "zone" | "scale";
+
+/**
+ * 预制体拖放的 MIME。
+ *
+ * 放这里而不是 core/dom.ts：core 里那几个 DND_* 是「素材 / 模块 / 规则包」，
+ * 预制体只有画布与预制体面板两边用，跟着画布走更不容易被误改。
+ */
+export const DND_PREFAB = "application/x-bwe-prefab";
 
 interface Point2 {
   x: number;
@@ -71,6 +80,20 @@ export class CanvasView {
   private pressPositions = new Map<string, Point2>();
   private marquee: { x: number; y: number; w: number; h: number } | null = null;
   private zoneRect: { x: number; y: number; w: number; h: number } | null = null;
+
+  /**
+   * 点击 / 拖动 的区分。
+   *
+   * moved 只在位移超过阈值时才会变 true，但"按下即进入 move 模式"本身没有错——
+   * 错的是松手时不管有没有真的移动都去提交位移，于是"点一下"也会被当成拖动。
+   * 这里额外记一个 pressedObject：松手时若 moved 仍为 false，就按"点击"处理，
+   * 走选择（含同位置轮换选择）而不是落位。
+   */
+  private pressedObject: SceneObject | null = null;
+  /** 上次"干净点击"的位置键与时间，用于同位置重复点击时轮换对象 */
+  private lastClickKey = "";
+  private lastClickAt = 0;
+  private static readonly CLICK_REPEAT_MS = 450;
 
   private hoverName = "";
   /** 光标当前所在的世界坐标（HUD 与状态栏用） */
@@ -148,6 +171,16 @@ export class CanvasView {
     this.camX = x;
     this.camY = y;
     this.requestPaint();
+  }
+
+  /**
+   * 当前视图正中的世界坐标。
+   *
+   * 「放置预制体」要用它：用户点的是「放到场景里」，期望落在眼前看得见的中间，
+   * 而不是地图原点（0,0）那种拖半天也找不到的地方。
+   */
+  viewCenterWorld(): Point2 {
+    return this.screenToWorld({ x: this.canvas.clientWidth / 2, y: this.canvas.clientHeight / 2 });
   }
 
   screenToWorld(p: Point2): Point2 {
@@ -270,6 +303,9 @@ export class CanvasView {
       if (layer && !layer.visible) continue;
       if (!o.visible) continue;
       paintObject(g, o, pctx, this.worldToScreen.bind(this), this.zoom);
+      // 预制体链接角标：画在对象外面（painter 不认 prefabId，这是画布层的叠加信息）。
+      // 不做自动同步，所以它只是「告诉你这个对象是从模板放出来的」。
+      if (o.prefabId && this.zoom > 0.5) this.drawPrefabBadge(g, o);
     }
 
     // 智能对齐参考线
@@ -359,6 +395,30 @@ export class CanvasView {
 
     this.hudL.textContent = this.hudText();
     this.hudR.textContent = this.snapHint || this.hoverName;
+  }
+
+  /**
+   * 预制体链接角标：对象右上角一个小方块。
+   *
+   * 放在画布而不是 painter.ts：painter 只认同 SceneObject 的绘制字段（且有自己的导出/缩略图
+   * 复用需求），「来自哪个预制体」是编辑器层的元信息，随画布出现即可。
+   * 紫色 = 链接完好；灰色 = 模板已删（对象本身仍然能用）。
+   */
+  private drawPrefabBadge(g: CanvasRenderingContext2D, o: SceneObject): void {
+    const box = boundsOf(o, store.project!);
+    const size = sizeOf(o, store.project!);
+    const topRight = this.worldToScreen(box.x + size.w, box.y);
+    const linked = store.project?.prefabs.some((p) => p.id === o.prefabId) === true;
+    const s = Math.max(7, Math.min(11, 9 * this.zoom));
+    const x = topRight.x - s;
+    const y = topRight.y - s - 1;
+    g.save();
+    g.fillStyle = linked ? "#8b7cf6" : "rgba(140,150,170,0.55)";
+    g.strokeStyle = "rgba(8,10,14,0.8)";
+    g.lineWidth = 1;
+    g.fillRect(x, y, s, s);
+    g.strokeRect(x + 0.5, y + 0.5, s - 1, s - 1);
+    g.restore();
   }
 
   private drawScaleHandles(g: CanvasRenderingContext2D): void {
@@ -504,10 +564,18 @@ export class CanvasView {
       return;
     }
 
-    const hit = this.pick(this.pressWorld);
+    const hit = this.pick(this.pressWorld, e.altKey);
     if (hit) {
+      // 选中立即生效：否则"按住一个没选中的对象直接拖走"会拖不动。
+      // 但这次按下到底是"点击"还是"拖动"，要等松手才知道（见 onUp）。
       if (e.shiftKey) store.select(hit, true);
       else if (!store.isSelected(hit)) store.select(hit);
+
+      this.pressedObject = hit;
+      if (hit.locked) {
+        // Alt 点中锁定对象时给明确提示，否则用户会以为"点不动是坏了"
+        this.flashHud(`「${hit.name || hit.kind}」是锁定的　右侧属性面板可取消锁定`);
+      }
       this.mode = "move";
       this.pressPositions.clear();
       for (const o of store.selection) {
@@ -516,9 +584,59 @@ export class CanvasView {
       return;
     }
 
+    this.pressedObject = null;
     if (!e.shiftKey) store.clearSelection();
     this.mode = "marquee";
     this.marquee = { x: this.pressWorld.x, y: this.pressWorld.y, w: 0, h: 0 };
+  }
+
+  /**
+   * 一次"干净点击"（按下与松开之间没有实质位移）的处理。
+   *
+   * 同一位置连续点击时轮换选择：每次往下剥一层，从最上面那个开始，
+   * 到底之后再回到最上面。这样叠在一起的对象不用挪开也能逐个选中。
+   */
+  private handleClick(hit: SceneObject): void {
+    const now = performance.now();
+    const key = `${Math.round(this.pressWorld.x / 6)}:${Math.round(this.pressWorld.y / 6)}`;
+    const repeat = key === this.lastClickKey && now - this.lastClickAt < CanvasView.CLICK_REPEAT_MS;
+
+    if (repeat) {
+      const stack = this.pickStack(this.pressWorld);
+      const cur = store.selection[0];
+      const i = cur ? stack.indexOf(cur) : -1;
+      const next = stack[i < 0 ? 0 : (i + 1) % stack.length];
+      if (next) {
+        store.select(next);
+        if (stack.length > 1) {
+          this.flashHud(`「${next.name || next.kind}」　同位置 ${stack.length} 个，再点换下一个`);
+        }
+      }
+    }
+
+    this.lastClickKey = key;
+    this.lastClickAt = now;
+    void hit;
+  }
+
+  /** 该位置所有可点对象，从最上层到最下层。 */
+  private pickStack(world: Point2, includeLocked = false): SceneObject[] {
+    const scene = store.scene;
+    const project = store.project;
+    if (!scene || !project) return [];
+    const ordered = orderObjects(scene);
+    const out: SceneObject[] = [];
+    for (let i = ordered.length - 1; i >= 0; i--) {
+      const o = ordered[i];
+      if (!o.visible) continue;
+      if (!includeLocked && o.locked) continue;
+      const layer = scene.layers.find((l) => l.id === o.layerId);
+      if (layer && !layer.visible) continue;
+      if (layer && !includeLocked && layer.locked) continue;
+      const b = boundsOf(o, project);
+      if (world.x >= b.x && world.x <= b.x + b.w && world.y >= b.y && world.y <= b.y + b.h) out.push(o);
+    }
+    return out;
   }
 
   private onMove = (e: MouseEvent): void => {
@@ -704,6 +822,13 @@ export class CanvasView {
 
     switch (wasMode) {
       case "move": {
+        // 没有真正移动 → 这是一次点击，不是拖动。
+        // 关键：不能把 overrides 里的 0 位移提交上去，否则"点一下"也会写脏数据 + 记一次撤销。
+        if (!this.moved) {
+          if (this.pressedObject) this.handleClick(this.pressedObject);
+          this.overrides.clear();
+          break;
+        }
         if (this.overrides.size) {
           const scene = store.scene;
           if (scene) {
@@ -810,6 +935,7 @@ export class CanvasView {
   };
 
   private blankMenu(world: Point2): MenuItem[] {
+    const lockedCount = store.scene?.objects.filter((o) => o.locked).length ?? 0;
     return [
       {
         label: "在这里放一个物件",
@@ -824,6 +950,22 @@ export class CanvasView {
         onClick: () => this.createAt("SPAWN", world)
       },
       { divider: true },
+      // 锁定对象的回头路：锁定后在画布上点不到它，必须留一个不用先选中它的解锁入口。
+      // 更精细的方式：按住 Alt 在画布上点锁定对象，然后在右栏取消锁定。
+      ...(lockedCount
+        ? [{
+            label: `解锁全部对象（${lockedCount}）`,
+            onClick: () => {
+              const scene = store.scene;
+              if (!scene) return;
+              for (const o of scene.objects) o.locked = false;
+              store.markDirty();
+              this.cb.onCommit?.("解锁全部对象");
+              window.dispatchEvent(new CustomEvent("bwe:refresh"));
+              this.requestPaint();
+            }
+          }]
+        : []),
       { label: "缩放到整张地图", key: "F", onClick: () => this.zoomToFit() }
     ];
   }
@@ -987,7 +1129,25 @@ export class CanvasView {
     const assetId = dt.getData("application/x-bwe-asset") || dt.getData("text/plain");
     const moduleId = dt.getData("application/x-bwe-module");
     const packId = dt.getData("application/x-bwe-pack");
+    // 预制体：从「预制体」面板拖进画布，在落点放一个实例。
+    // mime 用本文件导出的 DND_PREFAB，别处不要再写一遍字面量。
+    const prefabId = dt.getData(DND_PREFAB);
 
+    if (prefabId) {
+      const prefab = (store.project?.prefabs ?? []).find((p) => p.id === prefabId);
+      if (!prefab) {
+        this.flashHud("这个预制体已经不在了（可能刚被删掉）");
+        return;
+      }
+      const layer = store.scene.layers[Math.max(0, store.scene.layers.length - 1)];
+      const obj = objectFromPrefab(prefab, this.snap(world.x), this.snap(world.y), layer?.id ?? "");
+      store.scene.objects.push(obj);
+      store.select(obj);
+      store.markDirty();
+      this.cb.onCommit?.("放置预制体");
+      this.requestPaint();
+      return;
+    }
     // 规则包：整包套到落点对象上（这就是"模块拼接"的落地方式）
     if (packId) {
       const hit = this.pick(world);
@@ -1070,17 +1230,25 @@ export class CanvasView {
 
   // ---------------- 命中 ----------------
 
-  /** 后画的在上，所以倒序查找。 */
-  pick(world: Point2): SceneObject | null {
+  /**
+   * 命中测试：后画的在上，所以倒序查找。
+   *
+   * includeLocked 为 true 时连锁定对象一起纳入候选。
+   * 锁定对象在画布上点不到是刻意的（防误拖），但必须留一条回来的路：
+   * 否则一旦锁定，就再也选不中它、属性面板里的解锁开关也永远看不见。
+   */
+  pick(world: Point2, includeLocked = false): SceneObject | null {
     const scene = store.scene;
     const project = store.project;
     if (!scene || !project) return null;
     const ordered = orderObjects(scene);
     for (let i = ordered.length - 1; i >= 0; i--) {
       const o = ordered[i];
-      if (!o.visible || o.locked) continue;
+      if (!o.visible) continue;
+      if (!includeLocked && o.locked) continue;
       const layer = scene.layers.find((l) => l.id === o.layerId);
-      if (layer && (!layer.visible || layer.locked)) continue;
+      if (layer && !layer.visible) continue;
+      if (layer && !includeLocked && layer.locked) continue;
       const b = boundsOf(o, project);
       if (world.x >= b.x && world.x <= b.x + b.w && world.y >= b.y && world.y <= b.y + b.h) return o;
     }

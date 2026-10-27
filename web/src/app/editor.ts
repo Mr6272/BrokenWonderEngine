@@ -19,6 +19,7 @@ import { info, ok, warn, modal, contextMenu, confirmDialog, error } from "../ui/
 import { renderAssetPanel } from "../panels/assetPanel.ts";
 import { renderModulePanel } from "../panels/modulePanel.ts";
 import { renderScenePanel } from "../panels/scenePanel.ts";
+import { renderPrefabPanel } from "../panels/prefabPanel.ts";
 import { renderInspector } from "../panels/inspector.ts";
 import { renderScriptPanel, requestOpenScriptPanel } from "../panels/scriptPanel.ts";
 import { renderSettingsPanel } from "../panels/settingsPanel.ts";
@@ -51,10 +52,22 @@ export class Editor {
     setPictureReadyHandler(() => this.canvas?.requestPaint());
     store.onAny(() => this.refreshChrome());
     store.onSelection(() => this.refreshToolbarState());
+    // 选择变化 → 右栏 Inspector 立即重建（按帧合并，连点/框选不会重复建树）
+    store.onSelection(() => this.scheduleRightPanel());
     window.addEventListener("bwe:refresh", () => this.refreshPanels());
     window.addEventListener("bwe:hint", (e) => this.hint(String((e as CustomEvent).detail ?? "")));
     // 其它面板（Inspector 的「脚本」卡片、帮助菜单）请求跳到「剧本」页
     window.addEventListener("bwe:open-scripts", () => this.leftTab.focus("scripts"));
+    // 「预制体」面板要「放到场景视图正中」：面板不持有画布实例，这里把中心点回填给它。
+    // detail 上的 has 标记必须有 —— 否则 (0,0) 与「没人监听」分不清，放置会落到地上角。
+    window.addEventListener("bwe:prefab-view-center", (e) => {
+      const detail = (e as CustomEvent<{ x: number; y: number; has?: boolean }>).detail;
+      if (!detail || !this.canvas) return;
+      const c = this.canvas.viewCenterWorld();
+      detail.x = c.x;
+      detail.y = c.y;
+      detail.has = true;
+    });
     // 面板自己接住 Ctrl+S 后广播保存请求（全局快捷键对 textarea 是放行的）
     window.addEventListener("bwe:save", () => void saveProjectFile());
     window.addEventListener("resize", () => this.canvas?.requestPaint());
@@ -87,6 +100,8 @@ export class Editor {
         { divider: true },
         { label: "保存", key: "Ctrl+S", onClick: () => void saveProjectFile() },
         { label: "另存为（下载 .bwproj）", onClick: () => downloadProject() },
+        { divider: true },
+        { label: "预制体面板…", onClick: () => this.leftTab.focus("prefabs"), hint: "把调好的对象存成模板，之后 Drag 到画布就能反复用" },
         { divider: true },
         { label: "新建示例工程", onClick: () => this.newExampleProject(), hint: "内置主角、敌人、箱子、触发区，直接可用" },
         { label: "扫雷示例（.bwproj）", onClick: () => this.newBuiltinExample("minesweeper"), hint: "引擎内可试玩；行数、列数、地雷数都在模块参数里改" },
@@ -257,6 +272,7 @@ export class Editor {
       [
         { id: "assets", label: "素材 Assets", hint: "图片与音频；拖到画布上使用", render: renderAssetPanel },
         { id: "modules", label: "模块 Modules", hint: "可以加到对象身上的行为积木", render: renderModulePanel },
+        { id: "prefabs", label: "预制体 Prefab", hint: "可反复摆放的对象模板；做好一个敌人，拖几次就有几个", render: renderPrefabPanel },
         { id: "scenes", label: "场景 Scenes", hint: "地图列表与图层", render: renderScenePanel },
         { id: "scripts", label: "剧本 Script", hint: "Yarn 剧情对话 / JS 脚本（bwe API）", render: renderScriptPanel },
         { id: "settings", label: "工程 Project", hint: "工程设置与账号", render: renderSettingsPanel }
@@ -388,11 +404,38 @@ export class Editor {
   }
 
   refreshPanels(): void {
-    const current = this.leftTab.current();
-    this.leftTab.show(current);
-    this.rightTab.show(this.rightTab.current());
+    // 只重建当前可见的那一页。之前无条件 show(current) 会连带重建左右两侧全部 Tab 树，
+    // 一次点击就要重新生成上百个 DOM 节点，是"点了要卡一下"的另一半原因。
+    this.leftTab.refresh();
+    this.rightTab.refresh();
     this.refreshChrome();
     this.canvas.requestPaint();
+  }
+
+  /** 只重渲染右栏（对象 Inspector / 图层 / 大纲）。 */
+  refreshRightPanel(): void {
+    this.rightTab.show(this.rightTab.current());
+  }
+
+  /**
+   * 选择变化时按帧合并刷新右栏。
+   *
+   * 之前的问题：canvas 里选中对象后既没有发 bwe:refresh，也没有任何地方监听
+   * store.onSelection 去重建右栏，于是 Inspector 要等到下一次别的操作
+   * （改属性、发事件）才顺带刷新一次——用户感知就是"点完要等一下才变"。
+   *
+   * 这里直接订阅选择变化并重建右栏；用 requestAnimationFrame 合并，
+   * 是因为框选/连点会在一帧内改很多次选择，逐次重建整棵面板树没必要。
+   */
+  private rightPanelDirty = false;
+
+  private scheduleRightPanel(): void {
+    if (this.rightPanelDirty) return;
+    this.rightPanelDirty = true;
+    requestAnimationFrame(() => {
+      this.rightPanelDirty = false;
+      this.refreshRightPanel();
+    });
   }
 
   // ---------------- 命令 ----------------
@@ -402,8 +445,18 @@ export class Editor {
     if (!scene) return null;
     return [
       { label: "复制一份", key: "Ctrl+D", onClick: () => this.duplicateSelection() },
-      { label: "置顶", onClick: () => { obj.z = Math.max(0, ...scene.objects.map((o) => o.z)) + 1; store.markDirty(); this.canvas.requestPaint(); } },
-      { label: "置底", onClick: () => { obj.z = Math.min(0, ...scene.objects.map((o) => o.z)) - 1; store.markDirty(); this.canvas.requestPaint(); } },
+      {
+        label: "上移一层",
+        key: "Ctrl+↑",
+        onClick: () => this.nudgeZ(obj, 1)
+      },
+      {
+        label: "下移一层",
+        key: "Ctrl+↓",
+        onClick: () => this.nudgeZ(obj, -1)
+      },
+      { label: "置顶", onClick: () => this.sendZ(obj, "top") },
+      { label: "置底", onClick: () => this.sendZ(obj, "bottom") },
       { divider: true },
       { label: obj.locked ? "解锁" : "锁定（防止误拖）", onClick: () => { obj.locked = !obj.locked; store.markDirty(); this.refreshPanels(); } },
       { label: obj.visible ? "隐藏" : "显示", onClick: () => { obj.visible = !obj.visible; store.markDirty(); this.canvas.requestPaint(); } },
@@ -421,6 +474,48 @@ export class Editor {
         }
       }
     ];
+  }
+
+  /**
+   * 同图层内把对象上移/下移"一层"。
+   *
+   * 层级由 z 决定（同 z 再比 y）。直接给 z ±1 可能撞上已经占用的 z，
+   * 导致"点了没反应"，所以这里按实际绘制顺序交换名次：
+   * 把该对象与相邻对象的名次互换，再重新分配 z，保证视觉上确实进退了一层。
+   */
+  private nudgeZ(obj: import("../core/model.ts").SceneObject, dir: 1 | -1): void {
+    const scene = store.scene;
+    if (!scene) return;
+    const sameLayer = orderObjects(scene).filter((o) => o.layerId === obj.layerId);
+    const i = sameLayer.indexOf(obj);
+    if (i < 0) return;
+    const j = i + dir;
+    if (j < 0 || j >= sameLayer.length) {
+      this.hint(dir > 0 ? "已经在最上层了" : "已经在最下层了");
+      return;
+    }
+    const tmp = sameLayer[i];
+    sameLayer[i] = sameLayer[j];
+    sameLayer[j] = tmp;
+    sameLayer.forEach((o, k) => { o.z = k; });
+    store.markDirty();
+    window.dispatchEvent(new CustomEvent("bwe:commit"));
+    this.canvas.requestPaint();
+    this.refreshPanels();
+  }
+
+  /** 直接送到同图层的最顶或最底。 */
+  private sendZ(obj: import("../core/model.ts").SceneObject, where: "top" | "bottom"): void {
+    const scene = store.scene;
+    if (!scene) return;
+    const sameLayer = orderObjects(scene).filter((o) => o.layerId === obj.layerId);
+    const rest = sameLayer.filter((o) => o !== obj);
+    const next = where === "top" ? [...rest, obj] : [obj, ...rest];
+    next.forEach((o, k) => { o.z = k; });
+    store.markDirty();
+    window.dispatchEvent(new CustomEvent("bwe:commit"));
+    this.canvas.requestPaint();
+    this.refreshPanels();
   }
 
   private duplicateSelection(): void {

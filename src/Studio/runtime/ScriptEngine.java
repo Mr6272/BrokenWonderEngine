@@ -410,12 +410,20 @@ final class ScriptEngine {
             if (failed) {
                 return;
             }
-            for (Handler h : handlers("draw")) {
+            List<Handler> drawList = handlers("draw");
+            for (int i = 0; i < handlerCount(drawList); i++) {
+                Handler h = handlerAt(drawList, i);
+                if (h == null) {
+                    continue;
+                }
                 invoke(h.def, h.fn, h.scope, new Object[0]);
             }
             drawAttachments(gl);
             if (render != null) {
                 render.render(gl, drawCmds);
+                // 文本纹理缓存是按 LRU 淘汰的：淘汰掉的 GL 纹理必须在这里（GL 线程、
+                // 上下文 current）真正删除，否则显存只增不减。
+                render.releaseEvicted(gl);
             }
             drawCmds.clear();
         } catch (Throwable t) {
@@ -514,6 +522,54 @@ final class ScriptEngine {
         }
     }
 
+    /**
+     * 场景结束：派发场景脚本的 {@code onSceneEnd}。
+     *
+     * <p>契约（docs/scripting-api.md §1.2）一直承诺有这个回调，但<b>之前从未派发过</b>
+     * —— 校验脚本 verify-apidocs 抓出了这个「文档有、代码没有」的假承诺。
+     * 现在接在运行时真正关闭的位置：{@code TopDownRuntime.dispose()}（窗口关闭 / 进程退出 / 离屏跑完）。
+     *
+     * <p>语义：只派发给<b>场景脚本</b>（onStartScript 与 jsMain），不派发给对象脚本 ——
+     * 与 onSceneStart 对称。只派发一次（{@link #sceneEnded} 保护）。
+     * gl 相关的东西一概不碰，所以 headless 也能安全调用。
+     */
+    void sceneEnd() {
+        if (sceneEnded || !started || failed) {
+            return;
+        }
+        sceneEnded = true;
+        Context cx = null;
+        try {
+            cx = Context.enter();
+            prepare(cx);
+            if (!jsMain.isEmpty()) {
+                ScriptDef def = scripts.get(jsMain);
+                if (def != null) {
+                    dispatchScene(def, "onSceneEnd");
+                }
+            }
+            if (!sceneScriptName.isEmpty() && !sceneScriptName.equals(jsMain)) {
+                ScriptDef def = scripts.get(sceneScriptName);
+                if (def != null) {
+                    dispatchScene(def, "onSceneEnd");
+                }
+            }
+            drainMicrotasks(cx);
+        } catch (Throwable t) {
+            host.scriptLog("[脚本] onSceneEnd 异常: " + t);
+        } finally {
+            if (cx != null) {
+                try {
+                    Context.exit();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    /** onSceneEnd 是否已派发（避免重复派发）。 */
+    private boolean sceneEnded = false;
+
     private void evalTop(Context cx, ScriptDef def) {
         long t0 = System.nanoTime();
         String prev = currentScript;
@@ -553,6 +609,7 @@ final class ScriptEngine {
             return;
         }
         bound.put(a, def);
+        boundVersion++;
     }
 
     private static GameData.RtModule scriptModule(GameData.RtObject o) {
@@ -593,7 +650,12 @@ final class ScriptEngine {
 
         if (!paused) {
             fireTimers(cx);
-            for (Handler h : handlers("update")) {
+            List<Handler> updateList = handlers("update");
+            for (int i = 0; i < handlerCount(updateList); i++) {
+                Handler h = handlerAt(updateList, i);
+                if (h == null) {
+                    continue;
+                }
                 invoke(h.def, h.fn, h.scope, new Object[]{Double.valueOf(frameDt)});
             }
             for (Map.Entry<TopDownRuntime.Actor, ScriptDef> e : snapshotBound()) {
@@ -627,9 +689,34 @@ final class ScriptEngine {
         java.util.Arrays.fill(mousePressed, false);
     }
 
+    /**
+     * bound 表的快照，用于「遍历中允许增删」。
+     *
+     * <p>原来是每帧 {@code new ArrayList<>(bound.entrySet())}：200 个挂脚本的对象
+     * 就是每帧一个 200 元素数组 + 200 次 Map.Entry 分配，60fps 下每秒 12000 次分配，
+     * 全部压给 GC。现在改成复用缓冲：
+     * <ul>
+     *   <li>正常帧（表没变）→ 直接返回上一帧的快照，零分配；</li>
+     *   <li>表变了（新增/销毁对象）→ 才重建快照。</li>
+     * </ul>
+     * 语义与原实现一致：遍历期间不会看到本帧新增的对象（这正是快照要保证的）。
+     */
+    private final List<Map.Entry<TopDownRuntime.Actor, ScriptDef>> boundSnapshotBuf =
+            new ArrayList<Map.Entry<TopDownRuntime.Actor, ScriptDef>>();
+    private int boundSnapshotVersion = -1;
+
     private List<Map.Entry<TopDownRuntime.Actor, ScriptDef>> snapshotBound() {
-        return new ArrayList<Map.Entry<TopDownRuntime.Actor, ScriptDef>>(bound.entrySet());
+        if (boundSnapshotVersion == boundVersion && !boundSnapshotBuf.isEmpty()) {
+            return boundSnapshotBuf;
+        }
+        boundSnapshotBuf.clear();
+        boundSnapshotBuf.addAll(bound.entrySet());
+        boundSnapshotVersion = boundVersion;
+        return boundSnapshotBuf;
     }
+
+    /** bound 表结构版本号：put/remove 时自增，供快照复用判断。 */
+    private int boundVersion = 0;
 
     private void processClicks() {
         List<Click> batch;
@@ -650,7 +737,12 @@ final class ScriptEngine {
             mousePressed[button] = true;
             TopDownRuntime.Actor hit = topmostAt(c.wx, c.wy);
             Object entityArg = hit == null ? null : api.entity(hit);
-            for (Handler h : handlers("click")) {
+            List<Handler> clickList = handlers("click");
+            for (int i = 0; i < handlerCount(clickList); i++) {
+                Handler h = handlerAt(clickList, i);
+                if (h == null) {
+                    continue;
+                }
                 invoke(h.def, h.fn, h.scope, new Object[]{api.clickInfo(c.sx, c.sy, c.wx, c.wy, c.right, entityArg)});
             }
             if (hit != null) {
@@ -671,7 +763,12 @@ final class ScriptEngine {
         }
         for (Integer code : batch) {
             String name = keyName(code);
-            for (Handler h : handlers("keydown")) {
+            List<Handler> keyList = handlers("keydown");
+            for (int i = 0; i < handlerCount(keyList); i++) {
+                Handler h = handlerAt(keyList, i);
+                if (h == null) {
+                    continue;
+                }
                 invoke(h.def, h.fn, h.scope, new Object[]{name, Integer.valueOf(code)});
             }
             for (Map.Entry<TopDownRuntime.Actor, ScriptDef> e : snapshotBound()) {
@@ -808,9 +905,27 @@ final class ScriptEngine {
         }
     }
 
+    /**
+     * 取某事件的处理器列表（<b>只读</b>，遍历请用 {@link #handlerCount} + {@link #handlerAt}）。
+     *
+     * <p>原实现每次 {@code new ArrayList<>(list)} 拷贝：{@code handlers("update")} 与
+     * {@code handlers("draw")} 每帧各调一次 = 每帧 2 次数组分配，纯喂 GC。
+     * 但<b>不能</b>简单返回原列表：脚本可以在回调里调 {@code bwe.on(...)} 往同一个列表里加处理器，
+     * for-each 遍历活列表会直接抛 ConcurrentModificationException。
+     * 所以这里配合下面的下标遍历：ArrayList 按下标读对「遍历中追加」是安全的，
+     * 既零分配又不改原有容错性。
+     */
     List<Handler> handlers(String event) {
         List<Handler> list = hooks.get(event);
-        return list == null ? Collections.<Handler>emptyList() : new ArrayList<Handler>(list);
+        return list == null ? Collections.<Handler>emptyList() : list;
+    }
+
+    static int handlerCount(List<Handler> list) {
+        return list.size();
+    }
+
+    static Handler handlerAt(List<Handler> list, int i) {
+        return i >= 0 && i < list.size() ? list.get(i) : null;
     }
 
     String currentScriptName() {
@@ -1087,6 +1202,11 @@ final class ScriptEngine {
         if (modules != null) {
             a.o.modules.addAll(modules);
         }
+        // ⚠ 血量必须在这里初始化：宿主 spawnScripted 只建 Actor（hpMax 默认 10），
+        // 而场景对象走的是 TopDownRuntime.spawn() 里那段 combat.health 读取。
+        // 脚本 spawn / prefab spawn 走的是这条路径，之前没人读模块 → 任何带
+        // combat.health{hp:40} 的预制体实例出来都是 hpMax=10（端到端验证抓到的真 bug）。
+        applyHealthModule(a);
         if (scriptName != null && !scriptName.isEmpty()) {
             GameData.RtModule m = new GameData.RtModule();
             m.def = "script.js";
@@ -1098,12 +1218,32 @@ final class ScriptEngine {
                 warn("spawn 引用了不存在的脚本「" + scriptName + "」");
             } else {
                 bound.put(a, def);
+                boundVersion++;
                 dispatchObject(a, def, "onStart", new Object[0]);
             }
         }
         api.invalidate(a);
         world.refreshAfterSpawn(a);
         return a;
+    }
+
+    /**
+     * 从对象身上的 {@code combat.health} / {@code fight.hp} 模块读取血量上限并初始化。
+     *
+     * <p>与 {@code TopDownRuntime.spawn()}（场景对象路径）用同一份语义，保证
+     * 「编辑器里摆的对象」和「脚本 spawn / prefab spawn 出来的实体」血量行为一致。
+     * 运行时新增模块（{@code e.addModule("combat.health", ...)}）也要调它。
+     */
+    void applyHealthModule(TopDownRuntime.Actor a) {
+        if (a == null) {
+            return;
+        }
+        GameData.RtModule hp = host.data.module(a.o, "combat.health", "fight.hp");
+        if (hp == null) {
+            return;
+        }
+        a.hpMax = Math.max(1f, hp.num("maxHealth", hp.num("hp", a.hpMax)));
+        a.hp = a.hpMax;
     }
 
     /** 脚本销毁实体：先派发 onDestroy / "destroy" 事件，再从宿主移除。 */
@@ -1114,6 +1254,7 @@ final class ScriptEngine {
         dispatchObject(a, bound.get(a), "onDestroy", new Object[0]);
         api.dispatchEntityEvent(a, "destroy", new Object[0]);
         bound.remove(a);
+        boundVersion++;
         for (int i = attachments.size() - 1; i >= 0; i--) {
             if (attachments.get(i).owner == a) {
                 attachments.remove(i);

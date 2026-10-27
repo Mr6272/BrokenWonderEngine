@@ -3,6 +3,13 @@
 > 这份文件是「编辑器 / 导出器 / 运行时 / 校验脚本」四方共同遵守的唯一契约。
 > 改名、改签名、改语义都先改这里，再同步四处（§8 有检查命令）。
 
+> 📖 **面向脚本作者的完整 API 手册在 [`docs/api/`](api/README.md)**（Unity Scripting API 体例，
+> 按命名空间分页：world / entity / prefab / lifecycle / input-camera-time / draw-audio-save /
+> map-nav-interact-spawner / emergence / modules）。
+> 本文档保留「契约与实现约束」视角；**两者冲突时以代码为准**，不一致清单见
+> [`_fragments/doc-inconsistency.md`](_fragments/doc-inconsistency.md)。
+
+
 ## 0. 总览：JS 怎么跑起来
 
 ```
@@ -91,8 +98,18 @@ function onKey(ctx, key) {}              // 可选：任意按键
 
 ```js
 function onSceneStart(ctx) {}    // ctx.scene, ctx.world
-function onSceneEnd(ctx) {}
+function onSceneEnd(ctx) {}      // 运行期关闭时（窗口关闭 / 进程退出），只派发一次
 ```
+
+> ⚠ **`ctx.self` 在场景脚本里是 `null`**（场景没有「自己的实体」）。
+> 对象脚本里 `ctx.self` 才是挂脚本的那个实体。要取对象用 `bwe.world.find(名字)`。
+
+`onSceneEnd` 的精确语义（**不是** Unity 的 `OnDestroy`，也**不是**场景切换）：
+
+- 只派发给**场景脚本**（`onStartScript` 与 `boot.json` 的 `jsMain`），与 `onSceneStart` 对称；
+- 只派发一次（内部幂等）；
+- 触发时机 = 运行时关闭（窗口关闭 / 进程退出 / Ctrl+C），挂的是 JVM shutdown hook；
+- 适合存档落盘、上报统计、清理外部资源。这里**不要**调 `bwe.draw.*`（窗口已经在关）。
 
 场景脚本适合放「系统级」逻辑（刷怪、计分、天气、全局状态），并可用 `bwe.world.on("update", fn)` 注册每帧回调。
 
@@ -196,8 +213,18 @@ function onSceneEnd(ctx) {}
 ### 2.7 `bwe.audio`
 
 `bwe.audio.play(name, {volume=1, loop=false, pitch=1})` → id、`bwe.audio.stop(id|name)`、
-`bwe.audio.music(name, {volume, loop=true})`、`bwe.audio.volume(0..1)`（全局）。
+`bwe.audio.music(name, {volume, loop=true})` → **id**（可传给 `stop` 停掉 BGM）、
+`bwe.audio.volume(0..1)`（全局）。
 素材名或 `Audio` 素材相对路径都行。Phase 1 支持 WAV；OGG/MP3 看 JDK 解码能力，读不了会进日志告警（不崩）。
+
+**`pitch` 的语义（✅ 已实现）**：实现方式是**改采样率**，所以时长会跟着变：
+`pitch=2` ⇒ 音高升八度且**时长减半**；`pitch=0.5` ⇒ 降八度且**时长翻倍**。
+这是音效变调的常见语义（**不是**「变速不变调」）。仅对 PCM WAV 有效，非 PCM 编码会忽略。
+
+> 踩坑记录（防止后人"优化"回去）：不能用
+> `AudioSystem.getAudioInputStream(新采样率格式, in)` 去重采样 —— 那只会改流速，
+> **`Clip` 时长不变、音高根本没变**（它按时间轴插值，频率成分原样保留）。
+> 正确做法是保留原始 PCM 字节，只重打包 `AudioInputStream` 的 format 采样率。
 
 ### 2.8 `bwe.save`（本地存档，JSON）
 

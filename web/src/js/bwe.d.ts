@@ -52,8 +52,21 @@ declare namespace bwe {
   /** 颜色：`"#rrggbb"` / `"#rrggbbaa"` / CSS 颜色名。 */
   type Color = string;
 
-  /** 子精灵句柄（e.attach 返回，e.detach 传回）。 */
-  type AttachHandle = number;
+  /**
+   * 子精灵句柄：`e.attach()` 返回的**对象**（不是数字）。
+   *
+   * ```js
+   * var h = e.attach({ asset: "sword.png", dx: 16 });
+   * h.id;        // number
+   * h.remove();  // 立刻摘掉（等价 e.detach(h)）
+   * ```
+   */
+  interface AttachHandle {
+    /** 句柄 id（可用于 `e.detach(id)`） */
+    readonly id: number;
+    /** 立刻摘掉这个子精灵 */
+    remove(): void;
+  }
 
   // ==========================================================================
   // 实体 Entity（世界对象）
@@ -85,6 +98,167 @@ declare namespace bwe {
     z?: number;
     /** 角度，顺时针，单位度 */
     rotation?: number;
+    /** 不透明度 0~1，缺省 1 */
+    alpha?: number;
+    /** 宽度（0 或省略 = 用素材原始宽度） */
+    w?: number;
+    /** 高度（0 或省略 = 用素材原始高度） */
+    h?: number;
+  }
+
+  /**
+   * 预制体定义（`bwe.prefab.define` 的 spec，也等于 boot.json 里 `prefabs[]` 的一条）。
+   *
+   * 全部字段可缺省，缺省值：kind="PROP" / z=0 / layer=0 / halfW=halfH=0 / scaleX=scaleY=1 /
+   * rotation=0 / visible=true / animMode="默认" / animFps=8 / x=y=0。
+   */
+  interface PrefabSpec {
+    /** 预制体名（`define` 的第一个参数；boot.json 里是 `name`） */
+    name?: string;
+    /** 对象大类，默认 PROP */
+    kind?: string;
+    /** 素材名（与 boot.assets[].name、场景 objects[].asset 同一套） */
+    asset?: string;
+    /** 排序层级，缺省 0 */
+    z?: number;
+    /** 图层下标（绘制顺序 layer → z → y），缺省 0 */
+    layer?: number;
+    /** 碰撞体半宽半高；0 = 不参与碰撞（绘制尺寸走 sizeOf 兜底） */
+    halfW?: number;
+    halfH?: number;
+    /** 便捷写法：等价于 halfW = w/2, halfH = h/2（只读回时总以 halfW/halfH 为准） */
+    size?: Size;
+    scaleX?: number;
+    scaleY?: number;
+    /** 角度，顺时针，单位度 */
+    rotation?: number;
+    visible?: boolean;
+    /** 动画模式："默认" | "只显示首帧" | "单次播放"（也认 "loop"/"first"/"once"） */
+    animMode?: string;
+    animFps?: number;
+    /** 挂上的 JS 脚本名（boot.scripts[].name，不是文件路径） */
+    script?: string;
+    /** 初始标签 */
+    tags?: string[];
+    /** 初始模块 */
+    modules?: SpawnModuleInit[];
+    /** 初始对象属性（数值/布尔会归一成编辑器同构文本） */
+    props?: Record<string, unknown>;
+    /**
+     * 随机抖动幅度（各加 `[-x,+x]` / `[-y,+y]`），**只在 spawn 没给 x/y 时生效**。
+     *
+     * 给了 `x`/`y` 就精确落位（不抖）——这是 v1.1 修正后的语义：
+     * 显式指定位置却不精确，会让确定性对拍失效。要抖就传 `{ jitter: true }`。
+     */
+    jitter?: Vec2;
+    /** 生成时附带的基础位置（`spawn` 未给 x/y 时用） */
+    x?: number;
+    y?: number;
+    /** 子精灵列表（用引擎既有的 e.attach 实现，不是嵌套实体） */
+    children?: PrefabChildSpec[];
+  }
+
+  /** 预制体里的子精灵定义（等价于对实例调一次 `e.attach()`）。 */
+  interface PrefabChildSpec {
+    asset: string;
+    /** 像素偏移（`offsetX/offsetY` 是 `dx/dy` 的别名） */
+    dx?: number;
+    dy?: number;
+    offsetX?: number;
+    offsetY?: number;
+    z?: number;
+    rotation?: number;
+    alpha?: number;
+    w?: number;
+    h?: number;
+  }
+
+  /** `bwe.prefab.spawn(name, opts)` 的覆盖参数：只覆盖你给的字段。 */
+  interface PrefabSpawnOpts {
+    x?: number;
+    y?: number;
+    z?: number;
+    layer?: number;
+    rotation?: number;
+    scaleX?: number;
+    scaleY?: number;
+    halfW?: number;
+    halfH?: number;
+    visible?: boolean;
+    animMode?: string;
+    animFps?: number;
+    asset?: string;
+    /** 传空字符串 = 不挂脚本 */
+    script?: string;
+    /** 实例名；缺省用预制体名 */
+    name?: string;
+    /** 父实体（null 或省略 = 无父级） */
+    parent?: Entity | null;
+    /** 追加到模板 tags 之后（去重） */
+    tags?: string[];
+    /** 同 def 替换该模块，新 def 追加 */
+    modules?: SpawnModuleInit[];
+    /** 与模板 props 合并，同名以这里为准 */
+    props?: Record<string, unknown>;
+    /**
+     * 抖动开关：
+     * - `true`  → **强制抖**（即使给了 x/y 也抖）
+     * - `false` → 不抖
+     * - 省略    → 给了 x/y 就不抖（精确落位）；没给 x/y 才用模板 jitter 抖
+     */
+    jitter?: boolean;
+  }
+
+  /** 对象池统计。 */
+  interface PoolStats {
+    /** 空闲（已归还，可复用） */
+    idle: number;
+    /** 使用中 */
+    active: number;
+    /** 池里现有实例总数（idle + active） */
+    total: number;
+    /** create 时给的上限 */
+    capacity: number;
+  }
+
+  /**
+   * 预制体：运行期模板注册表。
+   *
+   * **v1 不做热更新**：`define` 之后已经生成的实例保持原样，之后 `spawn` 才用新定义。
+   */
+  interface Prefab {
+    /** 注册 / 覆盖一个模板；返回是否成功（spec 不是对象时 false） */
+    define(name: string, spec: PrefabSpec): boolean;
+    /** 读模板的深拷贝快照（改它不影响注册表）；不存在返回 null */
+    get(name: string): PrefabSpec | null;
+    /** 所有模板名（顺序 = define 顺序） */
+    list(): string[];
+    has(name: string): boolean;
+    /** 移除模板（已生成的实例不受影响） */
+    remove(name: string): boolean;
+    /** 实例化；opts 在模板之上覆盖 → Entity（模板不存在返回 null） */
+    spawn(name: string, opts?: PrefabSpawnOpts): Entity | null;
+    /** 批量实例化（每个元素是一份覆盖） */
+    spawnMany(name: string, opts?: PrefabSpawnOpts[]): Entity[];
+    /** 当前存活的该预制体实例数（对象池/上限用） */
+    count(name: string): number;
+    /** 把场上实体抓成模板并注册；返回模板名（失败返回 null） */
+    fromEntity(e: Entity, name?: string): string | null;
+  }
+
+  /** 对象池：复用预制体实例，避免频繁 spawn/destroy。 */
+  interface Pool {
+    /**
+     * 建池；`opts.prewarm = true` 会立刻预生成 capacity 个隐藏实例。
+     * 预制体不存在返回 -1。
+     */
+    create(prefabName: string, capacity?: number, opts?: { prewarm?: boolean }): number;
+    /** 取一个实例（优先复用空闲的），落到 (x, y)；池满返回 null */
+    acquire(handle: number, x: number, y: number): Entity | null;
+    /** 归还；实体不属于该池 / 已销毁 → false */
+    release(handle: number, e: Entity): boolean;
+    /** 统计；handle 无效返回 null */
+    stats(handle: number): PoolStats | null;
   }
 
   /** 模块实例（脚本看到的模块，与编辑器里点是同一份数据）。 */
@@ -129,9 +303,62 @@ declare namespace bwe {
     /** 位置（世界像素，中心点）：等价于 {x, y} */
     readonly pos: Vec2;
     setPos(x: number, y: number): void;
-    /** 可视化尺寸（与编辑器 halfW/halfH 同一套规则） */
-    readonly size: Size;
+    /** 可视化尺寸（与编辑器 halfW/halfH 同一套规则）。写 `e.size = {w, h}` 等价 setSize。 */
+    size: Size;
     setSize(w: number, h: number): void;
+
+    /** 图层下标（绘制顺序 layer → z → y）。编辑器锁定状态在运行时无意义，但保留读写以保持接口一致。 */
+    layer: number;
+    /** 锁定标记（只记忆，不影响运行时行为） */
+    locked: boolean;
+    /** 动画模式（"默认" / "只显示首帧" / "单次播放"；写时 "loop"/"first"/"once" 也认） */
+    animMode: string;
+    /** 每秒帧数（写会顺带解除 setFrame 的帧锁定） */
+    animFps: number;
+    /** 当前素材名（读）；写入等价换图但**不改播放参数** */
+    asset: string;
+
+    /** 染色（0~1，读写；写等同 setColor 的四个通道，null 清除用 clearColor） */
+    readonly color: { r: number; g: number; b: number; a: number };
+    /**
+     * 染色 + 透明度。每个通道接受 0~1；**任一通道 > 1 时整组按 0~255 解释**。
+     * 渲染侧用 GL 调制实现（乘法），与 blink 模块的 alpha 相乘。
+     */
+    setColor(r: number, g: number, b: number, a?: number): void;
+    /** 只改透明度（0~1，>1 视作 0~255） */
+    setAlpha(a: number): void;
+    /** 清除染色，恢复原样 */
+    clearColor(): void;
+
+    /** 标签操作 */
+    addTag(tag: string): boolean;
+    removeTag(tag: string): boolean;
+    hasTag(tag: string): boolean;
+    /** 整体替换标签集合 */
+    setTags(tags: string[]): void;
+
+    /** 全部对象属性（快照） */
+    props(): Record<string, string>;
+    /** 批量写属性（值会归一成编辑器同构文本） */
+    setProps(obj: Record<string, unknown>): void;
+
+    /**
+     * 追加模块；同 def 已存在时**合并参数**而不是新建。
+     * 加 `combat.health` 会**立刻重算** `hpMax`/`hp`（与场景对象同一份语义）。
+     */
+    addModule(def: string, params?: Record<string, unknown>, when?: string): boolean;
+    /**
+     * 移除模块；不存在返回 false。
+     *
+     * 移除 `combat.health` 只是「不再跟模块参数联动」，**不会重置当前 `hp`/`hpMax`**。
+     * 想让实体回到默认血量，请显式设 `e.hp` / `e.hpMax`。
+     */
+    removeModule(def: string): boolean;
+
+    /** 父实体（读写；null = 无父级） */
+    parent: Entity | null;
+    /** 直接子级（只读快照） */
+    children(): Entity[];
 
     /** 换精灵（可带播放参数） */
     sprite(opts: SpriteOpts): void;
@@ -152,7 +379,8 @@ declare namespace bwe {
 
     /** 挂一个子精灵（武器 / 影子 / 特效），返回句柄 */
     attach(opts: AttachOpts): AttachHandle;
-    detach(handle: AttachHandle): void;
+    /** 摘掉子精灵：传 `attach()` 的返回值，或直接传它的 `id` */
+    detach(handle: AttachHandle | number): void;
 
     /** 到另一个实体的距离（像素） */
     distanceTo(other: Entity): number;
@@ -204,13 +432,30 @@ declare namespace bwe {
     tags?: string[];
     /** 排序层级 */
     z?: number;
+    /** 图层下标，缺省 0 */
+    layer?: number;
     /** 碰撞体半宽半高（0 = 不参与碰撞） */
     halfW?: number;
     halfH?: number;
+    /** 缩放 */
+    scaleX?: number;
+    scaleY?: number;
+    /** 角度，顺时针，单位度 */
+    rotation?: number;
+    /** 是否可见，缺省 true */
+    visible?: boolean;
+    /** 动画模式（"默认" / "只显示首帧" / "单次播放"；也认 "loop"/"first"/"once"） */
+    animMode?: string;
+    /** 每秒帧数，缺省 8 */
+    animFps?: number;
     /** 挂上的 JS 脚本名 */
     script?: string;
     /** 额外模块 */
     modules?: SpawnModuleInit[];
+    /** 初始对象属性 */
+    props?: Record<string, unknown>;
+    /** 父实体 */
+    parent?: Entity | null;
   }
 
   /** 场景信息（只读快照）。 */
@@ -234,8 +479,24 @@ declare namespace bwe {
     findAll(q: EntityQuery): Entity[];
     /** 运行时生成一个实体 */
     spawn(opts: SpawnOpts): Entity;
+    /** 批量生成（每个元素一份 opts） */
+    spawnMany(list: SpawnOpts[]): Entity[];
+    /** 便捷式：spawn(opts) 并强制覆盖 x/y */
+    spawnAt(opts: Omit<SpawnOpts, "x" | "y"> & { x?: number; y?: number }, x: number, y: number): Entity;
+    /** 复制一个实体（tags/模块/props/子精灵一并带上）；opts 覆盖副本字段 */
+    clone(e: Entity, opts?: Partial<SpawnOpts> & { name?: string }): Entity | null;
     /** 销毁实体 */
     destroy(e: Entity): void;
+    /** 销毁所有实体（包含场景原生对象） */
+    clear(): void;
+    /** 只销毁带该标签的实体 */
+    clearTag(tag: string): void;
+    /** 批量销毁；filter 省略 = 全部。返回实际销毁数量 */
+    destroyAll(filter?: EntityQuery): number;
+    /** 数量：无参 = 存活实体总数，有参 = 匹配数 */
+    count(q?: EntityQuery): number;
+    /** 遍历（内部先拍快照，回调里 spawn/destroy 安全） */
+    each(q: EntityQuery | null | undefined, fn: (e: Entity) => void): void;
     /** 当前所有实体（只读数组，不要原地改） */
     entities(): Entity[];
 
@@ -573,11 +834,15 @@ declare namespace bwe {
 
   /**
    * 脚本里生命周期的第一个参数。
-   * 对象脚本：self 是挂脚本的对象；场景脚本：self 是场景根（可能为空实体）。
+   *
+   * ⚠ `self` 的两种语义：
+   * - **对象脚本**（挂了 `script.js` 的实体）：`self` 就是这个实体，可放心 `ctx.self.x`。
+   * - **场景脚本**（`scene.onStartScript` / `boot.json` 的 `jsMain`）：**`self` 是 `null`**。
+   *   场景没有「自己的实体」，硬要用会运行期 `TypeError`。用 `bwe.world.find(名字)` 取对象。
    */
   interface Ctx {
-    /** 挂脚本的实体（场景脚本里是场景根） */
-    self: Entity;
+    /** 挂脚本的实体；<b>场景脚本里是 null</b>（见上面说明） */
+    self: Entity | null;
     world: World;
     scene: SceneInfo;
     time: Time;
@@ -586,6 +851,8 @@ declare namespace bwe {
     save: Save;
     /** 本帧步长（秒），onUpdate(ctx, dt) 的第二个参数也是它 */
     dt: number;
+    /** 整个 `bwe` 命名空间（等价于脚本里的全局 `bwe`） */
+    game: typeof bwe;
   }
 
   /** 生命周期函数签名集合（供 IDE 提示 / 文档引用）。 */
@@ -645,6 +912,10 @@ declare namespace bwe {
   const interact: Interact;
   /** 生成器 */
   const spawner: Spawner;
+  /** 预制体：运行期模板注册与实例化 */
+  const prefab: Prefab;
+  /** 对象池：复用预制体实例 */
+  const pool: Pool;
 
   /** 跨脚本调用入口（与 bwe.call 等价） */
   const scripts: Scripts;
@@ -771,8 +1042,14 @@ declare namespace bwe {
     channel(name: string): { max(v: number): void };
     /** 风向（影响烟雾与火势偏向）。 */
     wind(dx: number, dy: number): Vec2;
-    /** 注册事件；返回取消订阅函数。 */
+    /** 注册事件；返回取消订阅函数（<b>一定要接住并调用</b>，否则回调会一直累积）。 */
     on(ev: "ignite" | "extinguish" | "burned", fn: (info: FieldEvent) => void): () => void;
+    /**
+     * 取消订阅。两种用法：
+     * - `off(ev, fn)`：摘掉指定回调；
+     * - `off(ev)`：清空该事件的全部回调。
+     */
+    off(ev: "ignite" | "extinguish" | "burned", fn?: (info: FieldEvent) => void): void;
     /** 当前正在燃烧的格子（调试/UI 用）。 */
     burning(): BurningCell[];
   };

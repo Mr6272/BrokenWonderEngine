@@ -737,6 +737,105 @@ export async function detectToolMajor(tool) {
 }
 
 /**
+ * 编辑器里的预制体（PrefabDef）→ boot.json 顶层 `prefabs[]` 的运行期定义。
+ *
+ * 字段契约（与 ScriptPrefab 侧逐字对齐，改动必须两边一起改）：
+ *   name / kind / asset / z / layer / halfW / halfH / tags / modules[{def,when,params}]
+ *   / props / script / animMode / animFps / scaleX / scaleY / rotation / jitter{x,y}
+ *
+ * 两个最容易搞错的地方：
+ *   1. `asset` 写的是**素材名**（不是 assetId）。运行期按名字找图（assetByName），
+ *      给 id 会静默退回色块 —— 所以这里查一次素材表，查不到就显式告警。
+ *   2. `script` 写的是**脚本名**（scripts[].name，不是文件路径）。运行期拿它去
+ *      ScriptEngine 的 scripts 表里查；写文件路径就永远查不到，预制体放出来的实例
+ *      不会跑脚本。编辑器里存的是剧本 key，这里必须换算成 name。
+ *
+ * 编辑器专用、运行期不认的字段一律**不导出**：
+ *   id（编辑器内部链接用）、blurb（说明文字）、assetId（已换算成 asset）、
+ *   spawnJitter（换算成 jitter）。
+ *
+ * 预制体里的模块也走一遍 moduleJson，于是 `params` 的编码规则（全部转成字符串、
+ * 素材引用校验）与场景对象完全一致，不会出现「同样的模块在场景里能用、在预制体里不能」。
+ *
+ * @param {object} project .bwproj JSON
+ * @param {Set<string>} assetNames 工程里所有素材名
+ * @param {Map<string,string>} scriptNameByKey 编辑器剧本 key → 运行期脚本名
+ * @param {Map<string,string>} scriptLangByKey 编辑器剧本 key → "js" | "yarn"
+ * @param {string[]} warnings 告警收集器（软告警，不阻断导出）
+ */
+function prefabBootList(project, assetNames, scriptNameByKey, scriptLangByKey, warnings) {
+  const list = [];
+  const usedNames = new Set();
+  for (const pf of project.prefabs ?? []) {
+    if (!pf || typeof pf !== "object") continue;
+    // 名字是运行期 define/spawn 的 key：空名和重名都会让「第二个预制体覆盖第一个」，
+    // 这里跳过并告警，而不是导出一个永远拿不到的模板。
+    const name = String(pf.name ?? "").trim();
+    if (!name) {
+      warnOnce(warnings, "有预制体没有名字，运行期无法按名字生成，已跳过");
+      continue;
+    }
+    if (usedNames.has(name)) {
+      warnOnce(warnings, `预制体「${name}」有重名，运行期后一个会覆盖前一个，只导出第一条`);
+      continue;
+    }
+    usedNames.add(name);
+
+    const label = `预制体「${name}」`;
+    const assetEntry = (project.assets ?? []).find((a) => a && a.id === pf.assetId);
+    const assetName = assetEntry?.name == null ? "" : String(assetEntry.name);
+    if (pf.assetId && !assetEntry) {
+      warnOnce(warnings, `${label} 引用了不存在的素材 id「${pf.assetId}」，运行时会画成色块`);
+    } else if (assetName && !assetNames.has(assetName)) {
+      warnOnce(warnings, `${label} 的素材「${assetName}」不在导出素材表里，运行时会画成色块`);
+    }
+
+    // 对象脚本：编辑器存 key，运行期按 name 查。与 scene_*.json 的 script.js 换算完全同一套规则。
+    let script = "";
+    const rawScript = String(pf.script ?? "").trim();
+    if (rawScript) {
+      const resolved = scriptNameByKey.get(rawScript);
+      if (resolved === undefined) {
+        warnOnce(warnings, `${label} 的脚本「${rawScript}」不存在，运行期不会执行脚本`);
+      } else if (scriptLangByKey.get(rawScript) !== "js") {
+        warnOnce(warnings, `${label} 的脚本「${rawScript}」是 Yarn 剧本，运行期不会执行；请换成 JS 脚本`);
+      } else {
+        script = resolved;
+      }
+    }
+
+    const modules = (Array.isArray(pf.modules) ? pf.modules : [])
+      .map((m) => moduleJson(m, label, assetNames, warnings))
+      .filter(Boolean);
+
+    const jitterX = finiteNumber(pf.spawnJitter?.x, 0, `${label} 的 spawnJitter.x`, warnings);
+    const jitterY = finiteNumber(pf.spawnJitter?.y, 0, `${label} 的 spawnJitter.y`, warnings);
+
+    list.push({
+      name,
+      kind: String(pf.kind || "PROP"),
+      asset: assetName,
+      z: truncIntField(pf.z, 0, `${label} 的 z`, warnings),
+      layer: truncIntField(pf.layer, 0, `${label} 的 layer`, warnings),
+      halfW: finiteNumber(pf.halfW, 0, `${label} 的 halfW`, warnings),
+      halfH: finiteNumber(pf.halfH, 0, `${label} 的 halfH`, warnings),
+      tags: Array.isArray(pf.tags) ? pf.tags.map((t) => String(t)) : [],
+      modules,
+      props: pf.props && typeof pf.props === "object" ? pf.props : {},
+      script,
+      animMode: pf.animMode == null || pf.animMode === "" ? "默认" : String(pf.animMode),
+      animFps: finiteNumber(pf.animFps, 8, `${label} 的 animFps`, warnings),
+      scaleX: finiteNumber(pf.scaleX, 1, `${label} 的 scaleX`, warnings),
+      scaleY: finiteNumber(pf.scaleY, 1, `${label} 的 scaleY`, warnings),
+      rotation: finiteNumber(pf.rotation, 0, `${label} 的 rotation`, warnings),
+      // 缺省输出 {x:0,y:0} 而不是 null：运行期直接读 .x/.y，不用再多一层判空。
+      jitter: { x: jitterX, y: jitterY }
+    });
+  }
+  return list;
+}
+
+/**
  * .bwproj → Build/*.json 的唯一转换入口（浏览器 /api/package-bwe 与命令行共用）。
  *
  * 契约：字段名与语义对齐 src/Studio/runtime/GameData.java 的读取；
@@ -1060,6 +1159,11 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
     }
   }
 
+  // 预制体：运行期启动时把这份表逐个 bwe.prefab.define 一遍，之后 spawn 就是实例化。
+  // 老工程没有这个字段时输出空数组（不是省略）：Java 侧 arr() 两种都认，显式空表更好排查。
+  const prefabs = prefabBootList(project, assetNames, scriptNameByKey, scriptLangByKey, warnings);
+  if (prefabs.length) logStep(onLog, `已导出 ${prefabs.length} 个预制体到 boot.json`);
+
   const boot = {
     project: String(project.name ?? "未命名工程"),
     tileSize,
@@ -1068,7 +1172,9 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
     variables,
     scripts,
     // 玩法模块按素材名找图；这张表必须有。
-    assets: Array.from(runtimeAssets.values())
+    assets: Array.from(runtimeAssets.values()),
+    // 预制体模板：编辑器「左栏 → 预制体」页维护，运行期用 bwe.prefab.spawn(name) 生成。
+    prefabs
   };
   // 可选：全局入口脚本名（有就跑 onSceneStart 前先执行）。编辑器还没提供这个字段时就不写。
   const jsMain = String(project.jsMain ?? "").trim();

@@ -121,7 +121,39 @@ npm run gen:examples
 
 ## 已知边界
 
-- 渲染为 OpenGL 立即模式（`glBegin/glEnd`），同屏对象多时是性能瓶颈；后续可迁移到 VBO/图集批处理
+- 渲染为 OpenGL 固定管线（`glBegin/glEnd` + 显示列表）。已做**纹理按路径共享 + 同纹理合批**：
+  实测 `glBegin` 从 162→7 次/帧（有贴图）、3575→20 次/帧（纯色瓦片），**输出像素逐位一致**。
+  后续可迁移到 VBO / 图集批处理进一步压提交量。
 - 两套碰撞入口并存：JBox2D 接触（物理）+ `CollisionSystem` 配对（每帧触发，无 enter/stay/exit 语义）
 - 协程是回调式接口（`Coroutine.update()`），不是语言级 yield 协程
 - 全局状态较多（`GameSekai.GameObjects` 等 static 字段），单窗口 Demo 够用，多场景/多窗口需收敛为实例
+
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [`docs/api/`](docs/api/README.md) | **JS 脚本 API 手册**（Unity Scripting API 体例，10 页 271 条目） |
+| [`docs/scripting-api.md`](docs/scripting-api.md) | 脚本系统契约（编辑器 / 导出器 / 运行时四方共同遵守） |
+| [`docs/mapping-contract.md`](docs/mapping-contract.md) | 编辑器 → 引擎 映射契约（坐标 / 尺寸 / 绘制顺序） |
+| [`docs/_fragments/`](docs/_fragments/) | 本轮性能优化与预制体交付的详细报告 |
+
+### 预制体（Prefab）
+
+编辑器左栏「预制体 Prefab」可建模板、从场景对象抓取、拖进画布放置；
+`boot.json` 的 `prefabs[]` 运行期自动注册，脚本里用 `bwe.prefab.spawn(名字, {x, y})` 实例化，
+`bwe.pool` 做对象池。详见 [`docs/api/prefab.md`](docs/api/prefab.md)。
+
+## 自检
+
+```powershell
+# 7 个测试类，共 394 项断言（需 JDK 17~25，不要 JDK 26）
+$all = Get-ChildItem -Recurse -Path src -Filter *.java | Select-Object -ExpandProperty FullName
+javac -d .tmp_rel8\rel -encoding utf-8 -cp "lib/*" $all
+foreach ($t in 'ScriptSelfTest','ScriptFieldsTest','ScriptPhysicsTest','ScriptAiTest',
+               'ScriptPrefabTest','ScriptPerfTest','ScriptContractTest') {
+  java -cp ".tmp_rel8\rel;lib/*" "Studio.runtime.$t"
+}
+
+# API 四方一致性（Java ↔ bwe.d.ts ↔ apiDocs.ts ↔ docs/api）
+node web/tools/verify-apidocs.mjs
+```

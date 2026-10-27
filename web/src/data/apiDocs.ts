@@ -11,7 +11,7 @@
 
 /** API 速查的分组（顺序即侧栏里的显示顺序）。 */
 export type ApiGroupId =
-  | "life" | "world" | "entity" | "input" | "camera" | "time"
+  | "life" | "world" | "entity" | "prefab" | "input" | "camera" | "time"
   | "draw" | "audio" | "save" | "map" | "nav" | "interact" | "spawner" | "util"
   | "material" | "field" | "sense" | "physics";
 
@@ -37,6 +37,7 @@ export const API_GROUPS: ApiGroup[] = [
   { id: "life", label: "生命周期 Lifecycle", blurb: "运行时按事件调用脚本里的同名函数" },
   { id: "world", label: "世界 world", blurb: "地图尺寸、查找 / 生成 / 销毁、全局事件" },
   { id: "entity", label: "实体 Entity", blurb: "对象属性、模块、子精灵、血量" },
+  { id: "prefab", label: "预制体 prefab / pool", blurb: "模板注册、批量生成、对象池" },
   { id: "input", label: "输入 input", blurb: "按键、鼠标、方向轴" },
   { id: "camera", label: "相机 camera", blurb: "跟随、缩放、抖动、坐标换算" },
   { id: "time", label: "时间 time", blurb: "时间 / 帧、延时与重复任务" },
@@ -83,8 +84,16 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.world.scene", "bwe.world.scene → {name, width, height}", "当前场景信息", "world"),
   d("bwe.world.find", "bwe.world.find(q) → Entity | null", "找第一个匹配的实体；q 可以是名字/标签字符串，或 {name, tag, kind, id}", "world"),
   d("bwe.world.findAll", "bwe.world.findAll(q) → Entity[]", "找所有匹配的实体", "world"),
-  d("bwe.world.spawn", "bwe.world.spawn({x, y, asset?, name?, kind?, tags?, z?, halfW?, halfH?, script?, modules?}) → Entity", "运行时生成一个实体", "world"),
+  d("bwe.world.spawn", "bwe.world.spawn({x, y, asset?, name?, kind?, tags?, z?, layer?, halfW?, halfH?, scaleX?, scaleY?, rotation?, visible?, animMode?, animFps?, script?, modules?, props?, parent?}) → Entity", "运行时生成一个实体", "world"),
+  d("bwe.world.spawnMany", "bwe.world.spawnMany(list) → Entity[]", "批量生成（每个元素一份 spawn 参数）", "world"),
+  d("bwe.world.spawnAt", "bwe.world.spawnAt(opts, x, y) → Entity", "便捷式：生成并强制指定 x/y", "world"),
+  d("bwe.world.clone", "bwe.world.clone(e, opts?) → Entity | null", "复制实体（tags/模块/props/子精灵一并带上）", "world"),
   d("bwe.world.destroy", "bwe.world.destroy(e)", "销毁实体（同 e.destroy()）", "world"),
+  d("bwe.world.clear", "bwe.world.clear()", "销毁所有实体（含场景原生对象）", "world"),
+  d("bwe.world.clearTag", "bwe.world.clearTag(tag)", "只销毁带该标签的实体", "world"),
+  d("bwe.world.destroyAll", "bwe.world.destroyAll(filter?) → number", "批量销毁，返回实际删除数", "world"),
+  d("bwe.world.count", "bwe.world.count(q?) → number", "数量：无参 = 存活实体数，有参 = 匹配数", "world"),
+  d("bwe.world.each", "bwe.world.each(q, fn(e))", "遍历（快照迭代，回调里 spawn/destroy 安全）", "world"),
   d("bwe.world.entities", "bwe.world.entities() → Entity[]", "当前所有实体（只读数组）", "world"),
   d("bwe.world.paused", "bwe.world.paused = true", "暂停整个运行时", "world"),
   d("bwe.world.timeScale", "bwe.world.timeScale = 0.5", "时间缩放，1 = 正常", "world"),
@@ -98,16 +107,38 @@ export const API_DOCS: ApiDoc[] = [
   d("e.name", "e.name", "对象名（可读写，用于 find）", "entity"),
   d("e.kind", "e.kind", "对象大类：ACTOR / PROP / TILE / ZONE / SPAWN / PORTAL / LIGHT", "entity"),
   d("e.x", "e.x / e.y", "位置（世界像素，中心点，Y 向下）", "entity"),
+  d("e.y", "e.y", "位置（世界像素，中心点，Y 向下）：与 e.x 同一节，可直接赋值", "entity"),
   d("e.z", "e.z", "排序层级，大的盖住小的", "entity"),
   d("e.rotation", "e.rotation", "角度，顺时针，单位度", "entity"),
+  d("e.scaleX", "e.scaleX / e.scaleY", "缩放倍数（1 = 原尺寸；-1 = 水平翻转）", "entity"),
+  d("e.scaleY", "e.scaleY", "缩放倍数：与 e.scaleX 同一节，可直接赋值", "entity"),
   d("e.visible", "e.visible", "显示 / 隐藏", "entity"),
   d("e.alive", "e.alive", "是否还活着（只读）", "entity"),
   d("e.tags", "e.tags → Tags", "标签集合：e.tags.has(\"敌人\") / e.tags.includes(\"敌人\")", "entity"),
   d("e.actor", "type Entity", "所有 e.xxx 里的 e 都是 Entity（脚本里 e = ctx.self）", "entity"),
   d("e.pos", "e.pos → {x, y}", "位置（只读快照）", "entity"),
   d("e.setPos", "e.setPos(x, y)", "设置位置（世界像素，中心点）", "entity"),
-  d("e.size", "e.size → {w, h}", "可视化尺寸（与编辑器 halfW/halfH 同一套规则）", "entity"),
+  d("e.size", "e.size → {w, h}（可写）", "可视化尺寸（与编辑器 halfW/halfH 同一套规则）；写 size = {w,h} 等价 setSize", "entity"),
   d("e.setSize", "e.setSize(w, h)", "设置尺寸", "entity"),
+  d("e.layer", "e.layer", "图层下标（绘制顺序 layer → z → y）", "entity"),
+  d("e.locked", "e.locked", "锁定标记（运行时只记忆，不影响行为）", "entity"),
+  d("e.animMode", "e.animMode", "\"默认\" / \"只显示首帧\" / \"单次播放\"（写时 loop/first/once 也认）", "entity"),
+  d("e.animFps", "e.animFps", "每秒帧数（写会解除 setFrame 的帧锁定）", "entity"),
+  d("e.asset", "e.asset", "当前素材名（可读写；写入等价换图但不改播放参数）", "entity"),
+  d("e.setColor", "e.setColor(r, g, b, a?)", "染色：0~1；任一通道 > 1 时整组按 0~255 解释", "entity"),
+  d("e.setAlpha", "e.setAlpha(a)", "只改透明度（0~1；>1 视作 0~255），与 blink 模块 alpha 相乘", "entity"),
+  d("e.clearColor", "e.clearColor()", "清除染色，恢复原样", "entity"),
+  d("e.color", "e.color → {r, g, b, a}", "当前染色值（只读）", "entity"),
+  d("e.addTag", "e.addTag(t) → boolean", "加标签（已存在返回 true 且不重复）", "entity"),
+  d("e.removeTag", "e.removeTag(t) → boolean", "删标签；原本没有返回 false", "entity"),
+  d("e.hasTag", "e.hasTag(t) → boolean", "有没有这个标签", "entity"),
+  d("e.setTags", "e.setTags(arr)", "整体替换标签集合", "entity"),
+  d("e.props", "e.props() → Record<string, string>", "全部对象属性（快照）", "entity"),
+  d("e.setProps", "e.setProps(obj)", "批量写属性（值归一成编辑器同构文本）", "entity"),
+  d("e.addModule", "e.addModule(def, params?, when?) → boolean", "追加模块；同 def 已存在时合并参数。加 combat.health 会立刻重算 hpMax/hp", "entity"),
+  d("e.removeModule", "e.removeModule(def) → boolean", "移除模块；不存在返回 false。移除 combat.health 不重置当前 hp/hpMax", "entity"),
+  d("e.parent", "e.parent（可写）→ Entity | null", "父实体；设 null 解除关系", "entity"),
+  d("e.children", "e.children() → Entity[]", "直接子级（只读快照）", "entity"),
   d("e.sprite", "e.sprite({asset, frame?, fps?, mode?})", "换精灵；mode: \"loop\" | \"once\" | \"first\"", "entity"),
   d("e.play", "e.play(assetName)", "直接换素材（沿用当前播放参数）", "entity"),
   d("e.setFrame", "e.setFrame(i)", "冻结到第 i 帧（0 起）", "entity"),
@@ -116,12 +147,13 @@ export const API_DOCS: ApiDoc[] = [
   d("e.hasModule", "e.hasModule(\"move.patrol\")", "有没有挂这个模块", "entity"),
   d("e.module", "e.module(id) → {enabled, get(k), set(k, v)}", "取模块实例，读写它的参数与开关", "entity"),
   d("e.modules", "e.modules() → ModuleInstance[]", "所有模块实例", "entity"),
-  d("e.attach", "e.attach({asset, dx, dy, z, rotation}) → handle", "挂一个子精灵（武器 / 影子 / 特效）", "entity"),
-  d("e.detach", "e.detach(handle)", "摘掉子精灵", "entity"),
+  d("e.attach", "e.attach({asset, dx?, dy?, z?, rotation?, alpha?, w?, h?}) → {id, remove()}", "挂一个子精灵（武器 / 影子 / 特效），返回**对象**句柄", "entity"),
+  d("e.detach", "e.detach(handle | id)", "摘掉子精灵（传 attach 的返回值，或直接传 id）", "entity"),
   d("e.distanceTo", "e.distanceTo(other) → number", "到另一个实体的距离（像素）", "entity"),
   d("e.angleTo", "e.angleTo(other) → number", "到另一个实体的角度（度，0 = 向右）", "entity"),
   d("e.destroy", "e.destroy()", "销毁自己", "entity"),
   d("e.hp", "e.hp / e.hpMax", "生命值（读写 combat.health 模块，没有则用内部值）", "entity"),
+  d("e.hpMax", "e.hpMax", "生命值上限：与 e.hp 同一节，可写（改它不会自动回满）", "entity"),
   d("e.damage", "e.damage(n)", "扣血（走受击流程：闪白 / 无敌帧 / onDamage）", "entity"),
   d("e.heal", "e.heal(n)", "回血", "entity"),
   d("e.on", "e.on(\"click\"|\"enter\"|\"leave\"|\"damage\"|\"death\", fn)", "注册实体事件", "entity"),
@@ -211,6 +243,21 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.spawner.create", "bwe.spawner.create({asset?, script?, count = 1, interval = 2, max = 10, area?, onSpawn}) → handle", "定时刷怪 / 掉落", "spawner"),
   d("bwe.spawner.stop", "bwe.spawner.stop(handle)", "停掉生成器", "spawner"),
 
+  // ===== 预制体 / 对象池 =====
+  d("bwe.prefab.define", "bwe.prefab.define(name, spec) → boolean", "注册 / 覆盖一个预制体模板（spec 字段同 boot.json prefabs[]）", "prefab"),
+  d("bwe.prefab.get", "bwe.prefab.get(name) → PrefabSpec | null", "读模板的深拷贝快照（改它不影响注册表）", "prefab"),
+  d("bwe.prefab.list", "bwe.prefab.list() → string[]", "所有模板名（顺序 = define 顺序）", "prefab"),
+  d("bwe.prefab.has", "bwe.prefab.has(name) → boolean", "模板是否存在", "prefab"),
+  d("bwe.prefab.remove", "bwe.prefab.remove(name) → boolean", "移除模板（已生成的实例不受影响）", "prefab"),
+  d("bwe.prefab.spawn", "bwe.prefab.spawn(name, {x, y, z, rotation, scaleX, scaleY, tags, modules, props, name, parent, jitter}?) → Entity | null", "实例化；opts 在模板之上覆盖。给了 x/y 就精确落位不抖，jitter:true 才抖", "prefab"),
+  d("bwe.prefab.spawnMany", "bwe.prefab.spawnMany(name, optsList) → Entity[]", "批量实例化（每个元素一份覆盖）", "prefab"),
+  d("bwe.prefab.count", "bwe.prefab.count(name) → number", "当前存活的该预制体实例数（对象池 / 上限用）", "prefab"),
+  d("bwe.prefab.fromEntity", "bwe.prefab.fromEntity(e, name?) → string | null", "把场上实体抓成模板并注册（含模块/属性/标签/子精灵）", "prefab"),
+  d("bwe.pool.create", "bwe.pool.create(prefabName, capacity?, {prewarm}?) → handle", "建对象池；prewarm 会预生成隐藏实例。预制体不存在返回 -1", "prefab"),
+  d("bwe.pool.acquire", "bwe.pool.acquire(handle, x, y) → Entity | null", "取一个实例（优先复用空闲），池满返回 null", "prefab"),
+  d("bwe.pool.release", "bwe.pool.release(handle, e) → boolean", "归还实例；不属于该池 / 已销毁返回 false", "prefab"),
+  d("bwe.pool.stats", "bwe.pool.stats(handle) → {idle, active, total, capacity} | null", "池统计", "prefab"),
+
   // ===== 辅助函数 =====
   d("bwe.random", "bwe.random(min, max) → number", "随机小数", "util"),
   d("bwe.randomInt", "bwe.randomInt(min, max) → number", "随机整数（含两端）", "util"),
@@ -224,6 +271,7 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.call", "bwe.call(scriptName, handlerName, ...args)", "调用另一个脚本里的具名函数", "util"),
   d("bwe.has", "bwe.has(scriptName) → boolean", "该脚本是否存在", "util"),
   d("bwe.scripts.call", "bwe.scripts.call(scriptName, handlerName, ...args)", "bwe.call 的等价写法", "util"),
+  d("bwe.scripts.has", "bwe.scripts.has(scriptName) → boolean", "该脚本是否存在", "util"),
 
   // ===== 涌现式模拟：材质 =====
   d("bwe.material.define", "bwe.material.define(name, {flammable, burnTime, conductive, wet, hardness, density, tags})", "定义 / 覆盖材质：一切燃烧与导电源自这些数字", "material"),
@@ -242,6 +290,7 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.field.channel", "bwe.field.channel(name) → {max(v)}", "自定义通道", "field"),
   d("bwe.field.wind", "bwe.field.wind(dx, dy) → Vec2", "风向：影响烟雾与火势偏向", "field"),
   d("bwe.field.on", "bwe.field.on(\"ignite\" | \"extinguish\" | \"burned\", fn) → 取消函数", "场事件：被点燃 / 熄灭 / 烧尽", "field"),
+  d("bwe.field.off", "bwe.field.off(ev, fn?)", "取消订阅：给 fn 只摘那一个，不给 fn 清空该事件全部回调", "field"),
   d("bwe.field.burning", "bwe.field.burning() → [{cx, cy, intensity, material}]", "当前正在燃烧的格子", "field"),
 
   // ===== 涌现式模拟：噪音 =====
@@ -270,7 +319,8 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.target.inFront", "bwe.target.inFront(e, range = 1格) → Entity | cell | null", "实体面前的东西", "sense"),
 
   // ===== 涌现式模拟：物理 =====
-  d("bwe.physics.enable", "bwe.physics.enable() / enabled()", "打开物理子步（默认关）", "physics"),
+  d("bwe.physics.enable", "bwe.physics.enable() / bwe.physics.enabled()", "打开物理子步（默认关）；enabled() 读当前状态", "physics"),
+  d("bwe.physics.enabled", "bwe.physics.enabled() → boolean", "物理子步当前是否开启（与 enable 同一节）", "physics"),
   d("bwe.physics.gravity", "bwe.physics.gravity(gy = 0) → number", "重力 px/s²（俯视角默认 0）", "physics"),
   d("bwe.physics.body", "bwe.physics.body(e, {type, shape, radius, halfW, halfH, density, friction, restitution, sensor})", "给实体建刚体（瓦片阻挡会自动成为静态墙）", "physics"),
   d("bwe.physics.remove", "bwe.physics.remove(e)", "移除刚体", "physics"),
@@ -283,11 +333,14 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.physics.queryAABB", "bwe.physics.queryAABB(x, y, w, h) → Entity[]", "矩形查询（x,y 为左上角）", "physics"),
   d("bwe.physics.on", "bwe.physics.on(\"collision\", fn({a, b, impulse, sensor})) → 取消函数", "碰撞回调", "physics"),
   d("bwe.physics.debug", "bwe.physics.debug(on = true) → boolean", "画碰撞体线框", "physics"),
+  d("bwe.physics.bodyCount", "bwe.physics.bodyCount() → number", "当前动态刚体数量（性能水位观察）", "physics"),
+  d("bwe.physics.tileBodyCount", "bwe.physics.tileBodyCount() → number", "当前瓦片静态墙体数量（建/拆 tilemap 后核对）", "physics"),
 
   // ===== 涌现式模拟：确定性随机 =====
   d("bwe.seed.set", "bwe.seed.set(n)", "固定随机种子（同种子 + 同输入 ⇒ 同结果，对拍用）", "util"),
   d("bwe.seed.get", "bwe.seed.get() → number", "当前种子", "util"),
-  d("bwe.seed.reset", "bwe.seed.reset()", "恢复默认种子", "util")
+  d("bwe.seed.reset", "bwe.seed.reset()", "恢复默认种子", "util"),
+  d("bwe.seed.defaultSeed", "bwe.seed.defaultSeed() → number", "引擎内置的默认种子常量", "util")
 ];
 
 // ---------------- 查询 ----------------

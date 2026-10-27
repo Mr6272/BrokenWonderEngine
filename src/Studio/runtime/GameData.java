@@ -110,6 +110,24 @@ public final class GameData {
         public int height = 40;
         public int tileSize = 32;
         public final List<RtObject> objects = new ArrayList<>();
+        /**
+         * 场景图层（编辑器 scene.layers，导出时写在 scene_*.json 顶层 "layers"）。
+         *
+         * <p>之前<b>完全没有解析</b>：绘制只用对象的 {@code layer} 整数下标，
+         * 所以 {@code bwe.world.layers()} 只能返回空数组（Phase 2 占位），
+         * 图层的名字 / 可见性对脚本不可见。
+         * 现在解析出来，供 {@code bwe.world.layers()} 与「按图层名隐藏」用。
+         */
+        public final List<RtLayer> layers = new ArrayList<>();
+    }
+
+    /** 一个场景图层。 */
+    public static final class RtLayer {
+        public String id = "";
+        public String name = "";
+        public boolean visible = true;
+        public boolean locked = false;
+        public int order = 0;
     }
 
     // ---------------- 读盘 ----------------
@@ -216,6 +234,20 @@ public final class GameData {
                 }
             }
             s.objects.add(t);
+        }
+        // 图层表：编辑器导出在 scene_*.json 顶层 "layers"（旧 Build 没有这个字段 → 空表，向后兼容）。
+        for (JsonElement e : arr(root, "layers")) {
+            if (!e.isJsonObject()) {
+                continue;
+            }
+            JsonObject lo = e.getAsJsonObject();
+            RtLayer rl = new RtLayer();
+            rl.id = str(lo, "id", "");
+            rl.name = str(lo, "name", "");
+            rl.visible = !lo.has("visible") || lo.get("visible").getAsBoolean();
+            rl.locked = lo.has("locked") && lo.get("locked").getAsBoolean();
+            rl.order = num(lo, "order", 0);
+            s.layers.add(rl);
         }
         return s;
     }

@@ -155,6 +155,12 @@ final class ScriptAi {
                 new IdentityHashMap<TopDownRuntime.Actor, String>();
         /** "a\u0000b" → -1/0/1，同时写两个方向。 */
         final Map<String, Integer> relations = new HashMap<String, Integer>();
+        /**
+         * 与 {@link #relations} 同步的嵌套索引（source → target → rel）。
+         * 热路径查关系时不再拼 "a\u0000b" 字符串，避免每帧数百次短命分配。
+         */
+        final Map<String, Map<String, Integer>> relationsBySource =
+                new HashMap<String, Map<String, Integer>>();
 
         final List<NoiseEvent> noises = new ArrayList<NoiseEvent>();
         final List<AlertMsg> pendingAlerts = new ArrayList<AlertMsg>();
@@ -166,6 +172,19 @@ final class ScriptAi {
 
         long tickNanos;
         long tickCount;
+
+        // ---- 场景顺序 agent 列表（每帧算一次，三个阶段复用） ----
+        final List<Agent> agentOrder = new ArrayList<Agent>();
+        int orderFrame = -1;
+
+        // ---- 敌对候选缓存（阵营名 → 敌对实体列表） ----
+        // 只在「阵营映射变了」或「场景 actor 数量变了」时重建；阵营与实体构成在
+        // 正常情况下逐帧稳定，因此不必每帧重建并分配 Map/List。
+        final Map<String, List<TopDownRuntime.Actor>> hostileByFaction =
+                new HashMap<String, List<TopDownRuntime.Actor>>();
+        int factionVersion;
+        int hostileVersion = -1;
+        int hostileActorCount = -1;
 
         AiState(ScriptApi api) {
             this.api = api;
@@ -186,16 +205,29 @@ final class ScriptAi {
         /**
          * 按场景（host.actors）顺序返回 agent：onStart 派发顺序来自 IdentityHashMap，
          * 跨运行不可复现；这里用场景顺序兜底，保证「同种子同输入 ⇒ 同日志/同状态序列」。
+         *
+         * <p>每帧要按同一顺序走三遍（alerts / vision / memory），原先每遍都新建
+         * {@code ArrayList} 并重新做一遍 actors×agents 的 IdentityHashMap 查找。
+         * 现在每帧只算一次（{@link #agentOrder}），后续调用直接复用——顺序与内容完全一致。
          */
         List<Agent> agentsInSceneOrder() {
-            List<Agent> out = new ArrayList<Agent>(agents.size());
+            if (orderFrame >= 0 && orderFrame == frame()) {
+                return agentOrder;
+            }
+            agentOrder.clear();
             for (TopDownRuntime.Actor a : host.actors) {
                 Agent ag = agents.get(a);
                 if (ag != null) {
-                    out.add(ag);
+                    agentOrder.add(ag);
                 }
             }
-            return out;
+            orderFrame = frame();
+            return agentOrder;
+        }
+
+        /** 失效缓存（agent 列表/场景顺序变化时调用）。 */
+        void invalidateAgentOrder() {
+            orderFrame = -1;
         }
     }
 
@@ -456,6 +488,8 @@ final class ScriptAi {
             } else {
                 st.factions.put(a, name);
             }
+            // 敌对候选缓存依赖「实体 → 阵营」映射，这里一改就作废。
+            st.factionVersion++;
             return null;
         });
         api.addMethod(faction, "relation", (cx, thisObj, args) -> {
@@ -470,8 +504,8 @@ final class ScriptAi {
             }
             int rel = ScriptJs.inum(v, 0);
             rel = rel < 0 ? -1 : (rel > 0 ? 1 : 0);
-            st.relations.put(key(a, b), Integer.valueOf(rel));
-            st.relations.put(key(b, a), Integer.valueOf(rel));
+            putRelation(st, a, b, rel);
+            putRelation(st, b, a, rel);
             return Double.valueOf(rel);
         });
         api.addMethod(faction, "hostile", (cx, thisObj, args) -> {
@@ -509,6 +543,14 @@ final class ScriptAi {
         return a + "\u0000" + b;
     }
 
+    /**
+     * 阵营关系查询。
+     *
+     * <p>热路径要点：{@link #key(String, String)} 每次都拼一个新字符串，而
+     * {@code processVision} 每帧要为每个阵营的每个实体查一次（200 AI × 220 实体级别），
+     * 那是每帧数百次短命字符串分配。这里改走「内层 Map 嵌套」，命中时零分配；
+     * 结果与 {@code relations} 表完全一致（同一个 {@code put} 同时写两边）。
+     */
     private static int relationOf(AiState st, String a, String b) {
         if (a == null || b == null) {
             return 0;
@@ -516,8 +558,28 @@ final class ScriptAi {
         if (a.equals(b)) {
             return 1;
         }
+        Map<String, Integer> inner = st.relationsBySource.get(a);
+        if (inner != null) {
+            Integer hit = inner.get(b);
+            if (hit != null) {
+                return hit.intValue();
+            }
+        }
+        // 兜底：直接查扁平表（保持与直接把 relations 表当真相的来源一致）
         Integer v = st.relations.get(key(a, b));
         return v == null ? 0 : v.intValue();
+    }
+
+    /** 与 {@code relations.put(key(a,b), v)} 保持同步的嵌套索引（避免热路径拼 key）。 */
+    private static void putRelation(AiState st, String a, String b, int rel) {
+        Integer boxed = Integer.valueOf(rel);
+        st.relations.put(key(a, b), boxed);
+        Map<String, Integer> inner = st.relationsBySource.get(a);
+        if (inner == null) {
+            inner = new HashMap<String, Integer>();
+            st.relationsBySource.put(a, inner);
+        }
+        inner.put(b, boxed);
     }
 
     private static boolean hostile(AiState st, TopDownRuntime.Actor a, TopDownRuntime.Actor b) {
@@ -546,6 +608,7 @@ final class ScriptAi {
             if (ag == null) {
                 ag = new Agent(a);
                 st.agents.put(a, ag);
+                st.invalidateAgentOrder();
             }
             if (o != null) {
                 ag.sight = ScriptJs.fnum(ScriptJs.get(o, "sight"), ag.sight);
@@ -560,6 +623,7 @@ final class ScriptAi {
             TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a != null) {
                 st.agents.remove(a);
+                st.invalidateAgentOrder();
             }
             return null;
         });
@@ -613,17 +677,28 @@ final class ScriptAi {
         });
         api.addMethod(ai, "onAlert", (cx, thisObj, args) -> {
             Function f = ScriptJs.fnArg(ScriptJs.arg(args, 0));
-            if (f != null) {
-                st.onAlert.add(new JsHandler(f, api.engineRef().def(api.engineRef().currentScriptName())));
+            if (f == null) {
+                return null;
             }
-            return null;
+            JsHandler h = new JsHandler(f, api.engineRef().def(api.engineRef().currentScriptName()));
+            st.onAlert.add(h);
+            // ⚠ 契约声明返回「取消函数」，原实现 `return null` → 用户 `off()` 会 TypeError。
+            return api.newFn("offAlert", (c2, t2, a2) -> {
+                st.onAlert.remove(h);
+                return null;
+            });
         });
         api.addMethod(ai, "onSpot", (cx, thisObj, args) -> {
             Function f = ScriptJs.fnArg(ScriptJs.arg(args, 0));
-            if (f != null) {
-                st.onSpot.add(new JsHandler(f, api.engineRef().def(api.engineRef().currentScriptName())));
+            if (f == null) {
+                return null;
             }
-            return null;
+            JsHandler h = new JsHandler(f, api.engineRef().def(api.engineRef().currentScriptName()));
+            st.onSpot.add(h);
+            return api.newFn("offSpot", (c2, t2, a2) -> {
+                st.onSpot.remove(h);
+                return null;
+            });
         });
         api.attach("ai", ai);
     }
@@ -851,6 +926,7 @@ final class ScriptAi {
             for (TopDownRuntime.Actor a : dead) {
                 st.agents.remove(a);
             }
+            st.invalidateAgentOrder();
         }
     }
 
@@ -915,26 +991,32 @@ final class ScriptAi {
         List<TopDownRuntime.Actor> all = st.api.actorsSnapshot();
         // 按「观察者阵营」预筛敌对候选：200 个 AI × 220 个实体的全量两两 hostile 检查
         // 会白白吃掉大半帧预算，先按阵营各算一次（阵营数一般个位数）。
-        Map<String, List<TopDownRuntime.Actor>> hostileCache =
-                new HashMap<String, List<TopDownRuntime.Actor>>();
-        for (Agent ag : st.agentsInSceneOrder()) {
-            String f = st.factions.get(ag.actor);
-            if (f == null || hostileCache.containsKey(f)) {
-                continue;
-            }
-            List<TopDownRuntime.Actor> list = new ArrayList<TopDownRuntime.Actor>();
-            for (int i = 0; i < all.size(); i++) {
-                TopDownRuntime.Actor b = all.get(i);
-                if (b == null) {
+        // 缓存只在阵营映射或场景 actor 数量变化时重建（逐帧稳定时不分配任何容器）。
+        int actorCount = st.host.actors.size();
+        if (st.hostileVersion != st.factionVersion || st.hostileActorCount != actorCount) {
+            st.hostileByFaction.clear();
+            for (Agent ag : st.agentsInSceneOrder()) {
+                String f = st.factions.get(ag.actor);
+                if (f == null || st.hostileByFaction.containsKey(f)) {
                     continue;
                 }
-                String fb = st.factions.get(b);
-                if (fb != null && relationOf(st, f, fb) < 0) {
-                    list.add(b);
+                List<TopDownRuntime.Actor> list = new ArrayList<TopDownRuntime.Actor>();
+                for (int i = 0; i < all.size(); i++) {
+                    TopDownRuntime.Actor b = all.get(i);
+                    if (b == null) {
+                        continue;
+                    }
+                    String fb = st.factions.get(b);
+                    if (fb != null && relationOf(st, f, fb) < 0) {
+                        list.add(b);
+                    }
                 }
+                st.hostileByFaction.put(f, list);
             }
-            hostileCache.put(f, list);
+            st.hostileVersion = st.factionVersion;
+            st.hostileActorCount = actorCount;
         }
+        Map<String, List<TopDownRuntime.Actor>> hostileCache = st.hostileByFaction;
         for (Agent ag : st.agentsInSceneOrder()) {
             TopDownRuntime.Actor a = ag.actor;
             if (a == null || a.dead) {
@@ -945,6 +1027,9 @@ final class ScriptAi {
             TopDownRuntime.Actor best = null;
             float bestD2 = Float.MAX_VALUE;
             if (candidates != null) {
+                // 试过「按空间桶索引只扫视距内候选」：实测反而更慢（visionScan
+                // 39µs → 68µs），因为本场景 20 个敌人摊在 200 个守卫的小地图里，
+                // 桶查找的 Map/散列开销超过了省下的距离比较。已回滚，保留全量扫描。
                 for (int i = 0; i < candidates.size(); i++) {
                     TopDownRuntime.Actor b = candidates.get(i);
                     if (b == a || b.dead || !b.o.visible) {

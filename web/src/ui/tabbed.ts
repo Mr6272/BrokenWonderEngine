@@ -64,6 +64,21 @@ export class Tabbed {
     item.onShow?.();
   }
 
+  /**
+   * 重渲染当前页（不切换标签）。
+   *
+   * 和 show(current) 的区别只是语义：调用方想表达"数据变了，重画这一页"，
+   * 而不是"切换到这一页"。单独留一个方法，避免以后有人为了刷新顺手去调 show，
+   * 把 tab 激活态那套逻辑也带着跑一遍。
+   */
+  refresh(): void {
+    const item = this.items.find((i) => i.id === this.active);
+    if (!item) return;
+    this.host.replaceChildren();
+    item.render(this.host);
+    item.onShow?.();
+  }
+
   current(): string {
     return this.active;
   }

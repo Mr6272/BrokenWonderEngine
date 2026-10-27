@@ -215,6 +215,11 @@ final class ScriptFields {
         private static final float REFRESH_INTERVAL = 0.5f;
         /** 数值视为 0 的门限。 */
         private static final float EPS = 0.005f;
+        /**
+         * 烟雾格的「值得继续遍历」门限：必须与 {@link #processCell} 里 smoke 分支的
+         * {@code sv > SMOKE_WORK_MIN} 完全一致，否则会留下一批永远空转的活跃格。
+         */
+        private static final float SMOKE_WORK_MIN = 0.01f;
         /** 实体被火烧到的伤害倍率（每秒 × 火势）。 */
         private static final float DAMAGE_RATE = 22f;
 
@@ -292,6 +297,18 @@ final class ScriptFields {
             Handler(Function fn) {
                 this.fn = fn;
                 this.scope = fn.getParentScope();
+            }
+        }
+
+        /** 按函数引用摘掉订阅（bwe.field.on 返回的取消函数用）。 */
+        private static void removeHandler(List<Handler> list, Function fn) {
+            if (list == null || fn == null) {
+                return;
+            }
+            for (int i = list.size() - 1; i >= 0; i--) {
+                if (list.get(i).fn == fn) {
+                    list.remove(i);
+                }
             }
         }
 
@@ -839,7 +856,7 @@ final class ScriptFields {
 
             // ---- smoke：向上 + 顺风扩散、横向扩散、衰减 ----
             float sv = smokeV[idx];
-            if (sv > 0.01f) {
+            if (sv > SMOKE_WORK_MIN) {
                 float smax = smokeChan.max;
                 float out = sv * (0.5f * dt);
                 if (out > sv) {
@@ -1169,14 +1186,36 @@ final class ScriptFields {
             activeN = w;
         }
 
-        private boolean alive(int idx) {            if (burning[idx]) {
+        /**
+         * 该格是否还需要留在 active 列表里。
+         *
+         * <p><b>契约</b>：只有在 {@link #processCell} 可能改动状态时才返回 true。
+         * 否则这一格会每 tick 被遍历一遍却什么都不做——大地图烟雾消散期会出现
+         * 数千个这种空转格（实测 100x100 草地场景稳态 ~4148 格、约 100µs/帧）。
+         *
+         * <p>每个门限都必须与 processCell 里对应分支的「工作门限」逐字对齐：
+         * <ul>
+         *   <li>smoke 分支是 {@code sv > 0.01f}，所以这里也必须用 0.01 而不是 EPS
+         *       （用 EPS 会多留一批 0.005~0.01 的格子空转）；</li>
+         *   <li>自定义通道只在 {@code decay > 0} 时才衰减，decay 为 0 的通道值永远不变，
+         *       留着它也只是空转；</li>
+         *   <li>fire / water / wet 仍用 EPS：它们的分支门限是 {@code > 0f}，与 EPS 不等价，
+         *       但改成 0f 会让「低于 EPS 的残留值」永远留在表中，属于行为变更，故保持不变。</li>
+         * </ul>
+         */
+        private boolean alive(int idx) {
+            if (burning[idx]) {
                 return true;
             }
-            if (fireV[idx] > EPS || waterV[idx] > EPS || smokeV[idx] > EPS || wet[idx] > EPS) {
+            if (fireV[idx] > EPS || waterV[idx] > EPS || wet[idx] > EPS) {
+                return true;
+            }
+            if (smokeV[idx] > SMOKE_WORK_MIN) {
                 return true;
             }
             for (int i = 0; i < customs.size(); i++) {
-                if (customs.get(i).v[idx] > EPS) {
+                Chan ch = customs.get(i);
+                if (ch.decay > 0f && ch.v[idx] > EPS) {
                     return true;
                 }
             }
@@ -1484,7 +1523,31 @@ final class ScriptFields {
                     list = new ArrayList<Handler>();
                     evHandlers.put(event, list);
                 }
+                final List<Handler> fList = list;
+                final Function fFn = fn;
                 list.add(new Handler(fn));
+                // ⚠ 必须返回「取消订阅函数」：契约（bwe.d.ts / apiDocs / docs/api）
+                // 一直声明返回 `() => void`，而这里原来 `return null`。
+                // 用户照文档写 `var off = bwe.field.on("ignite", f); off();` 会
+                // 直接 TypeError: off is not a function —— 这是真会崩用户代码的缺陷。
+                return api.newFn("offFieldEvent", (c2, t2, a2) -> {
+                    removeHandler(fList, fFn);
+                    return null;
+                });
+            });
+
+            api.addMethod(fld, "off", (cx, thisObj, args) -> {
+                String event = ScriptJs.str(ScriptJs.arg(args, 0), "");
+                Function fn = ScriptJs.fnArg(ScriptJs.arg(args, 1));
+                List<Handler> list = evHandlers.get(event);
+                if (list == null) {
+                    return null;
+                }
+                if (fn == null) {
+                    list.clear();
+                } else {
+                    removeHandler(list, fn);
+                }
                 return null;
             });
             api.addMethod(fld, "burning", (cx, thisObj, args) -> {
