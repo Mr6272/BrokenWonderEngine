@@ -26,6 +26,7 @@ import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,6 +67,14 @@ public final class CanvasPanel extends JComponent {
 
     private String hoverName = "";
     private Point2D.Double hoverWorld = new Point2D.Double();
+
+    /** 重复点击位置追踪：记录相同位置点的点击次数，用于轮询选择。 */
+    private final Map<Long, int[]> clickLocations = new HashMap<>();
+    private long lastClickPosKey = -1;
+    private static final long DOUBLE_CLICK_TIMEOUT = 300; // ms
+
+    /** 获取/清除上一次点击位置的时间戳，用于判断重复点击。 */
+    private long currentClickPosKey = -1;
 
     public CanvasPanel(AppState st) {
         this.st = st;
@@ -416,22 +425,75 @@ public final class CanvasPanel extends JComponent {
             }
         }
 
-        SceneObject hit = pick(pressWorld);
-        if (hit != null) {
-            if (e.isShiftDown()) {
-                st.toggleSelect(hit);
-            } else if (!st.isSelected(hit)) {
-                st.select(hit);
-            }
-            beginMove();
-            return;
-        }
+        // 循环选择逻辑
+        long now = System.currentTimeMillis();
+        // 生成当前点击位置的哈希值
+        int hashX = (int) (pressWorld.x * 0.1) % 10000;
+        int hashY = (int) (pressWorld.y * 0.1) % 10000;
+        currentClickPosKey = (((long) hashX) << 32) | ((long) hashY & 0xFFFFFFFFL);
 
-        if (!e.isShiftDown()) {
-            st.clearSelection();
+        if (lastClickPosKey == currentClickPosKey && now - lastClickPosKey < DOUBLE_CLICK_TIMEOUT) {
+            // 重复点击同位置触发循环选择
+            int[] clickCountArr = clickLocations.get(currentClickPosKey);
+            if (clickCountArr == null) {
+                clickCountArr = new int[]{1};
+                clickLocations.put(currentClickPosKey, clickCountArr);
+            }
+            clickCountArr[0]++; // 记录点击次数
+            int clickCount = clickCountArr[0];
+            // 获取同一位置的所有可见对象
+            List<SceneObject> samePosObjects = new ArrayList<>();
+            SceneModel scene = st.scene();
+            for (SceneObject obj : scene.objects) {
+                if (!obj.visible || obj.locked) continue;
+                Studio.data.Layer l = scene.layer(obj.layerId);
+                if (l != null && (!l.visible || l.locked)) continue;
+                if (ScenePainter.bounds(st.project(), obj).contains(pressWorld.x, pressWorld.y)) {
+                    samePosObjects.add(obj);
+                }
+            }
+            if (!samePosObjects.isEmpty()) {
+                // 循环遍历对象
+                int currentIndex = 0;
+                // 查找当前选中的对象在列表中的位置
+                for (int i = 0; i < samePosObjects.size(); i++) {
+                    if (samePosObjects.get(i).id.equals(st.first().id)) {
+                        currentIndex = (i + 1) % samePosObjects.size();
+                        break;
+                    }
+                }
+                // 选择下一个对象
+                SceneObject nextObj = samePosObjects.get(currentIndex);
+                if (!st.isSelected(nextObj)) {
+                    st.select(nextObj);
+                    beginMove();
+                }
+            }
+            // 重置点击次数
+            clickLocations.remove(currentClickPosKey);
+        } else {
+            // 首次点击或不同位置
+            clickLocations.put(currentClickPosKey, new int[]{1});
+            SceneObject hit = pick(pressWorld);
+            if (hit != null) {
+                if (e.isShiftDown()) {
+                    st.toggleSelect(hit);
+                    beginMove();
+                } else if (!st.isSelected(hit)) {
+                    st.select(hit);
+                }
+                // Set drag to NONE to prevent drag initiation - make click non-draggable
+                drag = Drag.NONE;
+                return;
+            }
+
+            if (!e.isShiftDown()) {
+                st.clearSelection();
+            }
+            drag = Drag.MARQUEE;
+            marquee = new Rectangle2D.Double(pressWorld.x, pressWorld.y, 0, 0);
         }
-        drag = Drag.MARQUEE;
-        marquee = new Rectangle2D.Double(pressWorld.x, pressWorld.y, 0, 0);
+        lastClickPosKey = currentClickPosKey;
     }
 
     private void beginMove() {

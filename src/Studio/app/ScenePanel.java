@@ -152,9 +152,17 @@ public final class ScenePanel extends Panel {
         addLayer.addActionListener(e -> addLayer());
         Btn delLayer = Btn.ghost("删图层").small();
         delLayer.addActionListener(e -> removeLayer());
+        Btn moveUpLayer = Btn.ghost("上移一层").small();
+        moveUpLayer.addActionListener(e -> moveLayerUp());
+        Btn moveDownLayer = Btn.ghost("下移一层").small();
+        moveDownLayer.addActionListener(e -> moveLayerDown());
         layerBar.add(addLayer);
         layerBar.add(Box.createHorizontalStrut(4));
         layerBar.add(delLayer);
+        layerBar.add(Box.createHorizontalStrut(4));
+        layerBar.add(moveUpLayer);
+        layerBar.add(Box.createHorizontalStrut(4));
+        layerBar.add(moveDownLayer);
         layerBar.add(UIKit.grow());
         layers.add(lt, BorderLayout.NORTH);
         JPanel layerWrap = new JPanel(new BorderLayout());
@@ -412,6 +420,46 @@ public final class ScenePanel extends Panel {
             }
         });
         refresh();
+    }
+
+    private void moveLayerUp() {
+        SceneModel s = st.scene();
+        Layer l = layerList.getSelectedValue();
+        if (s == null || l == null) {
+            Toast.info("先在列表里选一个图层");
+            return;
+        }
+        int idx = s.layers.indexOf(l);
+        if (idx <= 0) {
+            Toast.info("已经是最上面的图层");
+            return;
+        }
+        st.edit(() -> {
+            s.layers.remove(l);
+            s.layers.add(idx - 1, l);
+        });
+        refresh();
+        st.statusHint("图层「" + l.name + "」上移");
+    }
+
+    private void moveLayerDown() {
+        SceneModel s = st.scene();
+        Layer l = layerList.getSelectedValue();
+        if (s == null || l == null) {
+            Toast.info("先在列表里选一个图层");
+            return;
+        }
+        int idx = s.layers.indexOf(l);
+        if (idx < 0 || idx >= s.layers.size() - 1) {
+            Toast.info("已经是最下面的图层");
+            return;
+        }
+        st.edit(() -> {
+            s.layers.remove(l);
+            s.layers.add(idx + 1, l);
+        });
+        refresh();
+        st.statusHint("图层「" + l.name + "」下移");
     }
 
     /** 场景列表项：名字 + 对象数 + 尺寸。 */
