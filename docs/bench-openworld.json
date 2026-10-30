@@ -1,0 +1,52 @@
+{
+  "generatedAt": "2026-10-29T09:16:38.215Z",
+  "machine": {
+    "os": "win32",
+    "node": "v24.16.0",
+    "jdk": "C:\\Program Files\\Microsoft\\jdk-25.0.3.9-hotspot"
+  },
+  "scene": {
+    "name": "96x64 tiles",
+    "tileSize": 32,
+    "objects": 272,
+    "sprites": 272,
+    "colliders": 272,
+    "npcs": 1,
+    "vehicles": 0,
+    "buildings": 23,
+    "floors": 81,
+    "zones": 81,
+    "navLinks": 35,
+    "roadNodes": 40,
+    "roadEdges": 67
+  },
+  "render": {
+    "frames": 90,
+    "resolution": "960x540",
+    "avgDisplayMs": 1.801,
+    "glBeginsPerFrame": 25,
+    "drawCallsPerFrame": 290,
+    "textureBindsTotal": 2250,
+    "nonBgPixels": 376831,
+    "frameErrors": 0,
+    "endToEndMs": 3874
+  },
+  "physics": {
+    "stepAvgMs": 0.407
+  },
+  "logic": {
+    "soakPassed": true,
+    "frames": 3000,
+    "avgLogicMs": 0.024,
+    "maxLogicMs": 7.514,
+    "actorsInitial": 24,
+    "actorsMax": 24,
+    "actorsFinal": 24
+  },
+  "existingBenchmarks": {
+    "fieldsTickAvgMs": 0.03,
+    "physicsTickAvgMs": 0.321,
+    "aiTickAvgMs": 0.017,
+    "updateMedMs": 0.158
+  }
+}

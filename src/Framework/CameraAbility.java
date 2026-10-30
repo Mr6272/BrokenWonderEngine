@@ -33,9 +33,15 @@ public class CameraAbility implements IAbility {
         Enable = value;
     }
 
+    /** 缺陷 b：统一宿主访问入口。 */
+    @Override
+    public GameObject getHost() {
+        return gameObject;
+    }
+
     @Override
     public void OnUpdate() {
-        if (isFollowPlayer)
+        if (isFollowPlayer && playerTransform != null && transform != null)
         {
             transform.position.x = playerTransform.position.x;
             transform.position.y = playerTransform.position.y;

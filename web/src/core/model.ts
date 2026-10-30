@@ -165,6 +165,18 @@ export interface SceneModel {
   objects: SceneObject[];
   onStartScript: string;
   bgmAssetId: string;
+  /**
+   * ★ 开放世界扩展段（全部 optional，旧工程没有 → 运行时按"单层平地"处理）。
+   *
+   * 类型用 `unknown[]` / `unknown` 而不是完整详尽的 interface，是刻意的：
+   * 这些结构由地图生成器写出、由 Java 运行时读取，编辑器目前只做**透传保存**
+   * （不解析、不校验、不重建）。若在这里定义一套 TS 类型，就变成"编辑器第二份真相"，
+   * 一旦与 `GameData.java` 的解析字段漂移，就会出现"编辑器能存、运行时读不出"的经典坑。
+   * 结构定义以 `src/Studio/runtime/GameData.java` 的 Rt* 类为准（见 docs/api/spatial.md）。
+   */
+  buildings?: unknown[];
+  navLinks?: unknown[];
+  roadNetwork?: { nodes?: unknown[]; edges?: unknown[] };
 }
 
 /**
@@ -576,6 +588,19 @@ export function normalizeProject(raw: unknown): Project {
       onStartScript: s.onStartScript ?? "",
       bgmAssetId: s.bgmAssetId ?? ""
     };
+    // ★ 开放世界扩展段：**原样透传**，不丢数据。
+    //
+    // 为什么必须在这里接一手：normalizeProject 是「编辑器加载 .bwproj」的唯一入口，
+    // 而它是按字段逐个重建 SceneModel 的 —— 任何没在这张清单里的字段都会被静默丢掉。
+    // 生成器产出的 buildings / navLinks / roadNetwork 若被编辑器丢掉，
+    // 用户「打开城市 → 随手改一个对象 → 保存」就会把整座城市的多层数据抹掉。
+    // 这是真实的「编辑器会吃掉数据」风险，不是理论问题。
+    //
+    // 这些字段在 SceneModel 上是 optional（见接口定义），旧工程没有 → 不写、不报错。
+    const ext = s as unknown as Record<string, unknown>;
+    if (ext.buildings !== undefined) (sc as unknown as Record<string, unknown>).buildings = ext.buildings;
+    if (ext.navLinks !== undefined) (sc as unknown as Record<string, unknown>).navLinks = ext.navLinks;
+    if (ext.roadNetwork !== undefined) (sc as unknown as Record<string, unknown>).roadNetwork = ext.roadNetwork;
     const objs = Array.isArray(s.objects) ? s.objects : [];
     for (const o of objs) {
       sc.objects.push({

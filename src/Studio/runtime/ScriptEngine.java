@@ -371,6 +371,76 @@ final class ScriptEngine {
         }
     }
 
+    /**
+     * 带<b>执行阶段</b>的模拟钩子。用于「必须在逻辑之后、渲染之前」的新子系统
+     * （碰撞事件派发、空间归属解析、车辆推进）。
+     *
+     * <p>为什么不复用 {@link #addSimHook}：那个列表由 ScriptFields / ScriptPhysics / ScriptAi
+     * 按 install 顺序占用（材质场 → 物理 → 感知 AI）。往中间插一个新子系统会改变既有顺序，
+     * 而「同种子同输入 ⇒ 同结果」的确定性断言依赖该顺序。所以新阶段用**独立列表 + 显式阶段号**，
+     * 老钩子的顺序一个字都不动。
+     *
+     * <p>阶段语义（见 docs/open-world-architecture.md §3.2）：
+     * <ul>
+     *   <li>{@link #PHASE_SPATIAL} —— 物理事件与空间归属之前（③）</li>
+     *   <li>{@link #PHASE_EVENTS}  —— 物理步进之后，派发碰撞 enter/stay/exit（④）</li>
+     *   <li>{@link #PHASE_COMMIT}  —— 帧末延迟提交：延迟销毁、延迟场景切换（⑥）</li>
+     * </ul>
+     */
+    static final int PHASE_SPATIAL = 30;
+    static final int PHASE_EVENTS = 40;
+    static final int PHASE_COMMIT = 90;
+
+    /** 一个带阶段号的每帧钩子。 */
+    interface PhaseHook {
+        void tick(float dt);
+    }
+
+    private static final class PhaseEntry {
+        final int phase;
+        final PhaseHook hook;
+
+        PhaseEntry(int phase, PhaseHook hook) {
+            this.phase = phase;
+            this.hook = hook;
+        }
+    }
+
+    private final List<PhaseEntry> phaseHooks = new ArrayList<PhaseEntry>();
+
+    /**
+     * 注册一个带阶段的每帧钩子。同一阶段按注册顺序执行；阶段号小的先执行。
+     * 注册时会插入排序，所以运行期遍历零分配、顺序稳定可复现。
+     */
+    void addPhaseHook(int phase, PhaseHook hook) {
+        if (hook == null) {
+            return;
+        }
+        int at = phaseHooks.size();
+        for (int i = 0; i < phaseHooks.size(); i++) {
+            if (phaseHooks.get(i).phase > phase) {
+                at = i;
+                break;
+            }
+        }
+        phaseHooks.add(at, new PhaseEntry(phase, hook));
+    }
+
+    /** 按阶段号执行所有已注册钩子（阶段区间 [from, to]）。 */
+    private void runPhaseHooks(float dt, int from, int to) {
+        for (int i = 0; i < phaseHooks.size(); i++) {
+            PhaseEntry e = phaseHooks.get(i);
+            if (e.phase < from || e.phase > to) {
+                continue;
+            }
+            try {
+                e.hook.tick(dt);
+            } catch (Throwable t) {
+                host.scriptLog("[脚本] 阶段钩子异常(" + e.phase + "): " + t);
+            }
+        }
+    }
+
     /** 当前脚本 API（子系统用它挂命名空间、包 Entity）。 */
     ScriptApi api() {
         return api;
@@ -585,6 +655,37 @@ final class ScriptEngine {
         }
     }
 
+    /**
+     * 测试钩子：在某个脚本的作用域里求值一段表达式，结果转成字符串（JSON.stringify 由调用方自己写）。
+     * <p>只给无窗口集成测试读玩法状态用（例如 player.js 的 G、world.js 的 W），不进 bwe API。
+     * 必须在 update 的同一线程调用；脚本未启动或找不到时返回 null。
+     */
+    String evalForTest(String scriptName, String expr) {
+        if (!started) {
+            return null;
+        }
+        ScriptDef target = null;
+        for (ScriptDef def : scriptOrder) {
+            if (def.name.equals(scriptName) || def.name.startsWith(scriptName)) {
+                target = def;
+                break;
+            }
+        }
+        if (target == null || target.scope == null) {
+            return null;
+        }
+        Context cx = Context.enter();
+        try {
+            prepare(cx);
+            Object r = cx.evaluateString(target.scope, expr, "evalForTest", 1, null);
+            return r == null ? "null" : Context.toString(r);
+        } catch (Throwable t) {
+            return "ERROR: " + t;
+        } finally {
+            Context.exit();
+        }
+    }
+
     private void bindSceneObjects() {
         for (TopDownRuntime.Actor a : host.actors) {
             bindActor(a);
@@ -667,6 +768,8 @@ final class ScriptEngine {
             }
             processZones();
             world.tick(cx);
+            // ③ 空间归属解析（新增阶段；老钩子顺序不动）
+            runPhaseHooks(frameDt, PHASE_SPATIAL, PHASE_SPATIAL);
             // 涌现式模拟：材质场 → 物理 → 感知/AI，按注册顺序；异常只记日志，不中断游戏。
             for (int i = 0; i < simHooks.size(); i++) {
                 try {
@@ -675,6 +778,8 @@ final class ScriptEngine {
                     host.scriptLog("[脚本] 模拟异常(" + i + "): " + t);
                 }
             }
+            // ④ 物理之后：碰撞事件 enter/stay/exit 派发
+            runPhaseHooks(frameDt, PHASE_EVENTS, PHASE_EVENTS);
             updateAttachments();
             updateCamera(dt);
             if (api != null) {
@@ -682,6 +787,10 @@ final class ScriptEngine {
             }
         }
         drainMicrotasks(cx);
+
+        // ⑥ 帧末延迟提交：延迟销毁 / 延迟场景切换。暂停时也要跑，
+        // 否则「暂停中 requestDestroy」会永远挂着（这是脚本可见语义，必须一致）。
+        runPhaseHooks(paused ? 0f : frameDt, PHASE_COMMIT, PHASE_COMMIT);
 
         System.arraycopy(held, 0, prevHeld, 0, held.length);
         System.arraycopy(mouseNow, 0, mousePrev, 0, mouseNow.length);
@@ -950,6 +1059,36 @@ final class ScriptEngine {
             if (list.get(i).fn == fn) {
                 list.remove(i);
             }
+        }
+    }
+
+    /**
+     * 建一个事件载荷对象（测试/诊断用）。
+     *
+     * <p>需要当前 Rhino {@code Context} 才能建 JS 对象，所以包一层；调用方必须已经在
+     * {@code update} 的调用栈里（或自己 {@code Context.enter()}）。
+     */
+    Object buildEventPayloadForTest(String[] keys, Object[] values) {
+        if (api == null) {
+            return null;
+        }
+        return api.buildPayloadForTest(keys, values);
+    }
+
+    /** 进入 Rhino Context（测试用；与 update/draw 内部做法一致）。 */
+    void enterTestContext() {
+        if (Context.getCurrentContext() != null) {
+            return;
+        }
+        Context cx = Context.enter();
+        prepare(cx);
+    }
+
+    /** 退出 Rhino Context（测试用）。 */
+    void exitTestContext() {
+        try {
+            Context.exit();
+        } catch (Throwable ignored) {
         }
     }
 
@@ -1253,16 +1392,222 @@ final class ScriptEngine {
         }
         dispatchObject(a, bound.get(a), "onDestroy", new Object[0]);
         api.dispatchEntityEvent(a, "destroy", new Object[0]);
-        bound.remove(a);
-        boundVersion++;
+        detachActor(a);
+        host.requestDestroy(a);
+    }
+
+    /**
+     * 把一个实体从所有<b>脚本侧</b>表里摘掉（不碰宿主 actors 列表）。
+     *
+     * <p>两个调用方：
+     * <ul>
+     *   <li>{@link #destroyEntity} —— 脚本主动销毁，摘表后交给宿主的延迟销毁队列；</li>
+     *   <li>{@link TopDownRuntime#commitDestroy()} —— 帧末真正移除前，再兜底摘一次
+     *       （场景切换、物理/场系统直接置 dead 的路径也必须走到这里）。</li>
+     * </ul>
+     * 幂等：对已经摘过的 Actor 重复调用无副作用。
+     */
+    void detachActor(TopDownRuntime.Actor a) {
+        if (a == null) {
+            return;
+        }
+        if (bound.remove(a) != null) {
+            boundVersion++;
+        }
         for (int i = attachments.size() - 1; i >= 0; i--) {
             if (attachments.get(i).owner == a) {
                 attachments.remove(i);
             }
         }
-        host.destroyActor(a);
-        api.invalidate(a);
+        for (int i = follows.size() - 1; i >= 0; i--) {
+            if (follows.get(i).actor == a) {
+                follows.remove(i);
+            }
+        }
+        if (interactActor == a) {
+            interactActor = null;
+        }
+        if (cameraTarget == a) {
+            cameraTarget = null;
+        }
+        if (api != null) {
+            api.invalidate(a);
+        }
     }
+
+    /**
+     * 场景卸载：把<b>所有</b>与上一场景绑定的脚本侧状态清空。
+     *
+     * <p>由 {@link TopDownRuntime#commitSceneSwitch()} 调用，顺序是
+     * 「宿主换 scene 数据 → unloadScene() → spawn() → buildWorldForScene() → reloadScene()」。
+     * 这里<b>不</b>派发 onDestroy（对象是被场景切换整体丢弃的，不是"死亡"；
+     * 契约 §1.2 的 onSceneEnd 只给场景脚本，已由 sceneEnd() 单独负责）。
+     *
+     * <p>清空清单（每一项都有断言，见 docs/open-world-architecture.md §5.4）：
+     * 定时器 / 全局钩子 / 世界事件 / 实体事件 / 实体包装 / 子精灵 / 跟随 /
+     * 交互回调 / 刷怪器 / 提交队列 / 脚本绑定表 / 相机状态 / 绘制列表。
+     */
+    void unloadScene() {
+        for (Timer t : timers) {
+            t.cancelled = true;
+        }
+        timers.clear();
+        hooks.clear();
+        worldEvents.clear();
+        bound.clear();
+        boundVersion++;
+        attachments.clear();
+        follows.clear();
+        spawners.clear();
+        interactHandlers.clear();
+        interactActor = null;
+        prompt = null;
+        drawCmds.clear();
+        cameraTarget = null;
+        worldDrawDepth = 0;
+        frame = 0;
+        time = 0;
+        // 实体包装 / 实体事件表 / 子精灵句柄 / 相机接管标志 / prefab 实例表都在 ScriptApi 里，
+        // 由它自己的 clearSceneState 统一清（那里能看到所有私有表）。
+        if (api != null) {
+            api.clearSceneState();
+        }
+        if (world != null) {
+            world.clearSceneState();
+        }
+        // 新增子系统的场景态（每个 install() 注册的模块自己负责清）
+        clearSubsystemSceneState();
+        // 让新场景的脚本重新走 onStart / onSceneStart
+        sceneStartDone = false;
+    }
+
+    /**
+     * 让所有开放世界子系统清掉自己的场景态。
+     *
+     * <p>为什么集中在这里而不是各自注册 cleanup 钩子：卸载顺序必须<b>确定</b>
+     * （空间 → 碰撞 → 车辆 → 战斗 → 路网 → 场景），否则会出现"车辆还在查已被清空的路网"。
+     * 这里用固定顺序逐个调，任何一个抛异常都不影响后面的（容错与 install 时一致）。
+     */
+    private void clearSubsystemSceneState() {
+        clearOne("spatial", new Runnable() {
+            @Override
+            public void run() {
+                if (ScriptSpatial.LAST != null) {
+                    ScriptSpatial.LAST.clearSceneState();
+                }
+            }
+        });
+        clearOne("collision", new Runnable() {
+            @Override
+            public void run() {
+                if (ScriptCollision.LAST != null) {
+                    ScriptCollision.LAST.clearSceneState();
+                }
+            }
+        });
+        clearOne("vehicle", new Runnable() {
+            @Override
+            public void run() {
+                if (ScriptVehicle.LAST != null) {
+                    ScriptVehicle.LAST.clearSceneState();
+                }
+            }
+        });
+        clearOne("combat", new Runnable() {
+            @Override
+            public void run() {
+                if (ScriptCombat.LAST != null) {
+                    ScriptCombat.LAST.clearSceneState();
+                }
+            }
+        });
+        clearOne("road", new Runnable() {
+            @Override
+            public void run() {
+                if (ScriptRoad.LAST != null) {
+                    ScriptRoad.LAST.clearSceneState();
+                }
+            }
+        });
+        clearOne("actions", new Runnable() {
+            @Override
+            public void run() {
+                if (ScriptActions.LAST != null) {
+                    ScriptActions.LAST.clearSceneState();
+                }
+            }
+        });
+        clearOne("debug", new Runnable() {
+            @Override
+            public void run() {
+                if (ScriptDebug.LAST != null) {
+                    ScriptDebug.LAST.clearSceneState();
+                }
+            }
+        });
+        clearOne("scene", new Runnable() {
+            @Override
+            public void run() {
+                if (ScriptScene.LAST != null) {
+                    ScriptScene.LAST.clearSceneState();
+                }
+            }
+        });
+    }
+
+    private void clearOne(String name, Runnable body) {
+        try {
+            body.run();
+        } catch (Throwable t) {
+            host.scriptLog("[脚本] " + name + " 场景清理失败: " + t);
+        }
+    }
+
+    /**
+     * 新场景的瓦片图 / 网格必须按新 scene 的逻辑尺寸重建
+     * （{@link ScriptWorld} 的 cols/rows 在构造期就定死了，切场景后必须换一个新实例）。
+     */
+    void buildWorldForScene() {
+        this.world = new ScriptWorld(this);
+        this.world.buildTileMap(host.actors);
+    }
+
+    /** 新场景的对象就绪后重新绑定对象脚本并派发生命周期。 */
+    void reloadScene() {
+        if (!started || failed) {
+            return;
+        }
+        Context cx = null;
+        try {
+            cx = Context.enter();
+            prepare(cx);
+            bindSceneObjects();
+            for (Map.Entry<TopDownRuntime.Actor, ScriptDef> e
+                    : new ArrayList<Map.Entry<TopDownRuntime.Actor, ScriptDef>>(bound.entrySet())) {
+                dispatchObject(e.getKey(), e.getValue(), "onStart", new Object[0]);
+            }
+            sceneStartDone = true;
+            if (!sceneScriptName.isEmpty()) {
+                ScriptDef def = scripts.get(sceneScriptName);
+                if (def != null) {
+                    dispatchScene(def, "onSceneStart");
+                }
+            }
+            drainMicrotasks(cx);
+        } catch (Throwable t) {
+            host.scriptLog("[脚本] 场景重载异常: " + t);
+        } finally {
+            if (cx != null) {
+                try {
+                    Context.exit();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    /** reloadScene 是否已在当前场景派发过（避免重复 onStart）。 */
+    private boolean sceneStartDone = false;
 
     // ---------------- 子精灵 ----------------
 

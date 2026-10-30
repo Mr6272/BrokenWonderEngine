@@ -119,6 +119,111 @@ public final class GameData {
          * 现在解析出来，供 {@code bwe.world.layers()} 与「按图层名隐藏」用。
          */
         public final List<RtLayer> layers = new ArrayList<>();
+
+        // ---------- 开放世界新增段（全部可选；旧 Build 没有 → 空表，行为与今天一致） ----------
+
+        /**
+         * 建筑 / 楼层 / 房间定义（{@code bwe.spatial} 的数据源）。
+         *
+         * <p><b>兼容性</b>：空表 = 单层平地，{@code bwe.spatial} 的所有查询都返回 null / false，
+         * 游戏行为与没有这个功能时<b>完全一致</b>。这是「旧工程必须还能跑」的硬保证。
+         */
+        public final List<RtBuilding> buildings = new ArrayList<>();
+        /** 垂直连接（楼梯 / 电梯 / 坡道）。 */
+        public final List<RtNavLink> navLinks = new ArrayList<>();
+        /** 道路网络（车辆用；行人不走这个）。 */
+        public RtRoadNetwork road;
+    }
+
+    /** 一栋建筑：若干楼层 + 出入口。 */
+    public static final class RtBuilding {
+        public String id = "";
+        public String name = "";
+        public final List<RtFloor> floors = new ArrayList<>();
+        /** 出入口（{@code x,y,r}）：玩家走进来即视为进入本建筑。 */
+        public final List<RtEntrance> entrances = new ArrayList<>();
+        /** 屋顶可见性规则：{@code "auto"}（默认，玩家进楼就隐藏）/ {@code "always"} / {@code "never"}。 */
+        public String roof = "auto";
+    }
+
+    /** 一层楼：区域列表 + 显示 z 序。 */
+    public static final class RtFloor {
+        public String id = "";
+        public String name = "";
+        /** 楼层序号（0 = 底层，越大越高）。用于「当前层显示、其它层隐藏」。 */
+        public int level = 0;
+        public final List<RtRoom> rooms = new ArrayList<>();
+    }
+
+    /** 一个房间/区域：一块 AABB + 状态。 */
+    public static final class RtRoom {
+        public String id = "";
+        public String name = "";
+        /** AABB（世界像素，中心点 + 半宽半高，与对象同一套坐标约定）。 */
+        public float x, y, halfW, halfH;
+        /** 区域标签（入口/楼梯/电梯/室内/室外…由脚本或编辑器给）。 */
+        public final List<String> tags = new ArrayList<>();
+        /** 本区域是否参与碰撞（房间本身通常 false，墙才是实体）。 */
+        public boolean collides = false;
+        /** 本区域是否可导航（false = 不可通行，例如楼板空洞）。 */
+        public boolean navigable = true;
+        /** 渲染可见性规则覆盖：null = 走楼层规则。 */
+        public String visibility;
+        /** 到达此区域需要经过的 link（用于「NPC 不能穿楼板」）。 */
+        public String viaLink = "";
+    }
+
+    /** 建筑出入口。 */
+    public static final class RtEntrance {
+        public String id = "";
+        public float x, y;
+        /** 触发半径。 */
+        public float radius = 24f;
+        /** 通向哪个楼层（默认 0 = 底层）。 */
+        public int level = 0;
+    }
+
+    /** 垂直连接：楼梯 / 电梯 / 坡道。 */
+    public static final class RtNavLink {
+        public String id = "";
+        /** {@code "stairs"} / {@code "elevator"} / {@code "ramp"} / {@code "jump"}。 */
+        public String kind = "stairs";
+        /** 两端点（世界像素）。 */
+        public float ax, ay, bx, by;
+        /** 两端所在楼层序号。 */
+        public int aLevel = 0;
+        public int bLevel = 1;
+        /** 双向（楼梯默认 true，单向跳下 false）。 */
+        public boolean bidirectional = true;
+        /** 通行耗时（秒）；电梯 > 0，走路楼梯 = 0。 */
+        public float travelTime = 0f;
+        /** 是否需要交互（电梯按键）。 */
+        public boolean requiresInteract = false;
+    }
+
+    /** 道路网络：节点 + 路段。 */
+    public static final class RtRoadNetwork {
+        public final List<RtRoadNode> nodes = new ArrayList<>();
+        public final List<RtRoadEdge> edges = new ArrayList<>();
+    }
+
+    /** 路网节点（路口 / 途经点 / 站点）。 */
+    public static final class RtRoadNode {
+        public String id = "";
+        public float x, y;
+        /** {@code "intersection"} / {@code "waypoint"} / {@code "stop"} / {@code "spawn"}。 */
+        public String kind = "waypoint";
+    }
+
+    /** 路段（有向或双向）。 */
+    public static final class RtRoadEdge {
+        public String from = "";
+        public String to = "";
+        /** 路宽（像素），车辆避障用。 */
+        public float width = 48f;
+        /** 限速（px/s）。 */
+        public float speedLimit = 240f;
+        public boolean oneway = false;
     }
 
     /** 一个场景图层。 */
@@ -249,7 +354,134 @@ public final class GameData {
             rl.order = num(lo, "order", 0);
             s.layers.add(rl);
         }
+        // ---- 开放世界新增段（全部可选；缺省 = 空表 / null，行为与旧 Build 完全一致） ----
+        for (JsonElement e : arr(root, "buildings")) {
+            if (!e.isJsonObject()) {
+                continue;
+            }
+            s.buildings.add(readBuilding(e.getAsJsonObject()));
+        }
+        for (JsonElement e : arr(root, "navLinks")) {
+            if (!e.isJsonObject()) {
+                continue;
+            }
+            s.navLinks.add(readNavLink(e.getAsJsonObject()));
+        }
+        if (root.has("roadNetwork") && root.get("roadNetwork").isJsonObject()) {
+            s.road = readRoad(root.getAsJsonObject("roadNetwork"));
+        }
         return s;
+    }
+
+    /** 读一栋建筑（含楼层/房间/出入口）。任何字段缺失都走安全缺省。 */
+    private static RtBuilding readBuilding(JsonObject o) {
+        RtBuilding b = new RtBuilding();
+        b.id = str(o, "id", "");
+        b.name = str(o, "name", b.id);
+        b.roof = str(o, "roof", "auto");
+        for (JsonElement fe : arr(o, "floors")) {
+            if (!fe.isJsonObject()) {
+                continue;
+            }
+            JsonObject fo = fe.getAsJsonObject();
+            RtFloor f = new RtFloor();
+            f.id = str(fo, "id", "");
+            f.name = str(fo, "name", f.id);
+            f.level = num(fo, "level", 0);
+            for (JsonElement re : arr(fo, "rooms")) {
+                if (!re.isJsonObject()) {
+                    continue;
+                }
+                JsonObject ro = re.getAsJsonObject();
+                RtRoom r = new RtRoom();
+                r.id = str(ro, "id", "");
+                r.name = str(ro, "name", r.id);
+                r.x = num(ro, "x", 0f);
+                r.y = num(ro, "y", 0f);
+                r.halfW = num(ro, "halfW", 0f);
+                r.halfH = num(ro, "halfH", 0f);
+                r.collides = ro.has("collides") && ro.get("collides").getAsBoolean();
+                r.navigable = !ro.has("navigable") || ro.get("navigable").getAsBoolean();
+                r.visibility = str(ro, "visibility", "");
+                r.viaLink = str(ro, "viaLink", "");
+                for (JsonElement te : arr(ro, "tags")) {
+                    r.tags.add(te.getAsString());
+                }
+                f.rooms.add(r);
+            }
+            b.floors.add(f);
+        }
+        for (JsonElement ee : arr(o, "entrances")) {
+            if (!ee.isJsonObject()) {
+                continue;
+            }
+            JsonObject eo = ee.getAsJsonObject();
+            RtEntrance en = new RtEntrance();
+            en.id = str(eo, "id", "");
+            en.x = num(eo, "x", 0f);
+            en.y = num(eo, "y", 0f);
+            en.radius = num(eo, "radius", 24f);
+            en.level = num(eo, "level", 0);
+            b.entrances.add(en);
+        }
+        return b;
+    }
+
+    private static RtNavLink readNavLink(JsonObject o) {
+        RtNavLink l = new RtNavLink();
+        l.id = str(o, "id", "");
+        l.kind = str(o, "kind", "stairs");
+        l.ax = num(o, "ax", 0f);
+        l.ay = num(o, "ay", 0f);
+        l.bx = num(o, "bx", 0f);
+        l.by = num(o, "by", 0f);
+        l.aLevel = num(o, "aLevel", 0);
+        l.bLevel = num(o, "bLevel", 1);
+        l.bidirectional = !o.has("bidirectional") || o.get("bidirectional").getAsBoolean();
+        l.travelTime = num(o, "travelTime", 0f);
+        l.requiresInteract = o.has("requiresInteract") && o.get("requiresInteract").getAsBoolean();
+        // 兼容：允许用 from/to 端点坐标形式 {from:{x,y}, to:{x,y}}
+        if (o.has("from") && o.get("from").isJsonObject()) {
+            JsonObject f = o.getAsJsonObject("from");
+            l.ax = num(f, "x", l.ax);
+            l.ay = num(f, "y", l.ay);
+        }
+        if (o.has("to") && o.get("to").isJsonObject()) {
+            JsonObject t = o.getAsJsonObject("to");
+            l.bx = num(t, "x", l.bx);
+            l.by = num(t, "y", l.by);
+        }
+        return l;
+    }
+
+    private static RtRoadNetwork readRoad(JsonObject o) {
+        RtRoadNetwork net = new RtRoadNetwork();
+        for (JsonElement ne : arr(o, "nodes")) {
+            if (!ne.isJsonObject()) {
+                continue;
+            }
+            JsonObject no = ne.getAsJsonObject();
+            RtRoadNode n = new RtRoadNode();
+            n.id = str(no, "id", "");
+            n.x = num(no, "x", 0f);
+            n.y = num(no, "y", 0f);
+            n.kind = str(no, "kind", "waypoint");
+            net.nodes.add(n);
+        }
+        for (JsonElement ee : arr(o, "edges")) {
+            if (!ee.isJsonObject()) {
+                continue;
+            }
+            JsonObject eo = ee.getAsJsonObject();
+            RtRoadEdge e = new RtRoadEdge();
+            e.from = str(eo, "from", "");
+            e.to = str(eo, "to", "");
+            e.width = num(eo, "width", 48f);
+            e.speedLimit = num(eo, "speedLimit", 240f);
+            e.oneway = eo.has("oneway") && eo.get("oneway").getAsBoolean();
+            net.edges.add(e);
+        }
+        return net;
     }
 
     public RtModule firstModule(RtObject o, String def, String when) {

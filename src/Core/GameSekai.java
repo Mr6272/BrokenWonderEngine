@@ -1,6 +1,7 @@
 package Core;
 
 import Core.Physics.Collider.ColliderWorld;
+import Core.destroy.DestroyQueue;
 import Framework.BoxColliderAbility;
 import Framework.GameObject;
 import Framework.IAbility;
@@ -36,13 +37,15 @@ public class GameSekai {
             GameRenderer.deltaTime = prevDt;
             accumulator -= FIXED_DT;
         }
+        // 帧末无逻辑步可跑时也要提交销毁：低帧率下 Destroy() 不至于跨帧悬挂
+        DestroyQueue.commit();
     }
 
     private void fixedUpdate(float dt) {
         // 1. 逻辑更新（快照迭代：Update 过程中可能创建/销毁对象）
         List<GameObject> snap = new ArrayList<>(GameObjects);
         for (GameObject go : snap) {
-            if (go != null) {
+            if (go != null && !go.isDestroyed()) {
                 go.Update(); // 这里面会调用 Ability.OnUpdate()
             }
         }
@@ -50,7 +53,7 @@ public class GameSekai {
         // 2. Transform -> Body
         snap = new ArrayList<>(GameObjects);
         for (GameObject go : snap) {
-            if (go == null) continue;
+            if (go == null || go.isDestroyed()) continue;
             for (IAbility ab : go.Abilitys) {
                 if (ab instanceof BoxColliderAbility) {
                     ((BoxColliderAbility) ab).syncTransformToBody();
@@ -68,7 +71,7 @@ public class GameSekai {
         // 4. Body -> Transform（全部物体同步，离屏物体同样保持物理一致）
         snap = new ArrayList<>(GameObjects);
         for (GameObject go : snap) {
-            if (go == null) continue;
+            if (go == null || go.isDestroyed()) continue;
             for (IAbility ab : go.Abilitys) {
                 if (ab instanceof BoxColliderAbility) {
                     ((BoxColliderAbility) ab).syncBodyToTransform();
@@ -76,17 +79,22 @@ public class GameSekai {
             }
         }
 
-        // 5. 自定义碰撞
+        // 5. 自定义碰撞（含 enter/stay/exit 派发，见 CollisionEventBus）
         CollisionSystem.get().update();
 
         // 6. 协程
         coroutineManager.update();
+
+        // 7. 帧末延迟销毁提交（架构 §3.2 阶段⑥ / §3.3 规则 2）
+        DestroyQueue.commit();
     }
 
     public void Draw(GLAutoDrawable gld) {
         if (!GameObjects.isEmpty()) {
             for (int i = GameObjects.size() - 1; i >= 0; i--) {
-                GameObjects.get(i).Draw(gld);
+                GameObject go = GameObjects.get(i);
+                if (go == null || go.isDestroyed()) continue;
+                go.Draw(gld);
             }
         }
     }

@@ -150,8 +150,34 @@ final class ScriptRender {
         return c;
     }
 
-    Cmd bar(float x, float y, float w, float h, float pct, String bg, String fg, String border, float alpha) {
-        Cmd c = new Cmd();
+    // ---------------- 世界空间调试绘制（bwe.debug 用） ----------------
+    //
+    // 这些是「确保画在世界坐标」的封装：直接调 rect/line/circle 会继承调用时的
+    // worldDrawDepth，而 bwe.debug 的绘制是在 onUpdate 之外（帧末自动绘）触发的，
+    // 那时 depth 已经是 0。所以这里强制标 world=true。
+
+    /** 世界空间矩形（描边），调试框用。<b>直接入队</b>，不经过 ScriptApi.addDraw。 */
+    void worldRect(float x, float y, float w, float h, String color, float width, float alpha) {
+        Cmd c = rect(x, y, w, h, null, color, alpha, 0, width);
+        c.world = true;
+        engine.drawCmds.add(c);
+    }
+
+    /** 世界空间直线。 */
+    void worldLine(float x1, float y1, float x2, float y2, String color, float width, float alpha) {
+        Cmd c = line(x1, y1, x2, y2, color, width, alpha);
+        c.world = true;
+        engine.drawCmds.add(c);
+    }
+
+    /** 世界空间圆（描边）。 */
+    void worldCircle(float x, float y, float r, String color, float alpha) {
+        Cmd c = circle(x, y, r, null, color, alpha, 1f);
+        c.world = true;
+        engine.drawCmds.add(c);
+    }
+
+    Cmd bar(float x, float y, float w, float h, float pct, String bg, String fg, String border, float alpha) {        Cmd c = new Cmd();
         c.type = BAR;
         c.x = x;
         c.y = y;
@@ -232,13 +258,17 @@ final class ScriptRender {
 
     private TopDownRuntime.Texture textTexture(Cmd c) {
         int fs = Math.max(6, Math.round(c.size));
-        String key = fs + "|" + c.color + "|" + (c.shadow ? "1" : "0") + "|" + c.text;
+        // 高 DPI 超采样：纹理按「逻辑字号 × 物理/逻辑倍率」生成。
+        // 否则 GL 把整幅画面放大 1.5 倍时，文字纹理被 NEAREST 插值拉伸 → 发虚/锯齿。
+        float scale = host.displayScale();
+        int px = Math.max(6, Math.round(fs * scale));
+        String key = px + "|" + c.color + "|" + (c.shadow ? "1" : "0") + "|" + c.text;
         TopDownRuntime.Texture cached = textCache.get(key);
         if (cached != null) {
             textLru.get(key); // 触碰：把这个 key 移到 LRU 末尾
             return cached;
         }
-        BufferedImage img = textImage(c.text, fs, parseColor(c.color, Color.WHITE), c.shadow);
+        BufferedImage img = textImage(c.text, px, parseColor(c.color, Color.WHITE), c.shadow);
         if (img == null) {
             return null;
         }
@@ -421,8 +451,11 @@ final class ScriptRender {
         if (t == null) {
             return;
         }
-        float w = t.w;
-        float h = t.h;
+        // ⚠ 纹理是按「逻辑字号 × 物理倍率」超采样生成的，所以贴出去的尺寸必须
+        // 除回该倍率，否则 HUD 文字在高 DPI 屏上会变成 1.5 倍大（位置看起来也整体偏移）。
+        float scale = host.displayScale();
+        float w = t.w / scale;
+        float h = t.h / scale;
         float x = c.x;
         if ("center".equals(c.align) || "middle".equals(c.align)) {
             x -= w / 2f;
@@ -572,26 +605,58 @@ final class ScriptRender {
         gl.glEnd();
     }
 
+    /**
+     * 填充圆角矩形。
+     *
+     * <p><b>⚠ 这里曾经有个长期存在的显示 bug（HUD 面板里出现一个三角形楔形缺口）</b>：
+     * 用 {@code GL_TRIANGLE_FAN} 从中心连到四角圆弧时，扇形<b>不会自动闭合</b> ——
+     * GL 只生成 {@code (v0,v1,v2), (v0,v2,v3) … (v0,v_{n-1},v_n)}，
+     * <b>没有</b> {@code (v0,v_n,v1)} 这个收尾三角形。
+     * 于是多边形最后一条边（这里是左边：从左下角回到左上角）与中心之间留下一个
+     * 三角空洞 ⇒ 面板上出现一条斜切的暗色楔形，看起来像「层级错乱 / 半透明叠加」。
+     *
+     * <p>修法：扇形的最后一个顶点<b>重复一次起点</b>，用退化的收尾三角形把最后那段补上。
+     * 这是 GL_TRIANGLE_FAN 画闭合多边形的标准做法。
+     */
     private static void fillRoundRect(GL2 gl, float x, float y, float w, float h, float r) {
         if (r <= 0.5f) {
             quad(gl, x, y, w, h);
             return;
         }
         int seg = 4;
+        // 四角圆心 + 各自的角度区间（屏幕 y 向下，角度顺时针：PI 左、1.5PI 上、0 右、0.5PI 下）
         float[][] corners = {
                 {x + r, y + r, (float) Math.PI, 1.5f * (float) Math.PI},
                 {x + w - r, y + r, 1.5f * (float) Math.PI, 2f * (float) Math.PI},
                 {x + w - r, y + h - r, 0f, 0.5f * (float) Math.PI},
                 {x + r, y + h - r, 0.5f * (float) Math.PI, (float) Math.PI},
         };
-        gl.glBegin(GL2.GL_TRIANGLE_FAN);
-        gl.glVertex2f(x + w / 2f, y + h / 2f);
+        float cx = x + w / 2f;
+        float cy = y + h / 2f;
+        // 先把全部边界点算出来（首尾相邻去重），这样「重复起点」时才不会重复画中间点
+        int total = corners.length * seg + 1;
+        float[] px = new float[total + 1];
+        float[] py = new float[total + 1];
+        int n = 0;
         for (float[] c : corners) {
-            for (int i = 0; i <= seg; i++) {
+            for (int i = 0; i < seg; i++) {
                 double a = c[2] + (c[3] - c[2]) * i / seg;
-                gl.glVertex2f(c[0] + (float) Math.cos(a) * r, c[1] + (float) Math.sin(a) * r);
+                px[n] = c[0] + (float) Math.cos(a) * r;
+                py[n] = c[1] + (float) Math.sin(a) * r;
+                n++;
             }
         }
+        if (n == 0) {
+            quad(gl, x, y, w, h);
+            return;
+        }
+        gl.glBegin(GL2.GL_TRIANGLE_FAN);
+        gl.glVertex2f(cx, cy);
+        for (int i = 0; i < n; i++) {
+            gl.glVertex2f(px[i], py[i]);
+        }
+        // ★ 重复起点：补上 (center, 最后一点, 第一点) 这个收尾三角形，闭合多边形
+        gl.glVertex2f(px[0], py[0]);
         gl.glEnd();
     }
 

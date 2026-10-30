@@ -84,7 +84,19 @@ public final class ScriptPerfTest {
         PrintStream realOut = System.out;
         // 引擎自己的 [BWE] 日志会刷屏，必须把它引开，否则机读行会被几千行日志埋掉。
         java.io.ByteArrayOutputStream engineNoise = new java.io.ByteArrayOutputStream();
-        System.setOut(new PrintStream(engineNoise, true, StandardCharsets.UTF_8));
+        // ⚠ 必须用「字符集名」重载且传字面量 "UTF-8"：
+        // 打包链路（web/tools/serve.mjs 与 package-bwe.mjs）用 `--release 8` 编译
+        // src/Studio/runtime，而 `PrintStream(OutputStream, boolean, Charset)` 是 Java 10+
+        // 才有；Java 8 下只有 `PrintStream(OutputStream, boolean, String)`，
+        // 且它声明抛出 UnsupportedEncodingException（受检异常，main 里不抛就得 catch）。
+        // 传 "UTF-8" 这个标准字符集名不会真的抛，但编译器仍要求处理 —— 用 try/catch 兜住。
+        // 写成 Charset 版本会让「浏览器点预览 / 打包」直接失败（实测 javac 退出码 1）。
+        try {
+            System.setOut(new PrintStream(engineNoise, true, "UTF-8"));
+        } catch (java.io.UnsupportedEncodingException e) {
+            // UTF-8 一定存在（JLS 要求），走不到这里；万一走到就退回默认编码，别让自检挂掉。
+            System.setOut(new PrintStream(engineNoise, true));
+        }
         int failures = 0;
         String fatal = null;
         try {

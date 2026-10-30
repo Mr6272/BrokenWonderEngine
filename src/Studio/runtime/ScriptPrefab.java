@@ -810,6 +810,21 @@ final class ScriptPrefab {
         }
     }
 
+    /**
+     * 场景卸载：清掉所有<b>实例级</b>记录（实例归属、池里的实例表）。
+     *
+     * <p>不清什么：{@code defs}（模板表）—— 模板属于<b>工程</b>，不是场景。
+     * 切场景后 {@code bwe.prefab.spawn} 必须仍然能按名字生成（这是兼容性红线，
+     * 由 ScriptPrefabTest 的 prefab 计数断言保护）。
+     */
+    void onSceneUnload() {
+        owners.clear();
+        for (Pool pool : pools.values()) {
+            pool.all.clear();
+            pool.idle.clear();
+        }
+    }
+
     /** 实体被销毁时立刻清理引用（由 {@link ScriptApi#invalidate} 调用），避免池/实例表留死引用。 */
     void onActorDestroyed(TopDownRuntime.Actor a) {
         if (a == null) {

@@ -85,6 +85,12 @@ public class Renderer2DAbility implements IAbility, IRenderer {
 
     }
 
+    /** 缺陷 b：统一宿主访问入口。 */
+    @Override
+    public GameObject getHost() {
+        return gameObject;
+    }
+
     @Override
     public void Draw(GLAutoDrawable glAutoDrawable) {
         if (!isActive)

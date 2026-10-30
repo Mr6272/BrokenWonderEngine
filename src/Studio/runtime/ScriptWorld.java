@@ -568,6 +568,36 @@ final class ScriptWorld {
         tickPrompt();
     }
 
+    /**
+     * 场景卸载时清掉本文件持有的场景相关状态。
+     *
+     * <p>瓦片表 {@code tiles/solidIds} 不能清（那是<b>新场景</b>要重新建的，
+     * 而 {@link ScriptEngine#buildWorldForScene()} 会直接换一个新的 {@code ScriptWorld} 实例，
+     * 本方法只是为了「如果有人复用了旧实例」时不留悬空引用）。
+     */
+    void clearSceneState() {
+        interactActor = null;
+        interactHandlers.clear();
+    }
+
+    /** 调试绘制：把正在跟随的路径画成折线（{@code bwe.debug.paths(true)} 用）。 */
+    void drawDebugPaths(ScriptRender render) {
+        if (render == null || engine.follows.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < engine.follows.size(); i++) {
+            Follow f = engine.follows.get(i);
+            if (f == null || f.path == null || f.path.size() < 2 || f.actor == null || f.actor.dead) {
+                continue;
+            }
+            for (int j = 0; j + 1 < f.path.size(); j++) {
+                float[] a = f.path.get(j);
+                float[] b = f.path.get(j + 1);
+                render.worldLine(a[0], a[1], b[0], b[1], "#66ccff", 1f, 0.85f);
+            }
+        }
+    }
+
     private void tickInteract(Context cx, float dt) {
         int key = engine.interactKey;
         if (key <= 0 || engine.interactActor == null) {

@@ -10,7 +10,16 @@
     "serve": "node web/tools/serve.mjs 5273",
     "dev": "npm run build && npm run serve",
     "gen:examples": "esbuild web/tools/gen-examples.ts --bundle --platform=node --format=esm --loader:.bwproj=json --outfile=web/.build/gen-examples.mjs --log-level=warning && node web/.build/gen-examples.mjs",
-    "typecheck": "tsc --noEmit -p web/tsconfig.json"
+    "typecheck": "tsc --noEmit -p web/tsconfig.json",
+    "check:java8": "node web/tools/check-java8.mjs",
+    "check": "npm run typecheck && npm run check:java8",
+    "gen:city": "esbuild web/tools/gen-city.ts --bundle --platform=node --format=esm --outfile=web/.build/gen-city.mjs --log-level=warning && node web/.build/gen-city.mjs",
+    "check:scripts": "node web/tools/check-scripts.mjs",
+    "verify:apidocs": "node web/tools/verify-apidocs.mjs --strict",
+    "verify:openworld": "node web/tools/verify-openworld.mjs",
+    "verify:roundtrip": "node web/tools/verify-editor-roundtrip.mjs",
+    "bench:openworld": "node web/tools/bench-openworld.mjs --json docs/bench-openworld.json",
+    "verify:all": "npm run verify:apidocs && npm run typecheck && npm run check:scripts && npm run verify:openworld && npm run verify:roundtrip"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

@@ -33,29 +33,44 @@ import java.nio.ByteBuffer;
 public final class OffscreenFrameDump {
 
     private static int frames = 60;
+    /** --fit：强制整图视角（看全城） */
+    private static boolean fitWholeMap = false;
     private static String outPrefix = "frame";
     private static int width = 960;
     private static int height = 540;
 
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
-            System.err.println("用法: OffscreenFrameDump <boot.json> <输出前缀> [帧数] [宽] [高]");
+            System.err.println("用法: OffscreenFrameDump <boot.json> <输出前缀> [帧数] [宽] [高] [--fit]");
+            System.err.println("  --fit  以「整图 contain」视角渲染（看全城，用于检查像素画整体观感）");
+            System.err.println("         默认 = 1:1 跟随玩家（玩家实际看到的视角）");
             System.exit(2);
             return;
         }
-        File boot = new File(args[0]).getAbsoluteFile();
-        outPrefix = args[1];
-        if (args.length > 2) {
-            frames = Math.max(1, Integer.parseInt(args[2]));
+        boolean fitAll = false;
+        java.util.List<String> pos = new java.util.ArrayList<String>();
+        for (String a : args) {
+            if ("--fit".equals(a)) {
+                fitAll = true;
+            } else {
+                pos.add(a);
+            }
         }
-        if (args.length > 3) {
-            width = Math.max(64, Integer.parseInt(args[3]));
+        File boot = new File(pos.get(0)).getAbsoluteFile();
+        outPrefix = pos.get(1);
+        if (pos.size() > 2) {
+            frames = Math.max(1, Integer.parseInt(pos.get(2)));
         }
-        if (args.length > 4) {
-            height = Math.max(64, Integer.parseInt(args[4]));
+        if (pos.size() > 3) {
+            width = Math.max(64, Integer.parseInt(pos.get(3)));
         }
+        if (pos.size() > 4) {
+            height = Math.max(64, Integer.parseInt(pos.get(4)));
+        }
+        fitWholeMap = fitAll;
 
-        System.out.println("OFFSCREEN_START boot=" + boot + " frames=" + frames + " " + width + "x" + height);
+        System.out.println("OFFSCREEN_START boot=" + boot + " frames=" + frames + " " + width + "x" + height
+                + " fitAll=" + fitAll);
 
         final TopDownRuntime rt = new TopDownRuntime(boot);
         if (rt.scripts == null) {
@@ -116,6 +131,11 @@ public final class OffscreenFrameDump {
                     // rt.display() 内部用 lastNanos 算 dt；离屏连续调用会得到 ~0 的 dt。
                     // 为了让脚本/动画推进稳定，这里先把 lastNanos 归零，让每帧重新起算。
                     setLong(fLastNanos, rt, 0L);
+                    if (fitWholeMap) {
+                        // --fit：每帧强制「整图 contain」视角。
+                        // 必须在 rt.display() 之前设，否则本帧已经按 1:1 画完了。
+                        rt.forceFitWholeMap();
+                    }
                     long t0 = System.nanoTime();
                     int drawsBefore = getInt(fDrawCalls, rt);
                     int beginsBefore = getInt(fBegins, rt);

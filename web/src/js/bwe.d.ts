@@ -398,8 +398,27 @@ declare namespace bwe {
     /** 回血 */
     heal(n: number): void;
 
-    /** 注册实体事件；同名事件重复注册会覆盖。载荷形状由派发方决定，所以是 any。 */
-    on(event: EntityEvent, fn: (payload?: any) => void): void;
+    /**
+     * 注册实体事件。
+     *
+     * <p><b>载荷是「位置参数」而不是单个对象</b>（引擎派发时就是这么传的），
+     * 各事件的实参个数也不同，所以这里按事件分别声明 —— 写成一个
+     * `fn(payload)` 会让「二参回调」被判类型错误（实测踩过）：
+     * <table>
+     *   <tr><th>事件</th><th>回调签名</th><th>派发点</th></tr>
+     *   <tr><td>damage</td><td>(amount, from)</td><td>e.damage / bwe.combat.hit</td></tr>
+     *   <tr><td>death</td><td>(by)</td><td>同上（血量归零时）</td></tr>
+     *   <tr><td>enter / leave</td><td>(other)</td><td>ZONE 触发区</td></tr>
+     *   <tr><td>interact</td><td>(player)</td><td>bwe.interact 触发</td></tr>
+     *   <tr><td>click / destroy</td><td>()</td><td>点击 / 销毁前</td></tr>
+     * </table>
+     * 同名事件重复注册会覆盖。用 `function (a, b)` 或少参数的写法都可以
+     * （少参数回调在 JS 里是合法的，TS 也允许）。
+     */
+    on(event: "damage", fn: (amount: number, from: Entity | null) => void): void;
+    on(event: "death", fn: (by: Entity | null) => void): void;
+    on(event: "enter" | "leave" | "interact", fn: (other: Entity | null) => void): void;
+    on(event: "click" | "destroy", fn: () => void): void;
   }
 
   // ==========================================================================
@@ -577,6 +596,8 @@ declare namespace bwe {
     screenToWorld(x: number, y: number): Vec2;
     /** 覆盖默认的画面适配方式（默认 contain） */
     setFit(mode: "contain" | "cover"): void;
+    /** 当前视口（屏幕）尺寸，供 HUD 布局使用 */
+    readonly size: { w: number; h: number };
   }
 
   // ==========================================================================
@@ -886,6 +907,45 @@ declare namespace bwe {
     has(scriptName: string): boolean;
   }
 
+  // ==========================================================================
+  // 扫雷 bwe.mine —— 内置 game.minesweeper 模块的运行时设置 / 状态
+  // ==========================================================================
+
+  interface MineConfig {
+    rows?: number;
+    cols?: number;
+    mines?: number;
+    /** 格子像素尺寸 16~64；改它会重建棋盘 */
+    cellSize?: number;
+    /** 0-999999；0 = 每局随机 */
+    seed?: number;
+  }
+
+  interface MineState {
+    rows: number;
+    cols: number;
+    mines: number;
+    flags: number;
+    /** 玩家至少点开过一格 */
+    started: boolean;
+    /** 是否结束（胜或负） */
+    over: boolean;
+    /** 是否赢（over 且 win） */
+    won: boolean;
+    /** over 且未赢 = 踩了雷 */
+    hitMine: boolean;
+    elapsed: number;
+  }
+
+  interface Mine {
+    /** 在游戏内改棋盘：rows/cols/mines/seed 任一个都会触发重建 */
+    set(cfg: MineConfig): void;
+    /** 不改参数，重新洗盘 */
+    reset(): void;
+    /** 读当前状态（rows/cols 统计、flags、over/won、elapsed） */
+    state(): MineState;
+  }
+
   // ---- 命名空间里的值（相对 bwe 直接用） ----
 
   /** 世界：查找 / 生成 / 销毁 / 全局事件 */
@@ -900,6 +960,8 @@ declare namespace bwe {
   const draw: Draw;
   /** 音频：音效与音乐 */
   const audio: Audio;
+  /** 扫雷内置模块的运行时设置 */
+  const mine: Mine;
   /** 存档：本地 JSON */
   const save: Save;
   /** 网格：像素 ⇄ 格子 */
@@ -1210,5 +1272,527 @@ declare namespace bwe {
     /** 恢复默认种子。 */
     reset(): void;
     defaultSeed(): number;
+  };
+
+  // ==========================================================================
+  // 开放世界：场景 / 空间 / 碰撞 / 输入动作 / 路网 / 车辆 / 战斗 / 调试
+  // ==========================================================================
+
+  // ---- 场景 scene ---------------------------------------------------------
+
+  /** `bwe.scene.list()` 的一项。 */
+  interface SceneListItem {
+    name: string;
+    /** 场景文件名（含路径后缀）。 */
+    file: string;
+    /** 在场景列表里的序号。 */
+    index: number;
+    width: number;
+    height: number;
+    /** 是否当前场景。 */
+    current: boolean;
+  }
+
+  /** `bwe.scene.current()` 的返回。 */
+  interface SceneCurrent {
+    name: string;
+    file: string;
+    index: number;
+    /** 场景代数：每次真正切换 +1。 */
+    epoch: number;
+    width: number;
+    height: number;
+    tileSize: number;
+  }
+
+  /** 切换回调的入参。 */
+  interface SceneChangedInfo {
+    /** 切换后的场景名。 */
+    name: string;
+    epoch: number;
+  }
+
+  const scene: {
+    /** 工程里的全部场景。 */
+    list(): SceneListItem[];
+    /** 当前场景（无场景返回 null）。 */
+    current(): SceneCurrent | null;
+    /** 场景总数。 */
+    count(): number;
+    /** 是否存在该场景（按名字，或按文件名/去扩展名的 basename 都认）。 */
+    has(name: string): boolean;
+    /** 请求切换场景：**只登记，帧末生效**，返回是否登记成功。 */
+    switchTo(name: string): boolean;
+    /** `switchTo` 的别名（语义：加载并切过去）。 */
+    load(name: string): boolean;
+    /** 待切换的场景名（没有则 null）。 */
+    pending(): string | null;
+    /** 场景代数：每次真正切换 +1（可用来判断"我拿到的是不是旧数据"）。 */
+    epoch(): number;
+    /** 注册切换回调。事件名：`"willChange"`（切换前）/ `"changed"`（切换后）。返回该函数本身，未知事件返回 null。 */
+    on(ev: "willChange" | "changed", fn: (info: SceneChangedInfo) => void): ((info: SceneChangedInfo) => void) | null;
+    /** 按函数引用摘掉回调（willChange 与 changed 都会找）。 */
+    off(fn: (info: SceneChangedInfo) => void): boolean;
+  };
+
+  // ---- 空间 spatial -------------------------------------------------------
+
+  /** 楼层内的一个空间区域（房间 / 走廊）。 */
+  interface SpatialZone {
+    id: string;
+    name: string;
+    buildingId: string;
+    /** 楼层键：`建筑id/楼层id`。 */
+    floorKey: string;
+    level: number;
+    x: number;
+    y: number;
+    halfW: number;
+    halfH: number;
+    /** 数据里声明的静态属性。 */
+    collides: boolean;
+    navigable: boolean;
+    /** 本帧解析出的三个运行时状态。 */
+    renderVisible: boolean;
+    collisionEnabled: boolean;
+    navPassable: boolean;
+    /** 进入该区域所需的 link id（空 = 无需过渡）。 */
+    viaLink: string;
+    tags: string[];
+  }
+
+  /** 垂直连接（楼梯 / 电梯）。 */
+  interface SpatialLink {
+    id: string;
+    kind: string;
+    aLevel: number;
+    bLevel: number;
+    ax: number;
+    ay: number;
+    bx: number;
+    by: number;
+    bidirectional: boolean;
+    travelTime: number;
+    requiresInteract: boolean;
+  }
+
+  /** 玩家当前所处空间。 */
+  interface CurrentSpace {
+    zoneId: string;
+    buildingId: string;
+    /** 楼层 id（不是序号）。 */
+    floorId: string;
+    level: number;
+    indoor: boolean;
+  }
+
+  /** 某个区域的三个运行时状态。 */
+  interface ZoneVisibility {
+    renderVisible: boolean;
+    collisionEnabled: boolean;
+    navPassable: boolean;
+  }
+
+  const spatial: {
+    /** 当前场景是否有楼层/区域数据（旧工程 = false，此时所有查询都不阻挡）。 */
+    hasData(): boolean;
+    /** 建筑数量。 */
+    buildingCount(): number;
+    /** 区域数量。 */
+    zoneCount(): number;
+    /** 垂直连接数量。 */
+    linkCount(): number;
+    /** 全部区域（只读快照）。 */
+    all(): SpatialZone[];
+    /** 按区域 id 取。 */
+    byId(id: string): SpatialZone | null;
+    /** 取坐标所在区域。 */
+    at(x: number, y: number): SpatialZone | null;
+    /** 玩家当前空间（无数据 / 不在任何区域 = null）。 */
+    current(): CurrentSpace | null;
+    /** 玩家楼层序号（无数据 = 0）。 */
+    level(): number;
+    /** 某实体所在楼层序号（跨层判断的关键）。 */
+    levelOf(e: Entity): number;
+    /** 某实体所在区域。 */
+    zoneOf(e: Entity): SpatialZone | null;
+    /** 区域三状态（可传区域对象或 id）。 */
+    visibility(zone: SpatialZone | string): ZoneVisibility | null;
+    /** 全部垂直连接。 */
+    links(): SpatialLink[];
+    /** 按 id 取连接。 */
+    link(id: string): SpatialLink | null;
+    /** 两楼层之间是否有连接（"楼梯存在吗"）。 */
+    linkBetween(aLevel: number, bLevel: number): SpatialLink | null;
+    /** 靠 link 能否从一层到另一层。 */
+    canReachLevel(from: number, to: number): boolean;
+    /** 把实体沿连接传送到另一端（电梯 / 楼梯搬家）；成功返回 true。 */
+    useLink(id: string, e: Entity): boolean;
+    /**
+     * 让实体**从门口走进**某个区域（设置其楼层归属为区域所在层）。
+     *
+     * 与 `useLink` 的区别：`useLink` 走的是两层之间的垂直连接（楼梯/电梯）；
+     * `enter` 用于"从室外走进一层"这种**非垂直**的进入。
+     * 传 zone id 或 SpatialZone；省略 `e` = 作用于玩家。
+     */
+    enter(zone: string | SpatialZone, e?: Entity): boolean;
+    /** 让实体走出建筑，楼层归属退回地面层（0）。省略 `e` = 作用于玩家。 */
+    leave(e?: Entity): boolean;
+    /** 自定义楼层可见性规则；`"default"` 或省略 = 恢复默认。当前 v1 只接受 default，其它值返回 false。 */
+    setVisibilityRule(rule?: "default" | null): boolean;
+    /** 清空索引（场景卸载时引擎自己会清，一般不用手调）。 */
+    clear(): boolean;
+  };
+
+  // ---- 碰撞 collision -----------------------------------------------------
+
+  /** 碰撞回调的事件对象。 */
+  interface CollisionEvent {
+    event: "enter" | "stay" | "exit" | "triggerEnter" | "triggerStay" | "triggerExit";
+    /** 注册回调时指定的那个实体（`on(ev, fn, e)` 的第 3 个参数）。 */
+    self: Entity | null;
+    /** 对方的相对视角。 */
+    other: Entity | null;
+    a: Entity | null;
+    b: Entity | null;
+    /** 是否传感器（触发区）。 */
+    sensor: boolean;
+  }
+
+  /** 几何射线命中结果。 */
+  interface CollisionRayHit {
+    hit: boolean;
+    /** 命中点（未命中 = 终点）。 */
+    x: number;
+    y: number;
+    entity: Entity | null;
+    /** 命中距离（未命中 = 线段全长）。 */
+    distance: number;
+  }
+
+  const collision: {
+    /**
+     * 订阅碰撞事件。事件名：`"enter"` / `"stay"` / `"exit"`（含 `"triggerEnter"` 等传感器变体）。
+     * 第 3 个参数传实体 = 只收该实体的事件；不传 = 收全局。
+     * 返回回调函数本身，便于 `off(fn)`。
+     */
+    on(ev: "enter" | "stay" | "exit" | "triggerEnter" | "triggerStay" | "triggerExit", fn: (info: CollisionEvent) => void, e?: Entity): ((info: CollisionEvent) => void) | null;
+    /** 摘掉回调（全局与按实体的都会找）。 */
+    off(fn: (info: CollisionEvent) => void): boolean;
+    /** 矩形查询：命中所有可见实体。 */
+    query(rect: Rect): Entity[];
+    /** 圆形查询（圆 vs AABB，最贴近的点比较）。 */
+    overlapCircle(x: number, y: number, r: number): Entity[];
+    /** 线段射线检测（纯几何，不含瓦片）。 */
+    raycast(x1: number, y1: number, x2: number, y2: number): CollisionRayHit;
+    /** 把实体的碰撞体标为传感器（触发区）。 */
+    setTrigger(e: Entity, on?: boolean): boolean;
+    /** 是否传感器。 */
+    isTrigger(e: Entity): boolean;
+    /** 当前与该实体接触的实体（几何重叠）。 */
+    contacts(e: Entity): Entity[];
+    /** 当前接触对数（诊断 / 断言用）。 */
+    count(): number;
+  };
+
+  // ---- 输入动作 actions ---------------------------------------------------
+
+  const actions: {
+    /**
+     * 批量写入动作映射（**合并**，不动未提到的动作）。
+     * 值可以是键名字符串、键名数组，或逗号分隔字符串。
+     */
+    bind(map: { [action: string]: string | string[] }): boolean;
+    /** 解绑单个动作。 */
+    unbind(action: string): boolean;
+    /** 恢复默认映射。 */
+    reset(): boolean;
+    /** 全部动作名。 */
+    actions(): string[];
+    /** 某动作绑定的键（返回键名/键码字符串）。 */
+    keys(action: string): string[];
+    /** 持续按住（且当前上下文放行）。 */
+    down(action: string): boolean;
+    /** 本帧刚按下。 */
+    pressed(action: string): boolean;
+    /** 本帧刚松开。 */
+    released(action: string): boolean;
+    /** `{x, y}` 方向轴，用 `move_*` 动作算，已归一化（Y 向下）。 */
+    axis(): Vec2;
+    /** 当前上下文名（栈空 = `"game"`）。 */
+    context(): string;
+    /** 压入上下文（如 `"ui"`）。 */
+    pushContext(name: string): boolean;
+    /** 弹出上下文，返回被弹出的名字（空栈 = null）。 */
+    popContext(): string | null;
+    /** 直接设为单一上下文（传空串 = 清空栈）。 */
+    setContext(name: string): boolean;
+    /** 声明某上下文只放行哪些动作；不调用 = 全部放行。 */
+    allow(context: string, actions: string[]): boolean;
+    /** 订阅动作触发（按下时派发）。返回该函数本身。 */
+    on(action: string, fn: (info?: unknown) => void): ((info?: unknown) => void) | null;
+    /** 摘掉回调；也支持 `off(action, fn)` 形式。 */
+    off(fn: (info?: unknown) => void): boolean;
+    /** 窗口当前是否有焦点（失焦时所有动作立即为 false）。 */
+    focused(): boolean;
+  };
+
+  // ---- 路网 road ----------------------------------------------------------
+
+  /** 路网节点（路口 / 站点）。 */
+  interface RoadNode {
+    id: string;
+    x: number;
+    y: number;
+    kind: string;
+  }
+
+  /** `nearest()` 的结果：节点 + 距离。 */
+  interface RoadNearest extends RoadNode {
+    dist: number;
+  }
+
+  /** 路网边（路段）。 */
+  interface RoadEdge {
+    from: string;
+    to: string;
+    width: number;
+    speedLimit: number;
+    oneway: boolean;
+    length: number;
+  }
+
+  const road: {
+    /** 当前场景是否有路网数据。 */
+    hasData(): boolean;
+    nodeCount(): number;
+    edgeCount(): number;
+    /** 全部节点。 */
+    nodes(): RoadNode[];
+    /** 全部路段。 */
+    edges(): RoadEdge[];
+    /** 按 id 取节点。 */
+    node(id: string): RoadNode | null;
+    /** 最近的节点（带 `dist`）。 */
+    nearest(x: number, y: number): RoadNearest | null;
+    /**
+     * 最短**时间**路径（权重 = 长度 / 限速，不是最短距离）。
+     * `from` / `to` 可传节点 id、`{id}` 或 `{x, y}`（取最近节点）。
+     * 不可达返回空数组。
+     */
+    route(from: string | RoadNode | Vec2, to: string | RoadNode | Vec2): RoadNode[];
+    /** 两点是否连通。 */
+    canReach(from: string | RoadNode | Vec2, to: string | RoadNode | Vec2): boolean;
+    /** 途经点的两段路径（出租车"先接客再送客"），任一段不可达 = 空。 */
+    routeThrough(from: string | RoadNode | Vec2, via: string | RoadNode | Vec2, to: string | RoadNode | Vec2): RoadNode[];
+    /** 当前缓存的路径条数（诊断用）。 */
+    cachedRoutes(): number;
+    /** 清空路径缓存。 */
+    clear(): boolean;
+  };
+
+  // ---- 车辆 vehicle -------------------------------------------------------
+
+  /** `bwe.vehicle.of(e)` 的返回。 */
+  interface VehicleInfo {
+    id: number;
+    kind: string;
+    /** 当前速度 px/s。 */
+    speed: number;
+    speedLimit: number;
+    /** 朝向角度（0 = 朝右，顺时针为正）。 */
+    heading: number;
+    /** 损伤 0..1。 */
+    damage: number;
+    driver: Entity | null;
+    autoDrive: boolean;
+    /** 路线进度（路点下标 / 路点总数，路点含车道点与路口弧线采样点，只表示进度）。 */
+    routeIndex: number;
+    routeLength: number;
+    /** 自动驾驶时下一个尚未通过的路网节点 id；无路线为 `""`。 */
+    nextNode: string;
+    /** 最近通过（或出发）的路网节点 id；无则 `""`。 */
+    prevNode: string;
+    /** 车到 nextNode 中心的直线距离 px；无路线为 `-1`。 */
+    nextNodeDist: number;
+    /** 已越过 nextNode 的停止线（在路口内）——红灯时不要再刹车。 */
+    inJunction: boolean;
+    /** 驻车中（下车 / stop / 到站后）：目标速度 0，不倒车；throttle / steer / followRoad / enter 解除。 */
+    parked: boolean;
+    /** 当前制动 / 油门输入 0..1。 */
+    brake: number;
+    throttle: number;
+  }
+
+  /**
+   * 车辆事件载荷（`bwe.vehicle.on(...)` 的入参）。
+   *
+   * <p>引擎派发的是一个<b>对象</b>（不是位置参数），字段如下：
+   * `{event, vehicle, actor, kind}`。
+   */
+  interface VehicleEvent {
+    event: "crash" | "hijack" | "enter" | "exit" | "arrive";
+    /** 事件相关的那辆车。 */
+    vehicle: Entity;
+    /** 相关的实体：hijack 的原司机 / enter·exit 的上下车人 / 其它事件为 null。 */
+    actor: Entity | null;
+    /** 车辆类型（car / taxi / police 等，由 spawn 时的 kind 决定）。 */
+    kind: string;
+  }
+
+  const vehicle: {
+    /** 生成一辆车（`opts` 与 `bwe.world.spawn` 同构，另认 `kind`）。 */
+    spawn(opts: { kind?: string; x?: number; y?: number } & { [k: string]: unknown }): Entity | null;
+    /** 车辆的完整状态。 */
+    of(e: Entity): VehicleInfo | null;
+    isVehicle(e: Entity): boolean;
+    /** 该车的驾驶员。 */
+    driver(e: Entity): Entity | null;
+    /** 该实体正在驾驶的车。 */
+    vehicleOf(e: Entity): Entity | null;
+    /** 上车（不改变自动驾驶 / 路线 / 可见性；NPC 上车后可继续沿路开）。 */
+    enter(driver: Entity, vehicle: Entity): boolean;
+    /** 下车（车留下并驻车）；人放在车左侧，垂直于车头、距离 halfH+12。 */
+    exit(driver: Entity): boolean;
+    /** 劫车：原驾驶员被拽到车左侧并派发 hijack，取消自动驾驶与路线、油门归零，再由 hijacker 上车。 */
+    hijack(hijacker: Entity, vehicle: Entity): boolean;
+    /** 油门 0..1（自动驾驶时忽略）。 */
+    throttle(e: Entity, v?: number): boolean;
+    /**
+     * 制动 0..1，持续生效直到再次设置。
+     * 自动驾驶时：目标速度 × (1 − brake)，≥ 0.99 刹停但保留路线（红灯用 brake(car,1) / brake(car,0)）。
+     * 手动且有驾驶员：前进时刹车，速度 ≤ 0 后倒车（最高 30% 限速）；无驾驶员只刹停。
+     */
+    brake(e: Entity, v?: number): boolean;
+    /** 转向 -1..1（右 = 顺时针）；转向速率随速度增大，0 速不转，倒车时反向。 */
+    steer(e: Entity, v?: number): boolean;
+    /**
+     * 本帧把速度直接设为 `v`（px/s，负数 = 倒车），这一帧不经过加减速；下一帧恢复正常物理。
+     * 例：`setSpeed(car, 0)` 瞬停；出场给初速度。不是车辆返回 false。
+     */
+    setSpeed(e: Entity, v: number): boolean;
+    /** 当前速度 px/s。 */
+    speed(e: Entity): number;
+    /** 朝向角度。 */
+    heading(e: Entity): number;
+    /** 读损伤（不传 n）或累加损伤（传 n），返回累加后的值 0..1。 */
+    damage(e: Entity, n?: number): number;
+    /**
+     * 沿路网自动驾驶到某节点：靠右车道（偏移 = 路宽/4），路口走平滑弧线，弯前减速，停在目标节点的停止线上。
+     * 车在路段中间时从车头方向的端点出发（不掉头）。重置 throttle / brake 为 0；`opts.onArrive` 到达时回调一次。
+     */
+    followRoad(e: Entity, target: string | RoadNode | Vec2, opts?: { onArrive?: (info?: unknown) => void }): boolean;
+    /** 停车：取消自动驾驶与路线、油门 / 制动归零并驻车（平滑减速到 0，不倒车）。 */
+    stop(e: Entity): boolean;
+    /** 当前车辆总数。 */
+    count(): number;
+    /** 订阅事件：`"crash"` / `"hijack"` / `"enter"` / `"exit"` / `"arrive"`。 */
+    on(ev: "crash" | "hijack" | "enter" | "exit" | "arrive", fn: (info: VehicleEvent) => void): ((info: VehicleEvent) => void) | null;
+    off(fn: (info: VehicleEvent) => void): boolean;
+  };
+
+  // ---- 战斗 combat --------------------------------------------------------
+
+  /** 武器参数表项。 */
+  interface WeaponParams {
+    name: string;
+    damage: number;
+    /** 有效距离（格）。 */
+    range: number;
+    /** 冷却秒。 */
+    cooldown: number;
+    ammoMax: number;
+    melee: boolean;
+  }
+
+  /** `bwe.combat.hit(opts)` 的结果。 */
+  interface HitResult {
+    hit: boolean;
+    target: Entity | null;
+    amount: number;
+    blocked: boolean;
+    killed: boolean;
+  }
+
+  /** 战斗事件（`on("kill"|"damage", fn)` 的入参）。 */
+  interface CombatEvent {
+    event: "kill" | "damage";
+    from: Entity | null;
+    to: Entity;
+    amount: number;
+    killed: boolean;
+  }
+
+  const combat: {
+    /** 查武器参数（数据驱动）。未知武器 = null。 */
+    params(kind: string): WeaponParams | null;
+    /** 全部武器名。 */
+    weapons(): string[];
+    /**
+     * 发起一次攻击（`opts` 认 `from` / `to` / `weapon` 等）。
+     * 返回 `{hit, target, amount, blocked, killed}`。
+     */
+    hit(opts: { from?: Entity; to?: Entity; weapon?: string } & { [k: string]: unknown }): HitResult;
+    /** 开/关格挡。 */
+    defend(e: Entity, on?: boolean): boolean;
+    /** 是否在格挡。 */
+    defending(e: Entity): boolean;
+    /** 格挡减伤系数 0..1。 */
+    setDefense(e: Entity, v?: number): boolean;
+    /** 读武器（不传 name）或换武器（传 name，未知武器返回 false）。 */
+    weapon(e: Entity, name?: string): string | boolean;
+    /** 该实体当前武器名。 */
+    weaponOf(e: Entity): string;
+    /** 循环切到下一把武器，返回新武器名。 */
+    switchWeapon(e: Entity): string | boolean;
+    /** 当前弹药。 */
+    ammo(e: Entity): number;
+    /** 设置弹药。 */
+    setAmmo(e: Entity, n: number): boolean;
+    /** 订阅事件：`"kill"` / `"damage"`。 */
+    on(ev: "kill" | "damage", fn: (info: CombatEvent) => void): ((info: CombatEvent) => void) | null;
+    off(fn: (info: CombatEvent) => void): boolean;
+    /** 两点距离是否在射程内。 */
+    inRange(a: Entity, b: Entity, range?: number): boolean;
+  };
+
+  // ---- 调试 debug ---------------------------------------------------------
+
+  /** `bwe.debug.stats()` 的返回。 */
+  interface DebugStats {
+    actors: number;
+    pendingDestroy: number;
+    sceneEpoch: number;
+    colliders: number;
+    vehicles: number;
+    spatialZones: number;
+    drawCommands: number;
+    enabled: boolean;
+  }
+
+  const debug: {
+    /** 总开关（打开后才允许逐项绘制）。 */
+    on(): boolean;
+    /** 关闭并复位所有逐项开关。 */
+    off(): boolean;
+    enabled(): boolean;
+    /** 画所有有碰撞盒的实体（`on` 省略 = true）。 */
+    colliders(on?: boolean): boolean;
+    /** 画沿路径跟随的实体的路径。 */
+    paths(on?: boolean): boolean;
+    /** 画空间区域边界。 */
+    zones(on?: boolean): boolean;
+    /** 画瓦片阻挡图（小地图开销大，慎用）。 */
+    nav(on?: boolean): boolean;
+    /** 单次画矩形。 */
+    box(x: number, y: number, w: number, h: number, color?: string): void;
+    /** 单次画圆。 */
+    circle(x: number, y: number, r: number, color?: string): void;
+    /** 单次画线。 */
+    line(x1: number, y1: number, x2: number, y2: number, color?: string): void;
+    /** 画某实体的碰撞框。 */
+    actor(e: Entity, color?: string): void;
+    /** 运行时统计（性能水位观察）。 */
+    stats(): DebugStats;
   };
 }

@@ -13,7 +13,8 @@
 export type ApiGroupId =
   | "life" | "world" | "entity" | "prefab" | "input" | "camera" | "time"
   | "draw" | "audio" | "save" | "map" | "nav" | "interact" | "spawner" | "util"
-  | "material" | "field" | "sense" | "physics";
+  | "material" | "field" | "sense" | "physics"
+  | "scene" | "spatial" | "collision" | "actions" | "road" | "vehicle" | "combat" | "debug";
 
 export interface ApiGroup {
   id: ApiGroupId;
@@ -52,7 +53,15 @@ export const API_GROUPS: ApiGroup[] = [
   { id: "material", label: "材质 material", blurb: "易燃 / 燃烧时长 / 导电 / 湿：涌现的第一性" },
   { id: "field", label: "格子场 field", blurb: "火 / 水 / 烟 / 自定义通道的蔓延与熄灭" },
   { id: "sense", label: "感知与 AI sense / ai", blurb: "视野、噪音、记忆、阵营、状态机" },
-  { id: "physics", label: "物理 physics", blurb: "刚体、冲量、抛掷、射线（jbox2d）" }
+  { id: "physics", label: "物理 physics", blurb: "刚体、冲量、抛掷、射线（jbox2d）" },
+  { id: "scene", label: "场景 scene", blurb: "场景列表、切换、场景代数与切换回调" },
+  { id: "spatial", label: "空间 spatial", blurb: "多层建筑：区域、楼层、垂直连接、可见性" },
+  { id: "collision", label: "碰撞 collision", blurb: "碰撞 / 触发事件、几何查询、射线、传感器" },
+  { id: "actions", label: "输入动作 actions", blurb: "动作映射、上下文栈、可配置改键" },
+  { id: "road", label: "路网 road", blurb: "道路节点与路段、最短时间路径" },
+  { id: "vehicle", label: "车辆 vehicle", blurb: "上下车、油门刹车转向、沿路网自动驾驶" },
+  { id: "combat", label: "战斗 combat", blurb: "武器参数、命中判定、格挡与弹药" },
+  { id: "debug", label: "调试 debug", blurb: "碰撞盒 / 路径 / 区域 / 阻挡图的调试绘制" }
 ];
 
 function d(name: string, signature: string, desc: string, group: ApiGroupId, phase2 = false): ApiDoc {
@@ -340,7 +349,138 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.seed.set", "bwe.seed.set(n)", "固定随机种子（同种子 + 同输入 ⇒ 同结果，对拍用）", "util"),
   d("bwe.seed.get", "bwe.seed.get() → number", "当前种子", "util"),
   d("bwe.seed.reset", "bwe.seed.reset()", "恢复默认种子", "util"),
-  d("bwe.seed.defaultSeed", "bwe.seed.defaultSeed() → number", "引擎内置的默认种子常量", "util")
+  d("bwe.seed.defaultSeed", "bwe.seed.defaultSeed() → number", "引擎内置的默认种子常量", "util"),
+
+  // ===== 开放世界：场景 =====
+  d("bwe.scene.list", "bwe.scene.list() → SceneListItem[]", "工程里的全部场景（name / file / index / width / height / current）", "scene"),
+  d("bwe.scene.current", "bwe.scene.current() → SceneCurrent | null", "当前场景信息（含 epoch / tileSize）", "scene"),
+  d("bwe.scene.count", "bwe.scene.count() → number", "场景总数", "scene"),
+  d("bwe.scene.has", "bwe.scene.has(name) → boolean", "是否存在该场景（名字 / 文件名 / 去扩展名 basename 都认）", "scene"),
+  d("bwe.scene.switchTo", "bwe.scene.switchTo(name) → boolean", "请求切场景：只登记，帧末生效；返回是否登记成功", "scene"),
+  d("bwe.scene.load", "bwe.scene.load(name) → boolean", "switchTo 的别名（加载并切过去）", "scene"),
+  d("bwe.scene.pending", "bwe.scene.pending() → string | null", "待切换的场景名（没有 = null）", "scene"),
+  d("bwe.scene.epoch", "bwe.scene.epoch() → number", "场景代数：每次真正切换 +1", "scene"),
+  d("bwe.scene.on", "bwe.scene.on(\"willChange\" | \"changed\", fn({name, epoch}))", "注册切换回调（切换前 / 切换后），返回该函数，未知事件返回 null", "scene"),
+  d("bwe.scene.off", "bwe.scene.off(fn) → boolean", "按函数引用摘掉切换回调", "scene"),
+
+  // ===== 开放世界：空间 / 多层建筑 =====
+  d("bwe.spatial.hasData", "bwe.spatial.hasData() → boolean", "当前场景是否有楼层/区域数据（旧工程 = false，所有查询不阻挡）", "spatial"),
+  d("bwe.spatial.buildingCount", "bwe.spatial.buildingCount() → number", "建筑数量", "spatial"),
+  d("bwe.spatial.zoneCount", "bwe.spatial.zoneCount() → number", "区域数量", "spatial"),
+  d("bwe.spatial.linkCount", "bwe.spatial.linkCount() → number", "垂直连接（楼梯/电梯）数量", "spatial"),
+  d("bwe.spatial.all", "bwe.spatial.all() → SpatialZone[]", "全部区域（只读快照）", "spatial"),
+  d("bwe.spatial.byId", "bwe.spatial.byId(id) → SpatialZone | null", "按区域 id 取", "spatial"),
+  d("bwe.spatial.at", "bwe.spatial.at(x, y) → SpatialZone | null", "坐标所在的区域", "spatial"),
+  d("bwe.spatial.current", "bwe.spatial.current() → CurrentSpace | null", "玩家当前空间 {zoneId, buildingId, floorId, level, indoor}", "spatial"),
+  d("bwe.spatial.level", "bwe.spatial.level() → number", "玩家楼层序号（无数据 = 0）", "spatial"),
+  d("bwe.spatial.levelOf", "bwe.spatial.levelOf(e) → number", "某实体所在楼层序号（跨层判断的关键）", "spatial"),
+  d("bwe.spatial.zoneOf", "bwe.spatial.zoneOf(e) → SpatialZone | null", "某实体所在区域", "spatial"),
+  d("bwe.spatial.visibility", "bwe.spatial.visibility(zoneId | zone) → {renderVisible, collisionEnabled, navPassable}", "某区域本帧解析出的三个运行时状态", "spatial"),
+  d("bwe.spatial.links", "bwe.spatial.links() → SpatialLink[]", "全部垂直连接", "spatial"),
+  d("bwe.spatial.link", "bwe.spatial.link(id) → SpatialLink | null", "按 id 取连接", "spatial"),
+  d("bwe.spatial.linkBetween", "bwe.spatial.linkBetween(aLevel, bLevel) → SpatialLink | null", "两楼层之间是否有连接（“楼梯存在吗”）", "spatial"),
+  d("bwe.spatial.canReachLevel", "bwe.spatial.canReachLevel(from, to) → boolean", "靠 link 能否从一层到另一层", "spatial"),
+  d("bwe.spatial.useLink", "bwe.spatial.useLink(id, e) → boolean", "把实体沿连接传送到另一端（电梯/楼梯搬家）", "spatial"),
+  d("bwe.spatial.enter", "bwe.spatial.enter(zoneId | zone, e?) → boolean", "从门口走进某区域（设置楼层归属）；省略 e = 作用于玩家", "spatial"),
+  d("bwe.spatial.leave", "bwe.spatial.leave(e?) → boolean", "走出建筑，楼层归属退回地面层；省略 e = 作用于玩家", "spatial"),
+  d("bwe.spatial.setVisibilityRule", "bwe.spatial.setVisibilityRule(rule = \"default\") → boolean", "自定义楼层可见性规则；v1 只接受 default，其它值返回 false", "spatial"),
+  d("bwe.spatial.clear", "bwe.spatial.clear() → boolean", "清空空间索引（场景卸载时引擎自己会清）", "spatial"),
+
+  // ===== 开放世界：碰撞 =====
+  d("bwe.collision.on", "bwe.collision.on(ev, fn({event, self, other, a, b, sensor}), e?)", "订阅 enter / stay / exit / trigger* 碰撞事件；传 e = 只看该实体", "collision"),
+  d("bwe.collision.off", "bwe.collision.off(fn) → boolean", "摘掉碰撞回调（全局与按实体的都会找）", "collision"),
+  d("bwe.collision.query", "bwe.collision.query(rect) → Entity[]", "矩形几何查询（全部可见实体）", "collision"),
+  d("bwe.collision.overlapCircle", "bwe.collision.overlapCircle(x, y, r) → Entity[]", "圆形查询（圆 vs AABB）", "collision"),
+  d("bwe.collision.raycast", "bwe.collision.raycast(x1, y1, x2, y2) → {hit, x, y, entity, distance}", "线段射线检测（纯几何，不含瓦片）", "collision"),
+  d("bwe.collision.setTrigger", "bwe.collision.setTrigger(e, on = true) → boolean", "把实体的碰撞体标为传感器（触发区）", "collision"),
+  d("bwe.collision.isTrigger", "bwe.collision.isTrigger(e) → boolean", "该实体是否传感器", "collision"),
+  d("bwe.collision.contacts", "bwe.collision.contacts(e) → Entity[]", "当前与该实体接触的实体（几何重叠）", "collision"),
+  d("bwe.collision.count", "bwe.collision.count() → number", "当前接触对数（诊断/断言用）", "collision"),
+
+  // ===== 开放世界：输入动作映射 =====
+  d("bwe.actions.bind", "bwe.actions.bind({action: [\"KeyW\", ...]}) → boolean", "批量写入动作映射（合并，不动未提到的动作）", "actions"),
+  d("bwe.actions.unbind", "bwe.actions.unbind(action) → boolean", "解绑单个动作", "actions"),
+  d("bwe.actions.reset", "bwe.actions.reset() → boolean", "恢复默认映射", "actions"),
+  d("bwe.actions.actions", "bwe.actions.actions() → string[]", "全部动作名", "actions"),
+  d("bwe.actions.keys", "bwe.actions.keys(action) → string[]", "某动作绑定的键", "actions"),
+  d("bwe.actions.down", "bwe.actions.down(action) → boolean", "持续按住（且当前上下文放行）", "actions"),
+  d("bwe.actions.pressed", "bwe.actions.pressed(action) → boolean", "本帧刚按下", "actions"),
+  d("bwe.actions.released", "bwe.actions.released(action) → boolean", "本帧刚松开", "actions"),
+  d("bwe.actions.axis", "bwe.actions.axis() → {x, y}", "方向轴（用 move_* 动作算，已归一化，Y 向下）", "actions"),
+  d("bwe.actions.context", "bwe.actions.context() → string", "当前上下文名（栈空 = \"game\"）", "actions"),
+  d("bwe.actions.pushContext", "bwe.actions.pushContext(name) → boolean", "压入上下文（如 \"ui\"）", "actions"),
+  d("bwe.actions.popContext", "bwe.actions.popContext() → string | null", "弹出上下文，返回被弹出的名字", "actions"),
+  d("bwe.actions.setContext", "bwe.actions.setContext(name) → boolean", "直接设为单一上下文（空串 = 清空栈）", "actions"),
+  d("bwe.actions.allow", "bwe.actions.allow(context, actions[]) → boolean", "声明某上下文只放行哪些动作（不调用 = 全部放行）", "actions"),
+  d("bwe.actions.on", "bwe.actions.on(action, fn)", "订阅动作触发（按下时派发），返回该函数", "actions"),
+  d("bwe.actions.off", "bwe.actions.off(fn) → boolean", "摘掉动作回调；也支持 off(action, fn)", "actions"),
+  d("bwe.actions.focused", "bwe.actions.focused() → boolean", "窗口是否有焦点（失焦时所有动作立即为 false）", "actions"),
+
+  // ===== 开放世界：路网 =====
+  d("bwe.road.hasData", "bwe.road.hasData() → boolean", "当前场景是否有路网数据", "road"),
+  d("bwe.road.nodeCount", "bwe.road.nodeCount() → number", "路网节点数量", "road"),
+  d("bwe.road.edgeCount", "bwe.road.edgeCount() → number", "路网路段数量", "road"),
+  d("bwe.road.nodes", "bwe.road.nodes() → RoadNode[]", "全部节点 {id, x, y, kind}", "road"),
+  d("bwe.road.edges", "bwe.road.edges() → RoadEdge[]", "全部路段 {from, to, width, speedLimit, oneway, length}", "road"),
+  d("bwe.road.node", "bwe.road.node(id) → RoadNode | null", "按 id 取节点", "road"),
+  d("bwe.road.nearest", "bwe.road.nearest(x, y) → {id, x, y, kind, dist} | null", "最近的节点（带距离）", "road"),
+  d("bwe.road.route", "bwe.road.route(from, to) → RoadNode[]", "最短时间路径（权重 = 长度 / 限速）；不可达 = 空数组", "road"),
+  d("bwe.road.canReach", "bwe.road.canReach(from, to) → boolean", "两点是否连通", "road"),
+  d("bwe.road.routeThrough", "bwe.road.routeThrough(from, via, to) → RoadNode[]", "途经点的两段路径（先接客再送客），任一段不可达 = 空", "road"),
+  d("bwe.road.cachedRoutes", "bwe.road.cachedRoutes() → number", "当前缓存的路径条数（诊断用）", "road"),
+  d("bwe.road.clear", "bwe.road.clear() → boolean", "清空路径缓存", "road"),
+
+  // ===== 开放世界：车辆 =====
+  d("bwe.vehicle.spawn", "bwe.vehicle.spawn(opts) → Entity | null", "生成一辆车（opts 与 world.spawn 同构，另认 kind）", "vehicle"),
+  d("bwe.vehicle.of", "bwe.vehicle.of(e) → VehicleInfo | null", "车辆完整状态 {id, kind, speed, speedLimit, heading, damage, driver, autoDrive, ...}", "vehicle"),
+  d("bwe.vehicle.isVehicle", "bwe.vehicle.isVehicle(e) → boolean", "该实体是否车辆", "vehicle"),
+  d("bwe.vehicle.driver", "bwe.vehicle.driver(e) → Entity | null", "该车的驾驶员", "vehicle"),
+  d("bwe.vehicle.vehicleOf", "bwe.vehicle.vehicleOf(e) → Entity | null", "该实体正在驾驶的车", "vehicle"),
+  d("bwe.vehicle.enter", "bwe.vehicle.enter(driver, vehicle) → boolean", "上车", "vehicle"),
+  d("bwe.vehicle.exit", "bwe.vehicle.exit(driver) → boolean", "下车（车留下）", "vehicle"),
+  d("bwe.vehicle.hijack", "bwe.vehicle.hijack(hijacker, vehicle) → boolean", "劫车：原驾驶员被踢出并派发 hijack 事件", "vehicle"),
+  d("bwe.vehicle.throttle", "bwe.vehicle.throttle(e, v = 1) → boolean", "油门 0..1", "vehicle"),
+  d("bwe.vehicle.brake", "bwe.vehicle.brake(e, v = 1) → boolean", "制动 0..1", "vehicle"),
+  d("bwe.vehicle.steer", "bwe.vehicle.steer(e, v = 0) → boolean", "转向 -1..1", "vehicle"),
+  d("bwe.vehicle.speed", "bwe.vehicle.speed(e) → number", "当前速度 px/s", "vehicle"),
+  d("bwe.vehicle.heading", "bwe.vehicle.heading(e) → number", "朝向角度（0 = 朝右，顺时针为正）", "vehicle"),
+  d("bwe.vehicle.damage", "bwe.vehicle.damage(e, n = ?) → number", "读损伤，或累加损伤后返回 0..1", "vehicle"),
+  d("bwe.vehicle.followRoad", "bwe.vehicle.followRoad(e, target, {onArrive} = {}) → boolean", "沿路网自动驾驶到某节点，到达时回调", "vehicle"),
+  d("bwe.vehicle.stop", "bwe.vehicle.stop(e) → boolean", "停车（取消自动驾驶与路线、油门/制动归零、驻车平滑减速到 0）", "vehicle"),
+  d("bwe.vehicle.setSpeed", "bwe.vehicle.setSpeed(e, v) → boolean", "本帧把速度直接设为 v（px/s，负=倒车），不经过加减速；下一帧恢复正常物理", "vehicle"),
+  d("bwe.vehicle.count", "bwe.vehicle.count() → number", "当前车辆总数", "vehicle"),
+  d("bwe.vehicle.on", "bwe.vehicle.on(\"crash\" | \"hijack\" | \"enter\" | \"exit\" | \"arrive\", fn)", "订阅车辆事件，返回该函数", "vehicle"),
+  d("bwe.vehicle.off", "bwe.vehicle.off(fn) → boolean", "摘掉车辆事件回调", "vehicle"),
+
+  // ===== 开放世界：战斗 =====
+  d("bwe.combat.params", "bwe.combat.params(kind) → WeaponParams | null", "查武器参数（数据驱动）；未知武器 = null", "combat"),
+  d("bwe.combat.weapons", "bwe.combat.weapons() → string[]", "全部武器名", "combat"),
+  d("bwe.combat.hit", "bwe.combat.hit({from, to, weapon}) → {hit, target, amount, blocked, killed}", "发起一次攻击并返回结果", "combat"),
+  d("bwe.combat.defend", "bwe.combat.defend(e, on = true) → boolean", "开/关格挡", "combat"),
+  d("bwe.combat.defending", "bwe.combat.defending(e) → boolean", "是否在格挡", "combat"),
+  d("bwe.combat.setDefense", "bwe.combat.setDefense(e, v = 0.5) → boolean", "格挡减伤系数 0..1", "combat"),
+  d("bwe.combat.weapon", "bwe.combat.weapon(e, name = ?) → string | boolean", "读武器（不传 name）或换武器（传 name，未知武器返回 false）", "combat"),
+  d("bwe.combat.weaponOf", "bwe.combat.weaponOf(e) → string", "该实体当前武器名", "combat"),
+  d("bwe.combat.switchWeapon", "bwe.combat.switchWeapon(e) → string | boolean", "循环切到下一把武器，返回新武器名", "combat"),
+  d("bwe.combat.ammo", "bwe.combat.ammo(e) → number", "当前弹药", "combat"),
+  d("bwe.combat.setAmmo", "bwe.combat.setAmmo(e, n) → boolean", "设置弹药", "combat"),
+  d("bwe.combat.on", "bwe.combat.on(\"kill\" | \"damage\", fn({event, from, to, amount, killed}))", "订阅战斗事件，返回该函数", "combat"),
+  d("bwe.combat.off", "bwe.combat.off(fn) → boolean", "摘掉战斗事件回调", "combat"),
+  d("bwe.combat.inRange", "bwe.combat.inRange(a, b, range = 无限) → boolean", "两点距离是否在射程内", "combat"),
+
+  // ===== 开放世界：调试绘制 =====
+  d("bwe.debug.on", "bwe.debug.on() → boolean", "打开调试绘制总开关", "debug"),
+  d("bwe.debug.off", "bwe.debug.off() → boolean", "关闭总开关并复位所有逐项开关", "debug"),
+  d("bwe.debug.enabled", "bwe.debug.enabled() → boolean", "当前是否开启", "debug"),
+  d("bwe.debug.colliders", "bwe.debug.colliders(on = true) → boolean", "画所有有碰撞盒的实体", "debug"),
+  d("bwe.debug.paths", "bwe.debug.paths(on = true) → boolean", "画沿路径跟随的实体的路径", "debug"),
+  d("bwe.debug.zones", "bwe.debug.zones(on = true) → boolean", "画空间区域边界", "debug"),
+  d("bwe.debug.nav", "bwe.debug.nav(on = true) → boolean", "画瓦片阻挡图（小地图开销大，慎用）", "debug"),
+  d("bwe.debug.box", "bwe.debug.box(x, y, w, h, color = \"#00ff88\")", "单次画矩形", "debug"),
+  d("bwe.debug.circle", "bwe.debug.circle(x, y, r, color = \"#00ff88\")", "单次画圆", "debug"),
+  d("bwe.debug.line", "bwe.debug.line(x1, y1, x2, y2, color = \"#00ff88\")", "单次画线", "debug"),
+  d("bwe.debug.actor", "bwe.debug.actor(e, color = \"#00ff88\")", "画某实体的碰撞框", "debug"),
+  d("bwe.debug.stats", "bwe.debug.stats() → {actors, pendingDestroy, sceneEpoch, colliders, vehicles, spatialZones, drawCommands, enabled}", "运行时统计（性能水位观察）", "debug")
 ];
 
 // ---------------- 查询 ----------------

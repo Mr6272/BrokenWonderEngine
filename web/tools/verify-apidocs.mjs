@@ -233,8 +233,6 @@ function flattenCalls(src) {
 function extractJava(javaFiles) {
   /** @type {Map<string, Set<string>>} */
   const api = new Map();
-  /** 变量名 → 命名空间名（同一个变量可能在不同方法里复用，最后以 attach 为准） */
-  const varToNs = new Map();
   /** 顶层 bwe 的对象变量名 */
   const bweVars = new Set(["bwe"]);
 
@@ -255,8 +253,16 @@ function extractJava(javaFiles) {
   //      b) `ScriptJs.put(bwe, "world", worldObj)`     —— ScriptApi 自己挂
   //      c) `bwe.values.put("prefab", prefabObj)`      —— 少数直接写 values
   //    第二个参数可能是**限定名**（`p.ns`），所以收 `[A-Za-z0-9_.]+` 而不是简单标识符。
-  const namespaceDecls = [];
-  const VAR = "([A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*)";
+  //
+  //    ⚠⚠ 归因必须**按文件作用域**，不能用一张全局 Map（这一条是踩过的真实事故）：
+  //    本轮新增的 8 个子系统（ScriptScene/Spatial/Collision/Actions/Road/Vehicle/Combat/Debug）
+  //    + ScriptPhysics 全都把命名空间对象存成同一个字段名 `ns`（`api.attach("scene", s.ns)`）。
+  //    用全局 Map 时，限定名的最后一段 `ns` 只能被**第一个**被扫描到的文件抢到
+  //    （readdir 顺序 → ScriptActions），于是后面每个文件的 `api.addMethod(ns, ...)`
+  //    全部记账到 `bwe.actions`（实测 Java 侧 bwe.actions=110），
+  //    而 ScriptPhysics 的 `ns` 被顶掉 → `bwe.physics` 整个消失（16 个成员被判「编造」）。
+  //    改成每个文件各自一张表后，`ns` 在各自文件里分别指向自己的命名空间，互不干扰。
+  const VAR = "([A-Za-z0-9_]+(?:\\.[A-Za-z0-9_.]+)*)";
   const reAttach = new RegExp(
     "\\b(?:api\\.)?attach\\s*\\(\\s*\"([A-Za-z0-9_.]+)\"\\s*,\\s*" + VAR + "\\s*\\)",
     "g",
@@ -269,69 +275,117 @@ function extractJava(javaFiles) {
     "\\bbwe\\s*\\.\\s*values\\s*\\.\\s*put\\s*\\(\\s*\"([A-Za-z0-9_.]+)\"\\s*,\\s*" + VAR + "\\s*\\)",
     "g",
   );
-  for (const [, src] of contents) {
-    let m;
-    while ((m = reAttach.exec(src))) {
-      namespaceDecls.push({ ns: m[1], variable: m[2] });
-    }
-    while ((m = reJsPut.exec(src))) {
-      namespaceDecls.push({ ns: m[1], variable: m[2] });
-    }
-    while ((m = reValuesPutNs.exec(src))) {
-      namespaceDecls.push({ ns: m[1], variable: m[2] });
-    }
+
+  /** 返回器方法定义：`ScriptJs.Flex prefabNamespace() { return prefabNs; }` */
+  const reNsGetter =
+    /(?:ScriptJs\.Flex|Scriptable)\s+(\w+)\s*\(\s*\)\s*\{\s*return\s+([A-Za-z0-9_.]+)\s*;/g;
+  /** 赋值链：`prefabObj = prefabs.prefabNamespace();` */
+  const reAssignGetter = /\b([A-Za-z0-9_]+)\s*=\s*\w+\s*\.\s*([A-Za-z0-9_]+)\s*\(\s*\)\s*;/g;
+
+  /**
+   * 返回器方法名 → 返回字段名。**全局**收集：`prefabNamespace` / `poolNamespace`
+   * 这类返回器方法全仓唯一，跨文件引用不会错。
+   */
+  const getterToField = new Map();
+  /** 变量名 → 返回器方法名。**按文件**用（同名变量可能在多个文件里指不同的东西）。 */
+  const varToGettersByFile = new Map();
+  /** 文件 → (变量名 → bwe.xxx)，成员归因的**唯一依据**。 */
+  const varsByFile = new Map();
+
+  // 第一遍：收集返回器定义（全局 getterToField + 按文件的 varToGetter）
+  for (const [file, src] of contents) {
+    const varToGetter = new Map();
+    reNsGetter.lastIndex = 0;
+    let gm;
+    while ((gm = reNsGetter.exec(src))) getterToField.set(gm[1], gm[2]);
+    reAssignGetter.lastIndex = 0;
+    while ((gm = reAssignGetter.exec(src))) varToGetter.set(gm[1], gm[2]);
+    varToGettersByFile.set(file, varToGetter);
   }
-  for (const d of namespaceDecls) {
-    varToNs.set(d.variable, `bwe.${d.ns}`);
-    // 限定名的**最后一段**也要映射：源码里 `api.attach("physics", p.ns)` 之后，
-    // 方法是在字段 `ns` 上注册的（`api.addMethod(ns, "enable", ...)`），不是 `p.ns`。
-    const dot = d.variable.lastIndexOf(".");
-    if (dot > 0) {
-      const leaf = d.variable.slice(dot + 1);
-      // 只在没有更强证据时补（避免覆盖直接的 attach 映射）
-      if (!varToNs.has(leaf)) {
-        varToNs.set(leaf, `bwe.${d.ns}`);
+
+  /** 第二遍：每个文件建自己的「变量 → ns」表（声明 + 同文件内的返回器解析）。 */
+  for (const [file, src] of contents) {
+    const local = new Map();
+    const decls = [];
+    let m;
+    reAttach.lastIndex = 0;
+    while ((m = reAttach.exec(src))) decls.push({ ns: m[1], variable: m[2] });
+    reJsPut.lastIndex = 0;
+    while ((m = reJsPut.exec(src))) decls.push({ ns: m[1], variable: m[2] });
+    reValuesPutNs.lastIndex = 0;
+    while ((m = reValuesPutNs.exec(src))) decls.push({ ns: m[1], variable: m[2] });
+
+    for (const d of decls) {
+      local.set(d.variable, `bwe.${d.ns}`);
+      // 限定名的**最后一段**也要映射：`api.attach("physics", p.ns)` 之后方法是在
+      // 字段 `ns` 上注册的。按文件作用域后 `ns` 只指向本文件自己的命名空间。
+      const dot = d.variable.lastIndexOf(".");
+      if (dot > 0) {
+        const leaf = d.variable.slice(dot + 1);
+        if (!local.has(leaf)) local.set(leaf, `bwe.${d.ns}`);
       }
+    }
+    varsByFile.set(file, local);
+  }
+
+  /**
+   * 第三遍：解析返回器链。`prefabObj = prefabs.prefabNamespace()` 在 ScriptApi.java，
+   * 而 `prefabNamespace()` 的 `return prefabNs` 定义在 ScriptPrefab.java。
+   * 所以：本文件里找到 `变量 ← 返回器`，用**全局** getterToField 拿到字段名，
+   * 再把「字段名 → 该变量所在的 ns」记进**全局别名表**。
+   */
+  const fieldToNsGlobal = new Map();
+  /** 字段名 → 出现在多少个文件里（>1 = 撞名，绝不能进全局别名表）。 */
+  const fieldFileSeen = new Map();
+
+  for (const [file, local] of varsByFile) {
+    const varToGetter = varToGettersByFile.get(file) || new Map();
+    for (const [nsVar, ns] of [...local.entries()]) {
+      const getter = varToGetter.get(nsVar);
+      if (!getter) continue;
+      const field = getterToField.get(getter);
+      if (!field) continue;
+      // 同文件能解析就顺手补进本文件表
+      if (!local.has(field)) local.set(field, ns);
+      // 记录「字段名 → ns」，稍后按"是否撞名"决定要不要全局广播
+      fieldFileSeen.set(field, (fieldFileSeen.get(field) || 0) + 1);
+      if (!fieldToNsGlobal.has(field)) fieldToNsGlobal.set(field, ns);
+      else if (!fieldToNsGlobal.get(field).equals(ns)) fieldToNsGlobal.set(field, "__conflict__");
     }
   }
 
-  // 1b) 命名空间「返回器 + 赋值链」：
-  //     ScriptApi 里是三步跳：
-  //       `prefabObj = prefabs.prefabNamespace();`        ← 变量拿到返回器结果
-  //       `bwe.values.put("prefab", prefabObj);`          ← 挂到 bwe.prefab
-  //       `addMethod(prefabNs, "define", ...)`            ← 方法注册在返回器的**字段**上
-  //       `ScriptJs.Flex prefabNamespace() { return prefabNs; }`
-  //     所以要先把「变量 → 返回器方法」，再把「返回器方法 → 字段」，最后映射字段。
-  // 返回器方法定义：`ScriptJs.Flex prefabNamespace() { return prefabNs; }`（可能有换行）
-  const reNsGetter =
-    /(?:ScriptJs\.Flex|Scriptable)\s+(\w+)\s*\(\s*\)\s*\{\s*return\s+([A-Za-z0-9_.]+)\s*;/g;
-  /** 返回器方法名 → 返回的字段名 */
-  const getterToField = new Map();
-  /** 变量名 → 返回器方法名（`prefabObj = prefabs.prefabNamespace()`） */
-  const varToGetter = new Map();
-  const reAssignGetter = /\b([A-Za-z0-9_]+)\s*=\s*\w+\s*\.\s*([A-Za-z0-9_]+)\s*\(\s*\)\s*;/g;
-  for (const [, src] of contents) {
-    let m;
-    while ((m = reNsGetter.exec(src))) {
-      getterToField.set(m[1], m[2]);
-    }
-    while ((m = reAssignGetter.exec(src))) {
-      varToGetter.set(m[1], m[2]);
+  /**
+   * 第四遍：跨文件广播。
+   *
+   * <p>为什么必须：注册点与声明点可以不在同一个文件（`prefabNs` 的方法在
+   * ScriptPrefab.java 注册，但 `bwe.prefab` 这个名字是在 ScriptApi.java 的
+   * `bwe.values.put("prefab", prefabObj)` 里给的）。ScriptPrefab.java 自己没有任何
+   * attach 声明，只有靠全局广播才能知道 `prefabNs` 属于 `bwe.prefab`。
+   *
+   * <p>⚠ 安全条件：只广播「全仓唯一且无冲突」的字段名。
+   * `ns` 在 9 个文件里都出现（fieldFileSeen=9），**绝不广播** —— 这正是本轮要修的 bug：
+   * 一旦广播，`ns` 又会被第一个文件独占，其余 8 个命名空间再次被吞。
+   */
+  for (const [field, ns] of fieldToNsGlobal) {
+    if (ns === "__conflict__") continue;
+    if ((fieldFileSeen.get(field) || 0) > 1) continue;
+    for (const local of varsByFile.values()) {
+      if (!local.has(field)) local.set(field, ns);
     }
   }
-  // 遍历「变量 → 命名空间」映射，若该变量的值来自返回器，则把返回器的字段也映射到同一 ns
-  for (const [nsVar, ns] of [...varToNs.entries()]) {
-    const getter = varToGetter.get(nsVar);
-    if (!getter) continue;
-    const field = getterToField.get(getter);
-    if (field && !varToNs.has(field)) {
-      varToNs.set(field, ns);
+
+  /** 全文件并集：仅用于「已知 bwe 命名空间」的白名单，不用于成员归因。 */
+  const varToNs = new Map();
+  for (const local of varsByFile.values()) {
+    for (const [k, v] of local) {
+      if (!varToNs.has(k)) varToNs.set(k, v);
     }
   }
 
   // 2) 再扫每个文件里的成员注册
   //    注意：ScriptApi 里的 obj() 只用于「临时返回对象」（如 {x,y}），不是命名空间；
-  //    所以只对「已知命名空间变量」+ bwe 自身收集成员。
+  //    所以只对「本文件已知的命名空间变量」+ bwe 自身收集成员。
+  //    ⚠ 归因只用**本文件**的 varsByFile.get(file)，不能用全局 varToNs（见 1) 的说明）。
   const bweNamespaces = new Set(["bwe"]);
   for (const ns of varToNs.values()) bweNamespaces.add(ns);
 
@@ -357,6 +411,8 @@ function extractJava(javaFiles) {
 
   for (const [file, src] of contents) {
     const fileBase = basename(file);
+    // 本文件的「变量 → 命名空间」表（归因唯一依据）
+    const localVars = varsByFile.get(file) || new Map();
     let m;
 
     // method(...) / addMethod(...)
@@ -368,7 +424,7 @@ function extractJava(javaFiles) {
         add("bwe", member);
         continue;
       }
-      const ns = varToNs.get(varName);
+      const ns = localVars.get(varName);
       if (ns) add(ns, member);
     }
 
@@ -386,7 +442,7 @@ function extractJava(javaFiles) {
           continue;
         }
         // 只收「命名空间对象」上的属性；临时对象（{x,y,w,h}）上的不收
-        const ns = varToNs.get(varName);
+        const ns = localVars.get(varName);
         if (ns) {
           add(ns, `.${member}`);
         } else if (varName === "bwe") {
@@ -479,6 +535,63 @@ function extractGlobals(file) {
 // ---------------- d.ts 抽取 ----------------
 
 /**
+ * 从一个 TS 对象体 / interface 体里抽出**成员名**。
+ *
+ * <p>这是 d.ts 侧最容易出错的地方，踩过两次：
+ * <ol>
+ *   <li>内联对象类型（`module(): { get(): string }`）会让「缩进到 `}`」的粗匹配截断；
+ *       已改成花括号配平。</li>
+ *   <li><b>跨行方法签名的续行会被当成成员</b>：合法的多行声明
+ *       <pre>
+ *         on(
+ *           ev: "enter" | "stay",
+ *           fn: (info: CollisionEvent) =&gt; void,
+ *           e?: Entity
+ *         ): ...;
+ *       </pre>
+ *       里 `ev:` / `fn:` / `e?:` 都满足「缩进 + 标识符 + :/?」，于是被登记成
+ *       `bwe.collision.ev` 之类的**假成员**（实测 11 条假「编造」）。
+ *       所以这里对每个候选行做一次「括号是否已配平」判定：
+ *       若从上一个成员结束位置到本行之前的 `(`/`[`/`<` 未全部闭合，则本行是续行，跳过。
+ * </ol>
+ *
+ * @param body       对象体（不含最外层花括号）
+ * @param allowReadonly interface 里允许 `readonly` 前缀
+ * @returns 成员名集合
+ */
+function membersOfBody(body, allowReadonly = false) {
+  const members = new Set();
+  const prefix = allowReadonly ? "(?:readonly\\s+)?" : "";
+  const memberRe = new RegExp(
+    "^\\s{2,}" + prefix + "([A-Za-z_$][A-Za-z0-9_$]*)\\s*[?:(<:]",
+    "gm",
+  );
+  let lastEnd = 0;
+  let m;
+  while ((m = memberRe.exec(body))) {
+    const between = body.slice(lastEnd, m.index);
+    // 统计 between 里的括号/尖括号是否配平；未配平 = 本行处在跨行签名中间
+    let round = 0;
+    let square = 0;
+    let angle = 0;
+    for (const ch of between) {
+      if (ch === "(") round++;
+      else if (ch === ")") round--;
+      else if (ch === "[") square++;
+      else if (ch === "]") square--;
+      else if (ch === "<") angle++;
+      else if (ch === ">") angle--;
+    }
+    const insideSignature = round > 0 || square > 0 || angle > 0;
+    if (!insideSignature) {
+      members.add(m[1]);
+    }
+    lastEnd = m.index + m[0].length;
+  }
+  return members;
+}
+
+/**
  * 从 bwe.d.ts 抽成员。d.ts 的形状是：
  *   declare namespace bwe {
  *     interface World { find(q: EntityQuery): Entity | null; ... }
@@ -525,14 +638,7 @@ function extractDts(file) {
     }
     if (depth !== 0) break;
     const body = src.slice(ifaceRe.lastIndex, i - 1);
-    const members = new Set();
-    // 成员行：`    find(q): Entity;` / `    x: number;` / `    readonly y?: number;`
-    const memberRe = /^\s{2,}(?:readonly\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*[?:(<:]/gm;
-    let mm;
-    while ((mm = memberRe.exec(body))) {
-      members.add(mm[1]);
-    }
-    interfaces.set(name, members);
+    interfaces.set(name, membersOfBody(body, true));
   }
 
   // 2) const 绑定：const world: World; → bwe.world
@@ -568,10 +674,20 @@ function extractDts(file) {
     if (depth !== 0) break;
     const body = src.slice(inlineConstRe.lastIndex, i - 1);
     // 内联对象里的成员缩进比 interface 深，但同一套正则能吃到（要求 2 空格以上缩进）
-    const memberRe = /^\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*[?:(<]/gm;
-    let mm;
-    while ((mm = memberRe.exec(body))) {
-      add(`bwe.${nsName}`, mm[1]);
+    //
+    // ⚠ 必须**跳过跨行签名里的续行**，否则参数名会被当成成员（踩过的真实事故）：
+    //   这是合法的多行方法声明
+    //     on(
+    //       ev: "enter" | ...,
+    //       fn: ...,
+    //       e?: Entity
+    //     ): ...;
+    //   续行 `e?: Entity` 也满足「缩进 + 标识符 + ?/:」，于是 `e` / `ev` / `fn`
+    //   被登记成 bwe.collision / bwe.vehicle 的成员，而 Java 侧根本没有 → 11 条假「编造」。
+    //   办法：从每个匹配点往前找，如果它上一行（去掉注释后）的括号没有配平，
+    //   说明这一行是签名续行，跳过。
+    for (const mm of membersOfBody(body)) {
+      add(`bwe.${nsName}`, mm);
     }
   }
 

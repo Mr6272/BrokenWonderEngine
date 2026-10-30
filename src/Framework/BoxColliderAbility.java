@@ -29,6 +29,9 @@ public class BoxColliderAbility implements IAbility, ICollider {
 
     private boolean isActive = true;
 
+    /** 缺陷 e：OnRemove 幂等标记——保证物理体只销毁一次、只注销一次。 */
+    private boolean released = false;
+
     @Override
     public void OnAdded(GameObject go) {
         this.gameObject = go;
@@ -41,8 +44,9 @@ public class BoxColliderAbility implements IAbility, ICollider {
         }
 
         if (transform == null) {
-            System.err.println("BoxColliderAbility: 找不到 TransformAbility");
-            return;
+            // 不再"print 后 return"把半初始化能力留在列表里（审计 §2.1 第 3 行）：
+            // 抛出让 GameObject.TryAddAbility 回滚，能力不会残留在 Abilitys 中。
+            throw new IllegalStateException("BoxColliderAbility: 找不到 TransformAbility，拒绝半初始化");
         }
 
         float startX = transform.position.x + offsetX;
@@ -107,12 +111,25 @@ public class BoxColliderAbility implements IAbility, ICollider {
 
     @Override
     public void OnRemove() {
+        // 缺陷 e：OnRemove 幂等。重复移除 / 重复销毁不得重复注销、不得二次 destroyBody
+        if (released) {
+            return;
+        }
+        released = true;
+
         CollisionSystem.get().unregister(this);
 
         if (collider2D.body != null) {
             GameSekai.colliderWorld.world.destroyBody(collider2D.body);
             collider2D.body = null;
         }
+        collider2D.fixture = null;
+    }
+
+    /** 缺陷 b：统一宿主访问入口。 */
+    @Override
+    public GameObject getHost() {
+        return gameObject;
     }
 
     @Override

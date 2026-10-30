@@ -423,11 +423,29 @@ async function newestMtimeMs(dir, accept) {
   return newest;
 }
 
-/** 源码目录最新 mtime vs bin/Studio/runtime/*.class 最新 mtime：只有源码更新才 javac。 */
+/**
+ * 源码目录最新 mtime vs bin/Studio/runtime/*.class 最新 mtime：只有源码更新才 javac。
+ *
+ * <p>⚠ <b>必须排除 `*Test.java`</b>（踩过的真实故障）：
+ * 项目把测试类放在 `src/Studio/runtime/` 下（`tools/bwe.ps1 test-all` 靠"类名以 Test 结尾"
+ * 自动发现），而这些测试类会 `import Core.*` / `import Framework.*`（测旧核心的加固）。
+ * 试跑只编译 `runtimeSrc` 这一个目录时，`Core` / `Framework` 不在编译输入里 →
+ * <pre>
+ *   javac 退出码 1：CollisionEventTest.java:3: 错误: 程序包 Core 不存在
+ * </pre>
+ * 于是「脚本 0 错误却试跑不起来」。
+ *
+ * <p>两条一起修：① 过滤掉 `*Test.java`（它们是测试，不是运行时）；
+ * ② 再补 `-sourcepath src` 兜底，让运行时源码万一引用了同仓其它包也能解析。
+ * 只过滤测试类还不够稳：未来运行时真的引用 `Core.` 时仍会挂。
+ */
 async function compileRuntimeIfNeeded(log, javacExe = "javac") {
   const files = await readdir(runtimeSrc);
   const sources = files
-    .filter((f) => f.endsWith(".java") && f !== "GameLauncher.java")
+    .filter((f) => f.endsWith(".java"))
+    .filter((f) => f !== "GameLauncher.java")
+    // 测试类不是运行时的一部分：它们 import Core/Framework，绝不能进试跑编译集
+    .filter((f) => !f.endsWith("Test.java"))
     .map((f) => join(runtimeSrc, f));
   if (sources.length === 0) throw new Error(`找不到 Java 运行时源码：${runtimeSrc}`);
   let newestSource = 0;
@@ -453,6 +471,9 @@ async function compileRuntimeIfNeeded(log, javacExe = "javac") {
           "-Xlint:-options",
           "-cp", join(libRoot, "*"),
           "-d", runtimeClasses,
+          // 兜底：运行时若引用同仓其它包（Core/Framework 等），javac 能沿 sourcepath 找到。
+          // 真正的隔离靠上面排除 *Test.java —— 这条只是避免"将来又忘"。
+          "-sourcepath", join(projectRoot, "src"),
           ...sources
         ],
         { cwd: projectRoot, windowsHide: true, shell: false }

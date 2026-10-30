@@ -48,6 +48,7 @@ export function renderInspector(host: HTMLElement): void {
   const linkCard = prefabLinkCard(obj);
   if (linkCard) wrap.appendChild(linkCard);
   wrap.appendChild(placeCard(obj));
+  wrap.appendChild(customPropsCard(obj));
   wrap.appendChild(modulesCard(obj));
   wrap.appendChild(scriptCard(obj));
   host.appendChild(wrap);
@@ -300,6 +301,88 @@ function identityCard(obj: SceneObject): HTMLElement {
 }
 
 // ---------------- 位置与显示 ----------------
+
+/**
+ * 「自定义属性 Props」卡片：把 object.props 里的 key/value 全部列出来，可改可增删。
+ *
+ * 为什么必须有这张卡：脚本大量依赖 props（例如扫雷的 label 文案、棋盘的
+ * 行/列/雷数、出生点参数），而这些在编辑器里原本完全不可见 —— 只能改脚本。
+ * 有了这张卡，美术/策划能直接改文案与数值。
+ */
+function customPropsCard(obj: SceneObject): HTMLElement {
+  const box = el("div", { class: "col" });
+  box.style.marginTop = "10px";
+  box.appendChild(el("div", { class: "hint" }, "自定义属性 Props（脚本读取的键值）"));
+
+  const table = el("div", { class: "col" });
+  table.style.gap = "4px";
+
+  const refresh = () => {
+    table.replaceChildren();
+    const keys = Object.keys(obj.props ?? {});
+    if (!keys.length) {
+      table.appendChild(el("div", { class: "hint" }, "（暂无）"));
+    }
+    for (const key of keys) {
+      const row = el("div", { class: "row" });
+      row.style.gap = "4px";
+      row.style.alignItems = "center";
+
+      // key（可改名）
+      const keyInput = input(key, {
+        hint: "属性名",
+        onChange: (v) => {
+          const nk = String(v).trim();
+          if (!nk || nk === key) return;
+          if (nk in (obj.props ?? {})) { warn("属性名已存在: " + nk); return; }
+          const val = obj.props[key];
+          delete obj.props[key];
+          obj.props[nk] = val;
+          store.markDirty();
+          refresh();
+        },
+      });
+      keyInput.style.width = "96px";
+
+      // value
+      const valInput = input(String(obj.props[key] ?? ""), {
+        hint: "属性值",
+        onChange: (v) => {
+          obj.props[key] = String(v);
+          store.markDirty();
+          window.dispatchEvent(new CustomEvent("bwe:repaint"));
+        },
+      });
+      valInput.style.flex = "1";
+
+      // 删除
+      const del = button("×", () => {
+        delete obj.props[key];
+        store.markDirty();
+        window.dispatchEvent(new CustomEvent("bwe:repaint"));
+        refresh();
+      });
+      del.style.width = "24px";
+
+      row.appendChild(keyInput);
+      row.appendChild(valInput);
+      row.appendChild(del);
+      table.appendChild(row);
+    }
+  };
+  refresh();
+  box.appendChild(table);
+
+  // 新增一行
+  box.appendChild(button("+ 添加属性", () => {
+    let i = 1;
+    while (("新属性" + i) in (obj.props ?? {})) i++;
+    obj.props["新属性" + i] = "";
+    store.markDirty();
+    refresh();
+  }));
+  return box;
+}
 
 function placeCard(obj: SceneObject): HTMLElement {
   const box = el("div", { class: "col" });

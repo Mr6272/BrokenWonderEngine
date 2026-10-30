@@ -94,12 +94,14 @@ final class ScriptApi {
         buildDraw();
         buildSave();
         buildAudio();
+        buildMine();
         buildGrid();
         buildTilemap();
         buildNav();
         buildInteract();
         buildSpawner();
         buildEmergence();
+        buildOpenWorld();
         ScriptableObject.putProperty(shared, "bwe", bwe);
         // 常见 JS 习惯：console.log/error 映射到 bwe.log / bwe.error（契约外的小便利，不会冲突）。
         ScriptJs.Flex console = obj();
@@ -147,6 +149,84 @@ final class ScriptApi {
         }
     }
 
+    /**
+     * 开放世界子系统注册（本轮新增）。
+     *
+     * <p>每个子系统<b>一个文件</b>、<b>一个 {@code install(ScriptApi)} 入口</b>，
+     * 与 {@link ScriptFields} / {@link ScriptPhysics} / {@link ScriptAi} 同一套模式。
+     * 这样改一个子系统不会碰到另一个人的文件，且任何一个注册失败都只记日志，
+     * 不影响其它脚本能力（与 buildEmergence 的容错策略一致）。
+     *
+     * <p><b>注册顺序有语义</b>：
+     * <ol>
+     *   <li>{@code bwe.scene}    —— 场景切换要最先能接指令；</li>
+     *   <li>{@code bwe.spatial} —— 空间区域要在碰撞/导航之前建好（它们要查 zone）；</li>
+     *   <li>{@code bwe.collision} —— 碰撞事件派发依赖空间过滤；</li>
+     *   <li>{@code bwe.actions} —— 输入映射层，独立，位置不重要；</li>
+     *   <li>{@code bwe.road} / {@code bwe.vehicle} —— 车辆要查路网；</li>
+     *   <li>{@code bwe.combat}  —— 战斗要查空间与碰撞；</li>
+     *   <li>{@code bwe.debug}   —— 纯绘制，最后。</li>
+     * </ol>
+     */
+    private void buildOpenWorld() {
+        installSafely("scene", new Runnable() {
+            @Override
+            public void run() {
+                ScriptScene.install(ScriptApi.this);
+            }
+        });
+        installSafely("spatial", new Runnable() {
+            @Override
+            public void run() {
+                ScriptSpatial.install(ScriptApi.this);
+            }
+        });
+        installSafely("collision", new Runnable() {
+            @Override
+            public void run() {
+                ScriptCollision.install(ScriptApi.this);
+            }
+        });
+        installSafely("actions", new Runnable() {
+            @Override
+            public void run() {
+                ScriptActions.install(ScriptApi.this);
+            }
+        });
+        installSafely("road", new Runnable() {
+            @Override
+            public void run() {
+                ScriptRoad.install(ScriptApi.this);
+            }
+        });
+        installSafely("vehicle", new Runnable() {
+            @Override
+            public void run() {
+                ScriptVehicle.install(ScriptApi.this);
+            }
+        });
+        installSafely("combat", new Runnable() {
+            @Override
+            public void run() {
+                ScriptCombat.install(ScriptApi.this);
+            }
+        });
+        installSafely("debug", new Runnable() {
+            @Override
+            public void run() {
+                ScriptDebug.install(ScriptApi.this);
+            }
+        });
+    }
+
+    private void installSafely(String name, Runnable body) {
+        try {
+            body.run();
+        } catch (Throwable t) {
+            engine.host.scriptLog("[脚本] " + name + " 注册失败: " + t);
+        }
+    }
+
     // ---- 供 ScriptFields / ScriptPhysics / ScriptAi 使用的包内工具 ----
     // 这三个类与 ScriptApi 同包，直接用下面这些入口，避免去改本文件。
 
@@ -181,6 +261,11 @@ final class ScriptApi {
     /** 把对象挂到 bwe.<name> 命名空间。 */
     void attach(String name, Scriptable value) {
         bwe.values.put(name, value);
+    }
+
+    /** 某个命名空间是否已注册（诊断/自检用，不是脚本 API）。 */
+    boolean hasNamespace(String name) {
+        return bwe != null && !ScriptJs.isMissing(ScriptJs.get(bwe, name));
     }
 
     /** 把 Actor 包成 JS 里的 Entity（同一 Actor 复用同一个包装对象）。 */
@@ -479,6 +564,14 @@ final class ScriptApi {
             Object v = ScriptJs.get(o, "layer");
             if (!ScriptJs.isMissing(v)) {
                 a.o.layer = ScriptJs.inum(v, 0);
+            } else {
+                // ★ 没显式给 layer 时，跟随**场景对象的主 layer**（不是写死的 0）。
+                //
+                // 踩过的真实缺陷：排序键是 layer → z → y，而本工程的城市对象全在 layer=4，
+                // 脚本 spawn 出来的 NPC/车辆 layer 默认 0 → 排在最前面先画，
+                // 被底图（layer=4）整片盖住。表现是「日志说生成了 20 个行人，
+                // 画面上一个都看不见」，而 drawCall 计数完全正常 —— 极难定位。
+                a.o.layer = engine.host.dominantSceneLayer();
             }
             v = ScriptJs.get(o, "scaleX");
             if (!ScriptJs.isMissing(v)) {
@@ -1010,6 +1103,22 @@ final class ScriptApi {
         return ScriptEngine.keyCode(s);
     }
 
+    /**
+     * 供其它命名空间（{@link ScriptActions}）复用的键名解析。
+     *
+     * <p>语义与 {@code bwe.input.down("KeyW")} 完全一致：三种写法都认
+     * （{@code "Space"} / {@code " "} / {@code 32}），鼠标是 {@code "Mouse0"}。
+     * 返回 {@code -1} 表示无法识别。
+     */
+    static int keyCodeOfPublic(Object v) {
+        return keyCodeOf(v);
+    }
+
+    /** 供其它命名空间复用的数组长度读取（安全，非数组返回 0）。 */
+    static int lengthOfPublic(Object arrayLike) {
+        return lengthOf(arrayLike);
+    }
+
     // ---------------- bwe.camera ----------------
 
     private void buildCamera() {
@@ -1034,6 +1143,12 @@ final class ScriptApi {
             return null;
         });
         cameraObj.getters.put("zoom", () -> Double.valueOf(host.view.zoom));
+        cameraObj.getters.put("size", () -> {
+            ScriptJs.Flex o = obj();
+            o.values.put("w", Double.valueOf((double) host.view.viewW));
+            o.values.put("h", Double.valueOf((double) host.view.viewH));
+            return o;
+        });
         cameraObj.setters.put("zoom", v -> engine.cameraSetZoom(ScriptJs.fnum(v, 1f)));
         method(cameraObj, "setZoom", (cx, thisObj, args) -> {
             engine.cameraSetZoom(ScriptJs.fnum(ScriptJs.arg(args, 0), 1f));
@@ -1201,6 +1316,62 @@ final class ScriptApi {
             return null;
         });
         ScriptJs.put(bwe, "draw", drawObj);
+    }
+
+    // ---------------- bwe.mine（扫雷棋盘的运行时设置） ----------------
+    // game.minesweeper 的参数平时在编辑器里改；这里给脚本一个运行时通道：
+    // bwe.mine.set({rows:20, cols:16, mines:60}) → 立刻重建棋盘；
+    // bwe.mine.state() → 回 {rows, cols, mines, flags, over, won}，给 HUD 用。
+    private void buildMine() {
+        ScriptJs.Flex o = obj();
+        method(o, "set", (cx, thisObj, args) -> {
+            Object opts = argObj(ScriptJs.arg(args, 0));
+            if (host.minesweeper == null) return null;
+            int rows = opts == null ? -1 : ScriptJs.inum(ScriptJs.get(opts, "rows"), -1);
+            int cols = opts == null ? -1 : ScriptJs.inum(ScriptJs.get(opts, "cols"), -1);
+            int mines = opts == null ? -1 : ScriptJs.inum(ScriptJs.get(opts, "mines"), -1);
+            int seed = opts == null ? -1 : ScriptJs.inum(ScriptJs.get(opts, "seed"), -1);
+            int cellSize = opts == null ? -1 : ScriptJs.inum(ScriptJs.get(opts, "cellSize"), -1);
+            TopDownRuntime.Minesweeper m = host.minesweeper;
+            if (rows > 0) m.rows = Math.max(3, Math.min(40, rows));
+            if (cols > 0) m.cols = Math.max(3, Math.min(40, cols));
+            boolean changed = rows > 0 || cols > 0;
+            if (mines > 0) m.wantedMines = mines;
+            if (seed >= 0) m.seed = seed;
+            if (cellSize > 0) m.cell = Math.max(16, Math.min(64, cellSize));
+            if (changed || mines > 0 || seed >= 0 || cellSize > 0) m.reset();
+            return null;
+        });
+        method(o, "reset", (cx, thisObj, args) -> {
+            if (host.minesweeper != null) host.minesweeper.reset();
+            return null;
+        });
+        method(o, "state", (cx, thisObj, args) -> {
+            TopDownRuntime.Minesweeper m = host.minesweeper;
+            ScriptJs.Flex out = obj();
+            if (m == null) {
+                out.values.put("rows", Double.valueOf(0));
+                out.values.put("cols", Double.valueOf(0));
+                out.values.put("mines", Double.valueOf(0));
+                out.values.put("flags", Double.valueOf(0));
+                out.values.put("over", Boolean.valueOf(false));
+                out.values.put("won", Boolean.valueOf(false));
+                out.values.put("hitMine", Boolean.valueOf(false));
+                out.values.put("elapsed", Double.valueOf(0));
+                return out;
+            }
+            out.values.put("rows", Double.valueOf((double) m.rows));
+            out.values.put("cols", Double.valueOf((double) m.cols));
+            out.values.put("mines", Double.valueOf((double) m.mineCount));
+            out.values.put("flags", Double.valueOf((double) m.flags));
+            out.values.put("started", Boolean.valueOf(m.started));
+            out.values.put("over", Boolean.valueOf(m.over));
+            out.values.put("won", Boolean.valueOf(m.won));
+            out.values.put("hitMine", Boolean.valueOf(m.over && !m.won));
+            out.values.put("elapsed", Double.valueOf((double) m.elapsed));
+            return out;
+        });
+        ScriptJs.put(bwe, "mine", o);
     }
 
     private void addDraw(ScriptRender.Cmd cmd) {
@@ -2179,6 +2350,49 @@ final class ScriptApi {
         }
         for (Function f : new ArrayList<Function>(list)) {
             engine.invoke(engine.def(engine.currentScriptName()), f, shared, args == null ? new Object[0] : args);
+        }
+    }
+
+    /**
+     * 建一个 JS 对象（键值交替给出），供<b>测试/诊断</b>构造事件载荷用。
+     *
+     * <p>为什么放在这里：建 Rhino 对象需要当前 {@code Context} 与共享 scope，
+     * 只有 ScriptApi 拿得到。它不是脚本 API（不走 {@code api.addMethod}），
+     * 所以不影响四方一致性的成员表。
+     */
+    Scriptable buildPayloadForTest(String[] keys, Object[] values) {
+        Context cx = Context.getCurrentContext();
+        if (cx == null) {
+            return null;
+        }
+        ScriptJs.Flex o = obj();
+        for (int i = 0; i < keys.length && i < values.length; i++) {
+            ScriptJs.put(o, keys[i], values[i]);
+        }
+        return o;
+    }
+
+    /**
+     * 场景卸载：清掉所有<b>与具体实体/具体场景绑定</b>的脚本侧状态。
+     *
+     * <p>由 {@link ScriptEngine#unloadScene()} 在场景切换时调用。这里只清「上一次场景留下的」，
+     * 不动跨场景的配置（例如 {@code prefab.define} 的模板表 —— 模板属于工程，不属于场景）。
+     *
+     * <p>不清就会出的事故：切场景后旧的 {@code entityHandlers} 仍持有已销毁 Actor 的
+     * Java 引用 → 内存泄漏 + 回调打到僵尸对象；{@code parents} 表同样。
+     */
+    void clearSceneState() {
+        entities.clear();
+        wrapperActor.clear();
+        moduleWrappers.clear();
+        entityHandlers.clear();
+        parents.clear();
+        lockedActors.clear();
+        frameLocks.clear();
+        attachHandles.clear();
+        nextAttachId = 1;
+        if (prefabs != null) {
+            prefabs.onSceneUnload();
         }
     }
 

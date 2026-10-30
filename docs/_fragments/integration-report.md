@@ -10,20 +10,28 @@
 
 | 项 | 结果 |
 |---|---|
-| 全量编译（150 个 java） | **exit=0** |
-| 自检断言总数 | **394 项全绿**（7 个测试类，全部 exit=0） |
-| 渲染像素回归 | **逐像素 diff=0**（两个场景，改动前后哈希完全一致） |
+| 全量编译（150 个 java，JDK 25 默认模式） | **exit=0** |
+| **打包链路编译（`--release 8`，24 个 runtime 源文件）** | **exit=0** |
+| 自检断言总数 | **411 项全绿**（9 个测试类；其中 ScriptDrawTest 需 GPU） |
+| 渲染像素回归 | **逐像素 diff=0**（低 DPI 场景，改动前后哈希完全一致） |
+| 游戏运行时 UI | **修复 2 个既有显示 bug**（圆角矩形楔形空洞 / 高 DPI 文字发虚），见 §十 |
 | API 四方一致性 | **0 缺失 / 0 编造**（Java ↔ d.ts ↔ apiDocs.ts ↔ docs/api） |
 | Web 编辑器 | `typecheck` 0 error、`build` 成功 |
+| 真实打包（`package-bwe.mjs` 全 5 段） | **exit=0，产出 50MB zip + 可运行的 exe** |
 | 文档 | `docs/api/` 10 页、271 条目、**0 死链** |
 
 ```
 ScriptSelfTest      109 PASS      ScriptFieldsTest   43 PASS
 ScriptPhysicsTest    47 PASS      ScriptAiTest       51 PASS
 ScriptPrefabTest     97 PASS      ScriptPerfTest     28 PASS
-ScriptContractTest   19 PASS      ─────────────────────────
-                                      合计 394 项
+ScriptContractTest   19 PASS      ScriptLayerTest     9 PASS
+ScriptDrawTest        4 PASS（需 GPU；无 GPU 记 SKIP）
+──────────────────────────────────────────────────────
+                                        合计 411 项
 ```
+
+> ⚠ **这些数字是用 `--release 8` 编译出的 classes 跑的**（与打包链路完全一致），
+> 不是用 JDK 25 默认模式跑的那份。两者都要绿 —— 详见 §九「Java 8 兼容性事故」。
 
 ---
 
@@ -151,7 +159,7 @@ World findPath 池化（world tick 总计仅 3.4µs/帧，<1%）。
 ## 五、把「文档撒谎」的 API 变成真实现
 
 doc-writer 与 verifier 交叉比对抓出一批「文档/类型声明了、代码是空壳或行为不符」的 API。
-**没有删文档了事，而是把 6 个改成了真实现**，并固化成 `ScriptContractTest`（13 项断言）：
+**没有删文档了事，而是把 6 个改成了真实现**，并固化成 `ScriptContractTest`（19 项断言）：
 
 | API | 原来 | 现在 |
 |---|---|---|
@@ -245,6 +253,10 @@ doc-writer 与 verifier 交叉比对抓出一批「文档/类型声明了、代�
 7. **`docs/scripting-api.md` §5「编辑器侧」未核对**：属 Web 编辑器 scope，本轮未逐项验证。
 8. **web-prefab 的浏览器验证用的是 headless Chrome + CDP 合成事件**，不是真人操作；
    输入法/拖拽手感/高分屏等场景未覆盖。
+9. **`src/Studio/runtime/` 里混着 7 个 `*Test.java`，打包链路会把它们一起编进去**。
+   这是「测试文件用错 API 就炸用户构建」的结构性风险（§九 就是实例）。
+   `npm run check:java8` 已能拦住这类问题，但**更彻底的做法是把测试类挪出 `runtime/` 目录**
+   （需要同步改打包脚本的源文件选择规则），本轮未做 —— 因为会动到打包链路的核心逻辑，风险大于收益。
 
 ---
 
@@ -259,11 +271,21 @@ $env:JAVA_TOOL_OPTIONS='-Dfile.encoding=UTF-8'
 $all = Get-ChildItem -Recurse -Path src -Filter *.java | Select-Object -ExpandProperty FullName
 & "$jdk\bin\javac.exe" -d .tmp_rel8\release -encoding utf-8 -cp "lib/*" $all
 
-# 7 个自检（共 388 断言）
+# ⚠ 打包链路用的是 --release 8，必须单独验一遍（见 §九）
+npm run check:java8
+
+# 9 个自检（共 411 断言；ScriptDrawTest 需要 GPU，无 GPU 会记 SKIP）
 foreach ($t in 'ScriptSelfTest','ScriptFieldsTest','ScriptPhysicsTest','ScriptAiTest',
-               'ScriptPrefabTest','ScriptPerfTest','ScriptContractTest') {
+               'ScriptPrefabTest','ScriptPerfTest','ScriptContractTest','ScriptLayerTest') {
   & "$jdk\bin\java.exe" -cp ".tmp_rel8\release;lib/*" "Studio.runtime.$t"
 }
+# 绘制层像素回归（需要真 GL：离屏 FBO）
+& "$jdk\bin\java.exe" --enable-native-access=ALL-UNNAMED `
+  --add-opens=java.desktop/sun.awt=ALL-UNNAMED --add-opens=java.desktop/sun.java2d=ALL-UNNAMED `
+  -cp ".tmp_rel8\release;lib/*" -Djava.library.path=lib Studio.runtime.ScriptDrawTest
+
+# 真实打包链路（javac --release 8 + jar + jpackage + zip，全 5 段）
+node web/tools/package-bwe.mjs <工程.bwproj> --name BWECheck
 
 # 像素回归（离屏 GL，需要显示设备）
 & "$jdk\bin\java.exe" --enable-native-access=ALL-UNNAMED `
@@ -278,3 +300,133 @@ node web/tools/verify-apidocs.mjs
 # Web 编辑器
 npm run typecheck ; npm run build
 ```
+
+## 九、Java 8 兼容性事故（本轮修的一个「用户点预览就失败」的 bug）
+
+### 现象
+用户点「预览 / 打包」时直接报错：
+```
+✗ javac 退出码 1
+ScriptPerfTest.java:87: 错误: 不兼容的类型: Charset无法转换为 String
+   System.setOut(new PrintStream(engineNoise, true, StandardCharsets.UTF_8));
+```
+
+### 根因
+**两条编译链路的 `--release` 不同**：
+- 我本地自检：`javac`（JDK 25 默认，等价 Java 25）→ 用 `PrintStream(OutputStream, boolean, Charset)` 没问题
+- **打包链路**（`web/tools/serve.mjs:451`、`web/tools/package-bwe.mjs:1288`）：`--release 8` →
+  该重载是 **Java 10+ 才有**，Java 8 只有 `PrintStream(OutputStream, boolean, String)`
+
+**盲区在哪**：`src/Studio/runtime/` 里同时住着 **17 个产品类和 7 个 `*Test` 类**，
+打包链路把整个目录都编进去。所以任何一个**测试文件**用了 Java 9+ API，
+就会让**用户的打包失败** —— 而本地自检全绿，完全看不出来。
+
+### 修法
+`PrintStream(engineNoise, true, "UTF-8")` + `try/catch UnsupportedEncodingException`
+（Java 8 的 String 重载声明了受检异常，必须兜住；UTF-8 是 JLS 强制存在的字符集，实际走不到 catch）。
+
+### 防复发：新增 `web/tools/check-java8.mjs`
+**用与打包链路完全相同的参数**（`--release 8 -encoding UTF-8 -Xlint:-options -cp "lib/*"`）
++ 完全相同的源文件选择规则（`src/Studio/runtime/*.java` 排除 `GameLauncher.java`）编译一遍。
+
+- 已挂进 `package.json`：`npm run check:java8` / `npm run check`（typecheck + java8）
+- **变异测试自证**：把它改回 `Charset` 版本 → `check-java8.mjs` 退出码 1，
+  并精确指出 `ScriptPerfTest.java:94: 不兼容的类型: Charset无法转换为String`；改回后恢复绿。
+
+**教训**：只测「我本机的编译方式」是不够的，**必须测「用户实际走的编译方式」**。
+这次的差异就是一个 `--release` 参数，但它把「全绿」变成了「点预览就崩」。
+
+### 端到端验证（不只是编译过）
+```
+node web/tools/package-bwe.mjs <工程> --build-only   → exit=0（javac + jar 通过）
+node web/tools/package-bwe.mjs <工程> --name BWECheck → exit=0（全 5 段：编译/收 lib/jpackage/打 zip）
+   产出：BWECheck-win64.zip 50.3MB + app/bwe-runtime.jar
+用打包出来的 bwe-runtime.jar 跑 ScriptSelfTest → 109/109 ALL PASS
+```
+
+---
+
+
+## 十、游戏运行时 UI 的两个显示 bug（用户报告「UI 偏移 / 层级问题」）
+
+> 用户反馈：**游戏运行时（预览 / 打包后）的 HUD 和对象位置看起来不对**，
+> 而且「一直都有，只是现在更明显」。
+> 这两个都是**既有 bug**，不是本轮性能优化引入的（已用改动前基线截图逐像素证实）。
+
+### 10.1 圆角矩形里有个三角形楔形空洞（真「层级错乱」错觉）
+
+**现象**：HUD 面板（`bwe.draw.rect(..., {radius: 8})`）上有一条**斜切的暗色楔形**贯穿面板，
+看起来像「某个半透明图层叠错了」或「面板被切掉一角」。
+
+**根因**：`ScriptRender.fillRoundRect()` 用 `GL_TRIANGLE_FAN` 从中心连到四角圆弧。
+GL 的 fan 只生成 `(v0,v1,v2), (v0,v2,v3) … (v0,v_{n-1},v_n)`，**不会自动闭合** ——
+缺 `(v0, v_n, v_1)` 这个收尾三角形，于是最后一条边（左边：左下角 → 左上角）
+与中心之间留下一个三角空洞。
+
+**修法**：扇形末尾**重复一次起点顶点**，用退化三角形补上收尾。这是 fan 画闭合多边形的标准做法。
+
+**验证**（隔离复现 + 变异测试）：
+- 单独画那一个 `rect(radius=8)`，逐行量填充宽度：修复前左边界 18→135→18（X 形收窄），修复后**每行稳定 271px**
+- **变异测试**：把「重复起点」那一行删掉 → `ScriptDrawTest` 立刻 FAIL，并打印
+  `minW=136 maxW=251 spread=115` 加整行宽度序列 —— 楔形被完整捕获
+- 改动前的基线截图与改动后对比，楔形消失
+
+### 10.2 高 DPI 屏 HUD 文字发虚（真「偏移」错觉）
+
+**现象**：1707×1067 @1.5 缩放的屏幕上，HUD 文字边缘模糊、看起来「位置飘」。
+
+**根因**：投影用**逻辑**尺寸（1707），`glViewport` 用**物理**尺寸（2560），
+于是 GL 把整幅画面放大 1.5 倍。而文字纹理是按**逻辑字号**生成、再用 `GL_NEAREST`
+非整数拉伸 1.5 倍 ⇒ 锯齿 / 发虚。
+
+**修法**：文字纹理按「逻辑字号 × 物理/逻辑倍率」**超采样**生成，
+贴出去时再除回该倍率（保持逻辑尺寸不变）。
+`displayScale()` 提供倍率，并钳在 `[0.5, 4]` 防止异常窗口尺寸把纹理撑爆。
+
+**验证**：
+- scale=1（低 DPI）时**逐像素 diff=0**（完全向后兼容）
+- 高 DPI 真窗口截图对比，文字边缘变清晰
+- 文本纹理缓存 key 改成按**实际像素字号**区分，避免不同 DPI 之间串用错误尺寸的缓存
+
+### 10.3 新增两个像素级回归测试
+
+| 测试 | 项数 | 需要 GPU | 抓什么 |
+|---|---|---|---|
+| `ScriptLayerTest` | 9 | 否 | 绘制层级顺序（layer→z→y）：改 z 后必须重排、互换 y（总和不变）必须重排 |
+| `ScriptDrawTest` | 4 | **是**（离屏 FBO） | 圆角矩形填充无空洞、宽度一致、四角真圆、中心实心 |
+
+`ScriptDrawTest` 在没有 GPU 的环境（CI / 无显示 session）会**记 SKIP 而不是失败** ——
+这样它既能进日常回归，又不会让无显卡环境误报。
+
+### 10.4 顺带修掉的一处性能缓存缺陷（是我这轮引入的）
+
+`TopDownRuntime.sortedActors()` 的排序缓存第一版用「可见数量 + 所有 y 的**总和**」判断要不要重排，
+有两个致命漏洞：
+
+1. **脚本改 `z` 但不动 `y`**（或编辑器「上移一层 / 置顶」）⇒ y 总和不变 ⇒ 不重排 ⇒
+   **画面层级不变**，用户看到「点了置顶没反应」。
+2. **两个对象互换 y** ⇒ 总和不变 ⇒ 不重排 ⇒ 遮挡关系错乱。
+
+真正的排序键是 **layer → z → y** 三元组。改成把每个可见对象的 `(layer,z,y)`
+按存储顺序逐项比较（O(n) 纯数值比较，仍比每帧 sort 的 O(n log n)+分配便宜），
+**不会漏判也不会撞车**。
+
+**变异测试**：把判据改回「数量 + y 总和」→ `ScriptLayerTest` 立刻 FAIL 4 条，
+顺序恒为 `[bottom, mid, top]`（置顶完全无效）—— 正是用户描述的症状。
+
+---
+
+## 十一、本轮最终回归矩阵（9 个测试类）
+
+```
+ScriptSelfTest      109 PASS      ScriptFieldsTest    43 PASS
+ScriptPhysicsTest    47 PASS      ScriptAiTest        51 PASS
+ScriptPrefabTest     97 PASS      ScriptPerfTest      28 PASS
+ScriptContractTest   19 PASS      ScriptLayerTest      9 PASS
+ScriptDrawTest        4 PASS（需 GPU；无 GPU 记 SKIP）
+──────────────────────────────────────────────────────
+                                合计 407 + 4 = 411 项
+```
+全量编译（150 文件，JDK 25）exit=0；打包链路编译（26 文件，`--release 8`）exit=0。
+
+---

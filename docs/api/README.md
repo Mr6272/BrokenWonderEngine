@@ -1,4 +1,4 @@
-﻿# BWE Scripting API
+# BWE Scripting API
 
 > **BrokenWonderEngine** 的 JS 脚本 API 参考。体例仿 Unity Scripting API：每个成员一节，固定顺序为「签名 → 参数 → 返回 → 说明 → 示例 → 另见」。
 >
@@ -17,6 +17,8 @@
 | 画 HUD、放音效、存档 | [draw-audio-save](draw-audio-save.md) |
 | 网格、瓦片地图、A* 寻路、交互、刷怪 | [map-nav-interact-spawner](map-nav-interact-spawner.md) |
 | 材质 / 火水烟 / 感知 AI / 物理 / 确定性随机 | [emergence：涌现式模拟基底](emergence.md) |
+| 场景切换 / 多楼层空间 / 碰撞与触发 | [scene](scene.md) · [spatial](spatial.md) · [collision](collision.md) |
+| 可配置改键 / 路网车辆 / 战斗 / 调试绘制 | [actions](actions.md) · [road](road.md) · [vehicle](vehicle.md) · [combat](combat.md) · [debug](debug.md) |
 | 编辑器里那些「积木」分别做什么 | [modules：可视化模块目录](modules.md) |
 
 ## Phase 说明
@@ -309,6 +311,31 @@
 
 编辑器里的「积木」。共 **43 个**内置模块，分 7 类：怎么动 / 怎么显示 / 怎么感知 / 什么时候做 / 怎么打 / 怎么说话 / 画面与声音。
 **重要**：模块目录（`BuiltinModules.java`）是**编辑器**侧的积木清单，**不等于**运行时真的执行 —— 运行时只实现了其中一部分。每个模块的「运行时」列写清了这一点，见 [modules.md](modules.md#一模块总表)。
+
+### 11. 开放世界子命名空间（8 个）
+
+多层建筑、路网车辆、可配置输入、战斗与调试绘制。这些命名空间彼此独立，旧工程不引用它们时行为完全不变。
+
+| 命名空间 | 页面 | 说明 |
+|---|---|---|
+| 场景 `bwe.scene` | [scene.md](scene.md) | 场景列表 / 切换（帧末生效）/ 场景代数 / 切换回调 |
+| 空间 `bwe.spatial` | [spatial.md](spatial.md) | 多层建筑：区域、楼层归属、垂直连接、五状态分离 |
+| 碰撞 `bwe.collision` | [collision.md](collision.md) | 碰撞 / 触发事件、几何查询、射线、传感器 |
+| 输入动作 `bwe.actions` | [actions.md](actions.md) | 动作映射（可改键）、上下文栈、放行规则 |
+| 路网 `bwe.road` | [road.md](road.md) | 道路节点 / 路段、最短**时间**路径 |
+| 车辆 `bwe.vehicle` | [vehicle.md](vehicle.md) | 上下车 / 劫车、油门刹车转向、自动驾驶 |
+| 战斗 `bwe.combat` | [combat.md](combat.md) | 武器参数表、命中结算、格挡、弹药 |
+| 调试 `bwe.debug` | [debug.md](debug.md) | 碰撞盒 / 路径 / 区域 / 阻挡图的调试绘制 |
+
+**常见配对**：
+
+| 你想… | 看 |
+|---|---|
+| 做多楼层建筑、玩家进出室内 | [spatial.md](spatial.md) |
+| 让车沿道路自动开 | [road.md](road.md) + [vehicle.md](vehicle.md) |
+| 让键位可配置（不改游戏逻辑） | [actions.md](actions.md) |
+| 判断"碰到了没" | [collision.md](collision.md) |
+| 排查"我看不到它在哪" | [debug.md](debug.md) |
 
 ---
 

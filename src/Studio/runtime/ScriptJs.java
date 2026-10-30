@@ -213,6 +213,68 @@ final class ScriptJs {
         return v == null || v == Undefined.instance || v == Scriptable.NOT_FOUND;
     }
 
+    /**
+     * 取一个 JS 对象上的<b>全部自身键名</b>（{@code bind({move_up: [...]})} 这类
+     * "以键名为数据"的调用需要）。返回稳定顺序（Rhino 的 getIds 已是声明顺序）。
+     */
+    static Object[] ids(Object target) {
+        if (!(target instanceof Scriptable)) {
+            return new Object[0];
+        }
+        try {
+            return ((Scriptable) target).getIds();
+        } catch (Throwable t) {
+            return new Object[0];
+        }
+    }
+
+    /** 按<b>字符串</b>键取属性（数组下标要先转字符串，否则重载不匹配）。 */
+    /** 数组下标取值（对 NativeArray 用 get(i,array) 才能拿到元素）。 */
+    static Object getIndex(Object target, int i) {
+        if (!(target instanceof Scriptable)) {
+            return null;
+        }
+        try {
+            Object v = ScriptableObject.getProperty((Scriptable) target, i);
+            return v == Scriptable.NOT_FOUND ? null : v;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * 数组类对象的长度（非数组 / 缺失 → 0）。
+     *
+     * <p>⚠ {@code ScriptableObject.getProperty(arr, "length")} 在 Rhino 1.7.15 上
+     * <b>对真正的 JS 数组不可靠</b>（{@code NativeArray} 把 length 作为特殊 tag 处理，
+     * 按字符串名字取可能拿到 NOT_FOUND）→ 返回 0。
+     * 实测后果：{@code bwe.actions.bind({move_up:["KeyW","ArrowUp"]})} 被判「没有可用键」，
+     * 数组形式的映射<b>整个失效</b>，只剩字符串形式能用；而默认映射仍是旧值，
+     * 于是「bind 了但没生效」且不报错 —— 极难发现。
+     * 所以这里对 {@code NativeArray} 直接走 {@code getLength()}。
+     */
+    static int arrayLength(Object arrayLike) {
+        if (isMissing(arrayLike)) {
+            return 0;
+        }
+        if (arrayLike instanceof org.mozilla.javascript.NativeArray) {
+            try {
+                return (int) ((org.mozilla.javascript.NativeArray) arrayLike).getLength();
+            } catch (Throwable ignored) {
+            }
+        }
+        if (arrayLike instanceof Scriptable) {
+            try {
+                Object len = ScriptableObject.getProperty((Scriptable) arrayLike, "length");
+                if (len instanceof Number) {
+                    return ((Number) len).intValue();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return 0;
+    }
+
     // ---------------- 参数解包 ----------------
 
     static Object arg(Object[] args, int i) {

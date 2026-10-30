@@ -1063,6 +1063,23 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
       })),
       objects
     };
+    // ---- 开放世界新增段（全部可选）----
+    // 只有工程里真的带了这些字段才写出，旧 .bwproj 导出的 scene_*.json 与今天逐字节一致。
+    // 运行时（GameData.loadScene）对缺失字段一律走安全缺省 = 单层平地，行为不变。
+    if (Array.isArray(scene?.buildings) && scene.buildings.length) {
+      sceneJson.buildings = scene.buildings;
+    }
+    if (Array.isArray(scene?.navLinks) && scene.navLinks.length) {
+      sceneJson.navLinks = scene.navLinks;
+    }
+    if (scene?.roadNetwork && typeof scene.roadNetwork === "object") {
+      const rn = scene.roadNetwork;
+      const nodes = Array.isArray(rn.nodes) ? rn.nodes : [];
+      const edges = Array.isArray(rn.edges) ? rn.edges : [];
+      if (nodes.length || edges.length) {
+        sceneJson.roadNetwork = { nodes, edges };
+      }
+    }
     if (sceneJson.bgmAssetId) {
       warnOnce(
         warnings,
