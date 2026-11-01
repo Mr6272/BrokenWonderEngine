@@ -18,8 +18,9 @@
     "verify:apidocs": "node web/tools/verify-apidocs.mjs --strict",
     "verify:openworld": "node web/tools/verify-openworld.mjs",
     "verify:roundtrip": "node web/tools/verify-editor-roundtrip.mjs",
+    "verify:uiscene": "node web/tools/verify-ui-scene.mjs",
     "bench:openworld": "node web/tools/bench-openworld.mjs --json docs/bench-openworld.json",
-    "verify:all": "npm run verify:apidocs && npm run typecheck && npm run check:scripts && npm run verify:openworld && npm run verify:roundtrip"
+    "verify:all": "npm run verify:apidocs && npm run typecheck && npm run check:scripts && npm run verify:openworld && npm run verify:roundtrip && npm run verify:uiscene"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

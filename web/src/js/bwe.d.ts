@@ -553,6 +553,93 @@ declare namespace bwe {
     wheel: number;
   }
 
+  /**
+   * 虚拟摇杆 / 虚拟按键（{@code bwe.stick}）。
+   *
+   * 触屏玩桌面向游戏时，WASD / 空格 / 回车 / Tab / Esc 这些键没法按。
+   * 一行 {@code mount()} 就能把它们变成屏幕按钮：自动摆位（左下十字摇杆 + 右侧功能键）、
+   * 自动绘制在最上层、自动优先消费触摸（不会顺带点到场景）。
+   *
+   * 布局语法（逗号分隔）：
+   * - {@code "WASD"} / {@code "cross"}：左下十字摇杆（映射 W/A/S/D）
+   * - {@code "arrows"} / {@code "dpad"}：左下十字摇杆（映射方向键）
+   * - {@code "space"} / {@code "enter"} / {@code "tab"} / {@code "esc"}：右侧独立按钮
+   * - 省略参数 = 默认 {@code "WASD,space,enter,tab,esc"}
+   */
+  /**
+   * 网格模块的格子状态（{@code bwe.board}）。
+   *
+   * 只有在对象上挂了 {@code grid.board} / {@code grid.tile} / {@code grid.reveal} /
+   * {@code grid.flag} / {@code game.minesweeper} 之一时才有内容；
+   * 否则 {@code mounted} 为 false、各查询返回空/0。
+   *
+   * ⚠ 别和 {@code bwe.grid} 混淆：那是**瓦片地图**的坐标换算（toCell/toWorld/snap），
+   * 任何工程都有；{@code bwe.board} 才是**网格模块**的格子状态。
+   */
+  interface Board {
+    /** 本工程是否挂了网格类模块。 */
+    readonly mounted: boolean;
+    /** 棋盘尺寸。 */
+    size(): { rows: number; cols: number; count: number };
+    /** 该格是否已翻开。 */
+    opened(idx: number): boolean;
+    /** 该格是否已标记。 */
+    flagged(idx: number): boolean;
+    /** 世界坐标 → 格子索引（越界返回 -1）。 */
+    indexAt(wx: number, wy: number): number;
+    /** 翻开一格（无雷玩法用它代替「点开」）。 */
+    open(idx: number): boolean;
+    /** 切换标记（没挂 grid.flag 时不生效）。 */
+    toggle(idx: number): boolean;
+    /** 从该格泛洪能翻开多少格（写规则时很有用）。 */
+    floodCount(idx: number): number;
+  }
+
+  /**
+   * 文本/数字输入框（{@code bwe.textinput}）。
+   *
+   * 解决「手机上改不了数字参数」：点一下数值框就激活，然后直接键入。
+   * 桌面端走物理键盘，Android 自动弹系统软键盘（宿主负责），脚本只管布局与取值。
+   */
+  interface TextInput {
+    /** 定义/更新一个输入框（numeric=true 只收数字）。 */
+    define(id: string, value: string | number, min?: number, max?: number, numeric?: boolean): void;
+    /** 归一化屏幕矩形（0~1，相对逻辑视口）。 */
+    rect(id: string, nx: number, ny: number, nw: number, nh: number): void;
+    /** 当前文本（编辑中是用户敲的内容）。 */
+    value(id: string): string;
+    /** 当前整数值（非法/空则用 fallback）。 */
+    number(id: string, fallback: number): number;
+    /** 直接写入文本（不触发提交）。 */
+    setValue(id: string, value: string): void;
+    /** 当前正在编辑的框 id（没在编辑返回空串）。 */
+    active(): string;
+    /** 取消编辑（Esc / 放弃输入）。 */
+    cancel(): void;
+    /** 回车或点框外确认时回调。 */
+    onSubmit(fn: (id: string, text: string) => void): void;
+    /** 是否有框正在编辑。 */
+    readonly editing: string | false;
+  }
+
+  interface Stick {
+    /** 挂载虚拟按键（重复调用会替换之前布局）。省略 spec 用默认布局。 */
+    mount(spec?: string): void;
+    /** 释放所有按键状态（失焦/切场景时用，避免按键卡住）。 */
+    unmount(): void;
+    /** 显示 / 隐藏（隐藏时也释放按键）。 */
+    show(): void;
+    hide(): void;
+    /** 整体不透明度（0.1~1，默认 0.55）。 */
+    opacity(value: number): void;
+    /** 摇杆归一化轴值（-1~1，没按为 0,0）；只有一个十字摇杆时有效。 */
+    axis(): Vec2;
+    /** 指定按键当前是否按下（含摇杆映射的方向键，如 "W" / "space"）。 */
+    down(id: string): boolean;
+    /** 是否已挂载。 */
+    readonly mounted: boolean;
+  }
+
   interface Input {
     /** 当前按住 */
     down(key: KeyName): boolean;
@@ -919,6 +1006,8 @@ declare namespace bwe {
     cellSize?: number;
     /** 0-999999；0 = 每局随机 */
     seed?: number;
+    /** 玩法模式：普通 / 复雷加殊（Minesweeper mode）；改它会重建棋盘 */
+    mode?: "normal" | "complex" | string;
   }
 
   interface MineState {
@@ -926,6 +1015,10 @@ declare namespace bwe {
     cols: number;
     mines: number;
     flags: number;
+    /** 当前模式：普通 / 复雷加殊（Minesweeper mode）"normal" | "complex" */
+    mode: string;
+    /** 模式序号（Minesweeper mode index）：0 = 普通，1 = 复雷加殊 */
+    modeIndex: number;
     /** 玩家至少点开过一格 */
     started: boolean;
     /** 是否结束（胜或负） */
@@ -952,6 +1045,12 @@ declare namespace bwe {
   const world: World;
   /** 输入：按键、鼠标、方向轴 */
   const input: Input;
+  /** 虚拟摇杆 / 虚拟按键：触屏上补 WASD / 空格 / 回车 / Tab / Esc */
+  const stick: Stick;
+  /** 网格模块的格子状态（与 bwe.grid 的瓦片坐标换算不同） */
+  const board: Board;
+  /** 点一下就能直接键入的输入框（数字框在手机上必用） */
+  const textinput: TextInput;
   /** 相机：跟随、缩放、抖动、坐标换算 */
   const camera: Camera;
   /** 时间：now / dt / frame */

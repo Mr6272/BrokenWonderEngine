@@ -26,6 +26,13 @@ public final class GameData {
     public int tileSize = 32;
     public float masterVolume = 0.8f;
     public final List<SceneRef> scenes = new ArrayList<>();
+    /**
+     * UI 场景表（{@code boot.uiScenes[]}）。
+     *
+     * <p>空表 = 没有界面层，行为与改动前完全一致 —— 这是「旧 Build 必须还能跑」的硬保证。
+     * 有内容时运行时会在世界画面之上按设计分辨率铺一张界面。
+     */
+    public final List<UiSceneRef> uiScenes = new ArrayList<>();
     public final Map<String, String> variables = new LinkedHashMap<>();
     public final Map<String, String> scripts = new LinkedHashMap<>();
     /** 工程级素材表：玩法模块按素材名找图时用（扫雷、换装）。 */
@@ -37,6 +44,18 @@ public final class GameData {
         public String file;
         public int width;
         public int height;
+    }
+
+    /** 一张 UI 场景的引用（boot.json 的 {@code uiScenes[]} 一条）。 */
+    public static final class UiSceneRef {
+        public String name = "";
+        public String file = "";
+        /** 设计分辨率宽（像素）。 */
+        public int designW = 1280;
+        /** 设计分辨率高（像素）。 */
+        public int designH = 720;
+        /** 图层数量（只用于日志/诊断；实际排序仍按对象上的 layer 下标）。 */
+        public int layers = 0;
     }
 
     public static final class RtAsset {
@@ -103,6 +122,24 @@ public final class GameData {
             String v = params.get(key);
             return v == null || v.isEmpty() ? def : v;
         }
+
+        /**
+         * 把另一个模块的参数合并进来（<b>已有的键不覆盖</b>）。
+         *
+         * <p>用途：网格模块被拆成 grid.board / grid.tile / grid.reveal / grid.flag 四个，
+         * 但运行时只有一个棋盘对象，需要把这几个模块的参数汇成一份来读。
+         * 保持「不覆盖」语义，避免后面的模块意外改掉前面已声明的值。
+         */
+        public void mergeParams(RtModule other) {
+            if (other == null) {
+                return;
+            }
+            for (Map.Entry<String, String> e : other.params.entrySet()) {
+                if (!params.containsKey(e.getKey())) {
+                    params.put(e.getKey(), e.getValue());
+                }
+            }
+        }
     }
 
     public static final class RtScene {
@@ -110,6 +147,23 @@ public final class GameData {
         public int height = 40;
         public int tileSize = 32;
         public final List<RtObject> objects = new ArrayList<>();
+        /**
+         * UI 场景标记：{@code true} = 这张「场景」其实是屏幕空间的界面画布，不是地图。
+         *
+         * <p>导出契约（web/tools/package-bwe.mjs）：
+         * <ul>
+         *   <li>UI 场景写在 {@code boot.uiScenes[]}，世界场景写在 {@code boot.scenes[]}；</li>
+         *   <li>UI 场景的 scene json 顶层带 {@code ui:true / designW / designH}；</li>
+         *   <li>为了让老的 {@code mapWidth = width × tileSize} 公式直接给出设计分辨率，
+         *       UI 场景导出时 {@code tileSize = 1}、{@code width = designW}。</li>
+         * </ul>
+         * 缺省 false = 旧 Build 完全照老路走（没有界面层）。
+         */
+        public boolean ui = false;
+        /** UI 场景设计分辨率宽（像素）。非 UI 场景为 0。 */
+        public int designW = 0;
+        /** UI 场景设计分辨率高（像素）。非 UI 场景为 0。 */
+        public int designH = 0;
         /**
          * 场景图层（编辑器 scene.layers，导出时写在 scene_*.json 顶层 "layers"）。
          *
@@ -259,6 +313,22 @@ public final class GameData {
             r.height = num(o, "height", 40);
             g.scenes.add(r);
         }
+        // UI 场景：缺失 = 空表（旧 Build 逐字节兼容）。
+        for (JsonElement e : arr(root, "uiScenes")) {
+            if (!e.isJsonObject()) {
+                continue;
+            }
+            JsonObject o = e.getAsJsonObject();
+            UiSceneRef r = new UiSceneRef();
+            r.name = str(o, "name", "");
+            r.file = str(o, "file", "");
+            r.designW = num(o, "designW", 1280);
+            r.designH = num(o, "designH", 720);
+            r.layers = num(o, "layers", 0);
+            if (!r.file.isEmpty()) {
+                g.uiScenes.add(r);
+            }
+        }
         JsonObject v = obj(root, "variables");
         for (String k : v.keySet()) {
             g.variables.put(k, v.get(k).getAsString());
@@ -289,6 +359,21 @@ public final class GameData {
         s.width = num(root, "width", 60);
         s.height = num(root, "height", 40);
         s.tileSize = num(root, "tileSize", fallbackTile);
+        // UI 场景三件套：旧 Build 没有这些字段 → ui=false，走原来的地图路径。
+        s.ui = root.has("ui") && root.get("ui").isJsonPrimitive() && root.get("ui").getAsBoolean();
+        s.designW = num(root, "designW", 0);
+        s.designH = num(root, "designH", 0);
+        if (s.ui) {
+            // 设计分辨率兜底：导出器保证 tileSize=1、width/height=设计像素，
+            // 但万一手工改了 json，这里也用 designW/designH 校正一次，避免 UI 按格子算尺寸。
+            if (s.designW > 0) {
+                s.width = s.designW;
+            }
+            if (s.designH > 0) {
+                s.height = s.designH;
+            }
+            s.tileSize = 1;
+        }
         for (JsonElement e : arr(root, "objects")) {
             JsonObject o = e.getAsJsonObject();
             RtObject t = new RtObject();

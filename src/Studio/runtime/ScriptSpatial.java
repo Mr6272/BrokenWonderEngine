@@ -289,7 +289,7 @@ final class ScriptSpatial {
             playerLevel = 0;
             return;
         }
-        TopDownRuntime.Actor player = engine.findPlayerActor();
+        Actor player = engine.findPlayerActor();
         Zone pz = null;
         if (player != null && !player.dead) {
             int lvl = resolveLevel(player);
@@ -366,7 +366,7 @@ final class ScriptSpatial {
      * 同一 (x,y) 在每一层都有区域，纯位置只能查到"后建的那个"，分不出楼层。
      * 所以"能不能换层"必须由 link 决定，位置只用来判断"还在不在这一层"。
      */
-    int resolveLevel(TopDownRuntime.Actor a) {
+    int resolveLevel(Actor a) {
         ensureBuilt();
         if (a == null) {
             return 0;
@@ -411,7 +411,7 @@ final class ScriptSpatial {
      * <p><b>关键 API</b>：{@code levelOf(npc)} ≠ {@code levelOf(player)} 正是
      * 「跨楼层追捕」能成立的前提。没有空间数据时一律返回 0（单层）。
      */
-    int levelOf(TopDownRuntime.Actor a) {
+    int levelOf(Actor a) {
         ensureBuilt();
         if (a == null || buildings.isEmpty()) {
             return 0;
@@ -457,7 +457,7 @@ final class ScriptSpatial {
     }
 
     /** 某实体所在区域（按其楼层解析后的那个区域；没有则 null）。 */
-    Zone zoneOf(TopDownRuntime.Actor a) {
+    Zone zoneOf(Actor a) {
         ensureBuilt();
         if (a == null) {
             return null;
@@ -574,7 +574,7 @@ final class ScriptSpatial {
         api.addMethod(ns, "useLink", (cx, thisObj, args) -> {
             ensureBuilt();
             String id = ScriptJs.str(ScriptJs.arg(args, 0), "");
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 1));
+            Actor a = api.actorOf(ScriptJs.arg(args, 1));
             return Boolean.valueOf(travelLink(id, a));
         });
 
@@ -591,7 +591,7 @@ final class ScriptSpatial {
             if (z == null) {
                 return Boolean.FALSE;
             }
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 1));
+            Actor a = api.actorOf(ScriptJs.arg(args, 1));
             if (a == null) {
                 a = engine.findPlayerActor();
             }
@@ -605,7 +605,7 @@ final class ScriptSpatial {
         // leave(e) → bool（走出建筑：楼层归属退回地面层 0）
         api.addMethod(ns, "leave", (cx, thisObj, args) -> {
             ensureBuilt();
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null) {
                 a = engine.findPlayerActor();
             }
@@ -714,7 +714,7 @@ final class ScriptSpatial {
      *
      * @return true = 成功换了层
      */
-    boolean travelLink(String id, TopDownRuntime.Actor a) {
+    boolean travelLink(String id, Actor a) {
         ensureBuilt();
         if (a == null) {
             return false;
@@ -746,7 +746,7 @@ final class ScriptSpatial {
     }
 
     /** 按 id 使用一个 link（测试入口，与脚本 useLink 同一个实现）。 */
-    boolean useLinkPublic(String id, TopDownRuntime.Actor a) {
+    boolean useLinkPublic(String id, Actor a) {
         return travelLink(id, a);
     }
 
@@ -876,7 +876,7 @@ final class ScriptSpatial {
      * </ul>
      * 找不到对应 zone → **一律可见**（保守：宁可多画，不要凭空让东西消失）。
      */
-    boolean isActorHidden(TopDownRuntime.Actor a) {
+    boolean isActorHidden(Actor a) {
         ensureBuilt();
         if (a == null || a.o == null || a.o.tags == null || zones.isEmpty()) {
             return false;
@@ -940,7 +940,7 @@ final class ScriptSpatial {
     }
 
     /** 调用脚本同一实现的 enter（测试用）。 */
-    boolean enterPublic(String zoneId, TopDownRuntime.Actor a) {
+    boolean enterPublic(String zoneId, Actor a) {
         ensureBuilt();
         Zone z = zones.get(zoneId);
         if (z == null || a == null) {
@@ -951,7 +951,7 @@ final class ScriptSpatial {
     }
 
     /** 调用脚本同一实现的 leave（测试用）。 */
-    boolean leavePublic(TopDownRuntime.Actor a) {
+    boolean leavePublic(Actor a) {
         ensureBuilt();
         if (a == null) {
             return false;

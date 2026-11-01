@@ -25,8 +25,26 @@ interface PackStatus {
   jpackage: boolean;
   wix: boolean;
   appImage: boolean;
+  android?: { ok: boolean; gradlew: string | null; projectDir: string } | null;
   port: number;
   outRoot: string;
+}
+
+interface PackJobResult {
+  platform?: string;
+  appName: string;
+  version: string;
+  outDir: string;
+  buildDir?: string;
+  appDir?: string;
+  exeName?: string;
+  exePath?: string;
+  apkName?: string;
+  apkPath?: string;
+  zipName?: string;
+  zipPath?: string;
+  sizeBytes: number;
+  warnings: string[];
 }
 
 interface PackJob {
@@ -34,17 +52,7 @@ interface PackJob {
   status: "running" | "done" | "error";
   logs: string[];
   error: string | null;
-  result?: {
-    appName: string;
-    version: string;
-    outDir: string;
-    appDir: string;
-    exeName: string;
-    exePath: string;
-    zipName: string;
-    sizeBytes: number;
-    warnings: string[];
-  };
+  result?: PackJobResult;
 }
 
 /** /api/js-check 返回的一条诊断（行号列号都相对用户脚本，1 开始）。 */
@@ -267,6 +275,23 @@ export async function openBwePackager(): Promise<void> {
     return;
   }
   const st = status;
+  // 打包平台：windows = 现有 Windows EXE（jpackage）；android = Android APK（gradle assembleDebug）。
+  // ⚠ 这行原来是 `let platform: "windows" | "android" = "windows";`，
+  // 字面量类型被推断成 "windows"，于是下面 `platform === "android"` 永远为 false
+  // （tsc 直接报 TS2367：两个类型没有重叠）。等于 Android 分支是死代码 ——
+  // 打包 Android 时从不检查 gradlew/SDK 是否就绪，直接往下跑到 Gradle 才失败。
+  // 用显式泛型标注保留联合类型，分支才真的可达。
+  let platform = "windows" as "windows" | "android";
+  if (platform === "android" && st.android?.ok !== true) {
+    instructionsModal("本机缺少 Android 打包条件", [
+      "Android 打包需要 android/gradlew 脚本 + Android SDK（compileSdk 34）在本机。",
+      `gradlew：${st.android?.gradlew ?? "缺失"}`,
+      `Android 工程：${st.android?.projectDir ?? ""}`,
+      "",
+      "装好 Android SDK 后，点「打包 Android APK」即可通过 Gradle 生成 debug APK。"
+    ]);
+    return;
+  }
   // 弹窗关闭时停掉「试跑」的 1s 轮询；body 里会把它指到真正的 clearInterval 上。
   let stopRunPolling: () => void = () => {};
 
@@ -275,7 +300,7 @@ export async function openBwePackager(): Promise<void> {
   const prefabCount = (p.prefabs ?? []).length;
 
   modal({
-    title: "打包到 BWE · Windows EXE",
+    title: platform === "android" ? "打包到 BWE · Android APK" : "打包到 BWE · Windows EXE",
     xwide: true,
     closeOnMask: false,
     // 关掉面板就停止轮询试跑日志；Java 窗口本身保留，用户可再开面板点「停止试跑」。
@@ -287,8 +312,11 @@ export async function openBwePackager(): Promise<void> {
         el(
           "div",
           { class: "hint" },
-          "把当前工程交给 BWE Java 运行时，生成自带 Java 的 Windows 应用目录，再压缩成 zip。"
-            + "解压后双击里面的 .exe 即可运行，目标机器不需要安装 Java。"
+          platform === "android"
+            ? "把当前工程交给 BWE Android 运行时，通过 Gradle assembleDebug 生成 debug APK，拷进 android/app/src/main/assets/BWE/。"
+              + "装上 Android 工程（gradlew + Android SDK）后即可在安卓设备上运行。"
+            : "把当前工程交给 BWE Java 运行时，生成自带 Java 的 Windows 应用目录，再压缩成 zip。"
+              + "解压后双击里面的 .exe 即可运行，目标机器不需要安装 Java。"
         )
       );
 
@@ -342,10 +370,15 @@ export async function openBwePackager(): Promise<void> {
       wrap.appendChild(form);
 
       const actionRow = el("div", { class: "row tight" });
-      const startBtn = button("开始打包", () => void start(), {
+      const startBtn = button("开始打包", () => void start("windows"), {
         variant: "primary",
         iconPath: I.exportImg,
         title: "生成 Windows 应用与 zip"
+      });
+      const apkBtn = button("打包 Android APK", () => void start("android"), {
+        variant: "outline",
+        iconPath: I.exportImg,
+        title: "通过 ./gradlew assembleDebug 生成 Android debug APK"
       });
       // 试跑：不打包，直接在本机起 Java 窗口。先做 JS 诊断，有 error 就停在提示。
       const runBtn = button("试跑", () => void tryRun(), {
@@ -354,6 +387,7 @@ export async function openBwePackager(): Promise<void> {
         title: "不做 Windows 包，直接在本机启动 Java 运行时看效果"
       });
       actionRow.appendChild(startBtn);
+      actionRow.appendChild(apkBtn);
       actionRow.appendChild(runBtn);
       actionRow.appendChild(
         el("span", { class: "hint pkg-hint" },
@@ -552,9 +586,10 @@ export async function openBwePackager(): Promise<void> {
         logBox.scrollTop = logBox.scrollHeight;
       };
 
-      async function start(): Promise<void> {
+      async function start(plat: "windows" | "android" = "windows"): Promise<void> {
         if (busy) return;
         busy = true;
+        platform = plat;
         startBtn.disabled = true;
         startBtn.textContent = "打包中…";
         resultBox.replaceChildren();
@@ -570,7 +605,7 @@ export async function openBwePackager(): Promise<void> {
           if (!p) throw new Error("工程已关闭");
           const name = nameI.value.trim() || p.name;
           const version = verI.value.trim() || "1.0.0";
-          say(`准备打包「${name}」v${version}`);
+          say(`准备打包「${name}」v${version}（平台：${plat}）`);
 
           // 素材失败也要把原因一起上传：服务端 writeBuild 会把它写进 result.warnings，
           // 「这局游戏里某张图变成色块」的原因就不会只留在前端日志里。
@@ -582,7 +617,8 @@ export async function openBwePackager(): Promise<void> {
             assets: uploaded,
             name,
             version,
-            console: consoleBox.checked
+            console: consoleBox.checked,
+            platform: plat
           });
           const resp = await fetch("/api/package-bwe", {
             method: "POST",
@@ -619,9 +655,10 @@ export async function openBwePackager(): Promise<void> {
           }
           const r = job.result;
           if (!r) throw new Error("打包完成但没有返回结果");
-          say(`打包完成：${r.zipName}（${formatBytes(r.sizeBytes)}）`);
+          const doneLabel = r.apkName || r.zipName || r.exeName || "产物";
+          say(`打包完成：${doneLabel}（${formatBytes(r.sizeBytes)}）`);
           renderResult(r, lastJobId);
-          info(`打包完成：${r.exeName}`);
+          info(`打包完成：${doneLabel}`);
           startBtn.textContent = "重新打包";
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -636,18 +673,27 @@ export async function openBwePackager(): Promise<void> {
 
       function renderResult(r: NonNullable<PackJob["result"]>, jobId: string): void {
         resultBox.replaceChildren();
-        resultBox.appendChild(el("div", { class: "pkg-result-title" }, "打包完成"));
+        resultBox.appendChild(el("div", { class: "pkg-result-title" }, r.platform === "android" ? "Android APK 打包完成" : "打包完成"));
+        const nameLabel = r.apkName || r.zipName || r.exeName || r.appName;
         resultBox.appendChild(
           el("div", { class: "hint" },
-            `${r.exeName} · ${r.version} · ${formatBytes(r.sizeBytes)}`)
+            `${nameLabel} · ${r.version} · ${formatBytes(r.sizeBytes)}`)
         );
         resultBox.appendChild(el("div", { class: "hint pkg-path" }, `输出目录：${r.outDir}`));
         const row = el("div", { class: "row tight" });
-        row.appendChild(
-          button("下载 ZIP", () => {
-            window.location.href = `/api/package-bwe/download/${jobId}`;
-          }, { variant: "primary", iconPath: I.import, title: "下载包含 exe 的 Windows 应用包" })
-        );
+        if (r.platform === "android" && r.apkPath) {
+          row.appendChild(
+            button("下载 APK", () => {
+              window.location.href = `/api/package-bwe/download-apk/${jobId}`;
+            }, { variant: "primary", iconPath: I.import, title: "下载 Android debug APK" })
+          );
+        } else if (r.zipName) {
+          row.appendChild(
+            button("下载 ZIP", () => {
+              window.location.href = `/api/package-bwe/download/${jobId}`;
+            }, { variant: "primary", iconPath: I.import, title: "下载包含 exe 的 Windows 应用包" })
+          );
+        }
         row.appendChild(
           button("打开输出目录", () => {
             void fetch(`/api/package-bwe/open/${jobId}`).catch(() => {
@@ -663,7 +709,9 @@ export async function openBwePackager(): Promise<void> {
         }
         resultBox.appendChild(
           el("div", { class: "hint" },
-            "解压后双击 exe 运行；如果启动失败，查看 Build/bwe.log。")
+            r.platform === "android"
+              ? "APK 已生成（debug）。可用 ADB / 文件传输安装到 Android 设备（需开启未知来源/安装权限）。"
+              : "解压后双击 exe 运行；如果启动失败，查看 Build/bwe.log。")
         );
       }
 

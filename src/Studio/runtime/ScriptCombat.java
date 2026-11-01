@@ -44,8 +44,8 @@ final class ScriptCombat {
     private final ScriptJs.Flex ns;
 
     /** 实体 → 战斗状态（防御中 / 当前武器 / 弹药）。 */
-    private final Map<TopDownRuntime.Actor, CombatState> states =
-            new IdentityHashMap<TopDownRuntime.Actor, CombatState>();
+    private final Map<Actor, CombatState> states =
+            new IdentityHashMap<Actor, CombatState>();
 
     /** 击杀 / 受击 全局订阅。 */
     private final Map<String, List<Holder>> handlers = new LinkedHashMap<String, List<Holder>>();
@@ -97,7 +97,7 @@ final class ScriptCombat {
         LAST = c;
     }
 
-    private CombatState state(TopDownRuntime.Actor a) {
+    private CombatState state(Actor a) {
         CombatState s = states.get(a);
         if (s == null) {
             s = new CombatState();
@@ -143,7 +143,7 @@ final class ScriptCombat {
 
         // defend(e, on) / defending(e)
         api.addMethod(ns, "defend", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null) {
                 return Boolean.FALSE;
             }
@@ -153,11 +153,11 @@ final class ScriptCombat {
             return Boolean.TRUE;
         });
         api.addMethod(ns, "defending", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             return Boolean.valueOf(a != null && state(a).defending);
         });
         api.addMethod(ns, "setDefense", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null) {
                 return Boolean.FALSE;
             }
@@ -167,7 +167,7 @@ final class ScriptCombat {
 
         // weapon(e, name) / weaponOf(e) / switchWeapon(e)
         api.addMethod(ns, "weapon", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null) {
                 return Boolean.FALSE;
             }
@@ -186,11 +186,11 @@ final class ScriptCombat {
             return Boolean.TRUE;
         });
         api.addMethod(ns, "weaponOf", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             return a == null ? "fist" : state(a).weapon;
         });
         api.addMethod(ns, "switchWeapon", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null) {
                 return Boolean.FALSE;
             }
@@ -209,11 +209,11 @@ final class ScriptCombat {
 
         // ammo(e) / setAmmo(e, n)
         api.addMethod(ns, "ammo", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             return a == null ? Double.valueOf(0d) : Double.valueOf(state(a).ammo);
         });
         api.addMethod(ns, "setAmmo", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null) {
                 return Boolean.FALSE;
             }
@@ -254,8 +254,8 @@ final class ScriptCombat {
 
         // inRange(from, to, range) → bool（纯距离判定，武器射程用）
         api.addMethod(ns, "inRange", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
-            TopDownRuntime.Actor b = api.actorOf(ScriptJs.arg(args, 1));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor b = api.actorOf(ScriptJs.arg(args, 1));
             float range = ScriptJs.fnum(ScriptJs.arg(args, 2), 1e9f);
             if (a == null || b == null) {
                 return Boolean.FALSE;
@@ -306,8 +306,8 @@ final class ScriptCombat {
      * 无武器 → 走 {@code fist} 参数。
      */
     private Scriptable hit(Object opts) {
-        TopDownRuntime.Actor from = api.actorOf(ScriptJs.get(opts, "from"));
-        TopDownRuntime.Actor to = api.actorOf(ScriptJs.get(opts, "to"));
+        Actor from = api.actorOf(ScriptJs.get(opts, "from"));
+        Actor to = api.actorOf(ScriptJs.get(opts, "to"));
         ScriptJs.Flex result = (ScriptJs.Flex) api.newObj();
         if (to == null || to.dead) {
             ScriptJs.put(result, "hit", Boolean.FALSE);
@@ -372,7 +372,7 @@ final class ScriptCombat {
         return result;
     }
 
-    private void fireHandler(String evt, TopDownRuntime.Actor from, TopDownRuntime.Actor to,
+    private void fireHandler(String evt, Actor from, Actor to,
                              float amount, boolean killed) {
         List<Holder> list = handlers.get(evt);
         if (list == null) {
@@ -419,7 +419,7 @@ final class ScriptCombat {
     }
 
     /** 设置防御状态（测试用，与 bwe.combat.defend 同一套逻辑）。 */
-    void setDefendingTest(TopDownRuntime.Actor a, boolean on) {
+    void setDefendingTest(Actor a, boolean on) {
         if (a == null) {
             return;
         }
@@ -431,7 +431,7 @@ final class ScriptCombat {
      *
      * @param lethal 是否允许致死（false 时只扣血不标记 dead，便于连续测同一目标）
      */
-    float hitForTest(TopDownRuntime.Actor from, TopDownRuntime.Actor to,
+    float hitForTest(Actor from, Actor to,
                      float amount, boolean lethal) {
         if (to == null || to.dead) {
             return 0f;

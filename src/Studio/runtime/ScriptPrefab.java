@@ -55,8 +55,8 @@ final class ScriptPrefab {
     /** 模板表：名字 → 定义（LinkedHashMap 保证 list() 顺序 = define 顺序）。 */
     private final Map<String, Def> defs = new LinkedHashMap<String, Def>();
     /** 实例归属：Actor → 预制体名（{@code bwe.prefab.count} 用）。 */
-    private final Map<TopDownRuntime.Actor, String> owners =
-            new IdentityHashMap<TopDownRuntime.Actor, String>();
+    private final Map<Actor, String> owners =
+            new IdentityHashMap<Actor, String>();
     /** 对象池：handle → 池。 */
     private final Map<Long, Pool> pools = new LinkedHashMap<Long, Pool>();
     private long nextPoolId = 1;
@@ -139,9 +139,9 @@ final class ScriptPrefab {
         final long id;
         final String prefab;
         int capacity;
-        final List<TopDownRuntime.Actor> idle = new ArrayList<TopDownRuntime.Actor>();
-        final Map<TopDownRuntime.Actor, Boolean> all =
-                new IdentityHashMap<TopDownRuntime.Actor, Boolean>();
+        final List<Actor> idle = new ArrayList<Actor>();
+        final Map<Actor, Boolean> all =
+                new IdentityHashMap<Actor, Boolean>();
 
         Pool(long id, String prefab, int capacity) {
             this.id = id;
@@ -215,7 +215,7 @@ final class ScriptPrefab {
             return Double.valueOf(n);
         });
         api.addMethod(prefabNs, "fromEntity", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null || a.dead) {
                 return null;
             }
@@ -240,7 +240,7 @@ final class ScriptPrefab {
             engine.log("[预制体] 没有叫「" + name + "」的预制体");
             return null;
         }
-        TopDownRuntime.Actor a = spawnFromSpec(p, opts, templateJitterAllowed);
+        Actor a = spawnFromSpec(p, opts, templateJitterAllowed);
         return a == null ? null : api.entityOf(a);
     }
 
@@ -253,7 +253,7 @@ final class ScriptPrefab {
      * @param templateJitterAllowed 本调用是否<b>允许</b>模板自带 jitter 生效（pool 内部传 false）；
      *                              即使为 true，也只有「opts 没给 x/y」时才真的抖（见下方 jitter 决策）
      */
-    TopDownRuntime.Actor spawnFromSpec(Def p, ScriptableObject override, boolean templateJitterAllowed) {
+    Actor spawnFromSpec(Def p, ScriptableObject override, boolean templateJitterAllowed) {
         ScriptJs.Flex o = flex();
         o.values.put("kind", p.kind);
         o.values.put("asset", p.asset);
@@ -423,7 +423,7 @@ final class ScriptPrefab {
         o.values.put("x", Double.valueOf(x));
         o.values.put("y", Double.valueOf(y));
 
-        TopDownRuntime.Actor a = api.spawnActor(o);
+        Actor a = api.spawnActor(o);
         if (a == null) {
             return null;
         }
@@ -442,7 +442,7 @@ final class ScriptPrefab {
     }
 
     /** 把场上对象抓成模板（fromEntity / clone 用）。 */
-    Def capture(TopDownRuntime.Actor a, boolean withChildren) {
+    Def capture(Actor a, boolean withChildren) {
         Def p = new Def();
         p.name = a.o.name;
         p.kind = a.o.kind;
@@ -687,7 +687,7 @@ final class ScriptPrefab {
             Pool pool = new Pool(nextPoolId++, name, capacity);
             if (prewarm) {
                 for (int i = 0; i < capacity; i++) {
-                    TopDownRuntime.Actor a = spawnFromSpec(p, hiddenOpts(), false);
+                    Actor a = spawnFromSpec(p, hiddenOpts(), false);
                     if (a == null) {
                         break;
                     }
@@ -706,9 +706,9 @@ final class ScriptPrefab {
             float x = ScriptJs.fnum(ScriptJs.arg(args, 1), 0f);
             float y = ScriptJs.fnum(ScriptJs.arg(args, 2), 0f);
             prunePool(pool);
-            TopDownRuntime.Actor reuse = null;
+            Actor reuse = null;
             while (!pool.idle.isEmpty()) {
-                TopDownRuntime.Actor cand = pool.idle.remove(pool.idle.size() - 1);
+                Actor cand = pool.idle.remove(pool.idle.size() - 1);
                 if (cand != null && !cand.dead) {
                     reuse = cand;
                     break;
@@ -729,7 +729,7 @@ final class ScriptPrefab {
             if (p == null) {
                 return null;
             }
-            TopDownRuntime.Actor a = spawnFromSpec(p, positionOpts(x, y), false);
+            Actor a = spawnFromSpec(p, positionOpts(x, y), false);
             if (a == null) {
                 return null;
             }
@@ -741,7 +741,7 @@ final class ScriptPrefab {
             if (pool == null) {
                 return Boolean.FALSE;
             }
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 1));
+            Actor a = api.actorOf(ScriptJs.arg(args, 1));
             if (a == null || a.dead || !pool.all.containsKey(a)) {
                 return Boolean.FALSE;
             }
@@ -798,13 +798,13 @@ final class ScriptPrefab {
                 pool.idle.remove(i);
             }
         }
-        List<TopDownRuntime.Actor> dead = new ArrayList<TopDownRuntime.Actor>();
-        for (TopDownRuntime.Actor a : pool.all.keySet()) {
+        List<Actor> dead = new ArrayList<Actor>();
+        for (Actor a : pool.all.keySet()) {
             if (a.dead) {
                 dead.add(a);
             }
         }
-        for (TopDownRuntime.Actor a : dead) {
+        for (Actor a : dead) {
             pool.all.remove(a);
             pool.idle.remove(a);
         }
@@ -826,7 +826,7 @@ final class ScriptPrefab {
     }
 
     /** 实体被销毁时立刻清理引用（由 {@link ScriptApi#invalidate} 调用），避免池/实例表留死引用。 */
-    void onActorDestroyed(TopDownRuntime.Actor a) {
+    void onActorDestroyed(Actor a) {
         if (a == null) {
             return;
         }
@@ -838,13 +838,13 @@ final class ScriptPrefab {
     }
 
     private void pruneOwners() {
-        List<TopDownRuntime.Actor> dead = new ArrayList<TopDownRuntime.Actor>();
-        for (TopDownRuntime.Actor a : owners.keySet()) {
+        List<Actor> dead = new ArrayList<Actor>();
+        for (Actor a : owners.keySet()) {
             if (a.dead) {
                 dead.add(a);
             }
         }
-        for (TopDownRuntime.Actor a : dead) {
+        for (Actor a : dead) {
             owners.remove(a);
         }
     }

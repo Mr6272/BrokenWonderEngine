@@ -1,0 +1,3902 @@
+{
+  "meta": {
+    "generator": "web/tools/gen-vscode-api.mjs",
+    "sources": {
+      "apiDocs": "web/src/data/apiDocs.ts",
+      "types": "web/src/js/bwe.d.ts",
+      "lifecycle": "web/src/js/globals.d.ts",
+      "docs": "docs/api/*.md"
+    },
+    "sha256": {
+      "apiDocsTs": "2439f19194531d64719d3c7b9b937a06337cfb1b47f0e19ef3342d74d5c9f32e",
+      "bweDts": "092951bf4b4dcf555629c07d6e65f8b78077e0068e5ec90aab541a7ce754a38a",
+      "globalsDts": "6caa98afc0a3d168aab0f6fc46cc71ee8c673da87cf62f9c2b4ad4dae1ae8d78"
+    },
+    "apiDocsEntries": 353,
+    "dtsValueMembers": 335,
+    "dtsInterfaces": 85,
+    "lifecycleFunctions": 12,
+    "entryCount": 401,
+    "docBackedCount": 353,
+    "typeOnlyCount": 48,
+    "docsPages": 18,
+    "docsLinkedCount": 365,
+    "typeOnlyMembers": [
+      "bwe.world",
+      "bwe.input",
+      "bwe.stick",
+      "bwe.stick.mount",
+      "bwe.stick.unmount",
+      "bwe.stick.show",
+      "bwe.stick.hide",
+      "bwe.stick.opacity",
+      "bwe.stick.axis",
+      "bwe.stick.down",
+      "bwe.stick.mounted",
+      "bwe.board",
+      "bwe.board.mounted",
+      "bwe.board.size",
+      "bwe.board.opened",
+      "bwe.board.flagged",
+      "bwe.board.indexAt",
+      "bwe.board.open",
+      "bwe.board.toggle",
+      "bwe.board.floodCount",
+      "bwe.textinput",
+      "bwe.textinput.define",
+      "bwe.textinput.rect",
+      "bwe.textinput.value",
+      "bwe.textinput.number",
+      "bwe.textinput.setValue",
+      "bwe.textinput.active",
+      "bwe.textinput.cancel",
+      "bwe.textinput.onSubmit",
+      "bwe.textinput.editing",
+      "bwe.camera",
+      "bwe.camera.size",
+      "bwe.time",
+      "bwe.draw",
+      "bwe.audio",
+      "bwe.mine",
+      "bwe.mine.set",
+      "bwe.mine.reset",
+      "bwe.mine.state",
+      "bwe.save",
+      "bwe.grid",
+      "bwe.tilemap",
+      "bwe.nav",
+      "bwe.interact",
+      "bwe.spawner",
+      "bwe.prefab",
+      "bwe.pool",
+      "bwe.scripts"
+    ]
+  },
+  "groupOrder": [
+    "life",
+    "world",
+    "entity",
+    "prefab",
+    "input",
+    "camera",
+    "time",
+    "draw",
+    "audio",
+    "save",
+    "map",
+    "nav",
+    "interact",
+    "spawner",
+    "util",
+    "material",
+    "field",
+    "sense",
+    "physics",
+    "scene",
+    "spatial",
+    "collision",
+    "actions",
+    "road",
+    "vehicle",
+    "combat",
+    "debug"
+  ],
+  "groups": [
+    {
+      "id": "life",
+      "label": "生命周期 Lifecycle",
+      "blurb": "运行时按事件调用脚本里的同名函数"
+    },
+    {
+      "id": "world",
+      "label": "世界 world",
+      "blurb": "地图尺寸、查找 / 生成 / 销毁、全局事件"
+    },
+    {
+      "id": "entity",
+      "label": "实体 Entity",
+      "blurb": "对象属性、模块、子精灵、血量"
+    },
+    {
+      "id": "prefab",
+      "label": "预制体 prefab / pool",
+      "blurb": "模板注册、批量生成、对象池"
+    },
+    {
+      "id": "input",
+      "label": "输入 input",
+      "blurb": "按键、鼠标、方向轴"
+    },
+    {
+      "id": "camera",
+      "label": "相机 camera",
+      "blurb": "跟随、缩放、抖动、坐标换算"
+    },
+    {
+      "id": "time",
+      "label": "时间 time",
+      "blurb": "时间 / 帧、延时与重复任务"
+    },
+    {
+      "id": "draw",
+      "label": "绘制 draw",
+      "blurb": "HUD、文字、形状、精灵（立即模式）"
+    },
+    {
+      "id": "audio",
+      "label": "音频 audio",
+      "blurb": "音效与背景音乐"
+    },
+    {
+      "id": "save",
+      "label": "存档 save",
+      "blurb": "本地 JSON 存档与槽位"
+    },
+    {
+      "id": "map",
+      "label": "网格与瓦片 grid / tilemap",
+      "blurb": "像素 ⇄ 格子、阻挡查询、射线"
+    },
+    {
+      "id": "nav",
+      "label": "寻路 nav",
+      "blurb": "A* 寻路、视线判断、沿路径移动"
+    },
+    {
+      "id": "interact",
+      "label": "交互 interact",
+      "blurb": "最近交互物、按键提示"
+    },
+    {
+      "id": "spawner",
+      "label": "生成器 spawner",
+      "blurb": "定时刷怪 / 掉落"
+    },
+    {
+      "id": "util",
+      "label": "辅助函数",
+      "blurb": "随机、夹取、插值、日志、跨脚本调用"
+    },
+    {
+      "id": "material",
+      "label": "材质 material",
+      "blurb": "易燃 / 燃烧时长 / 导电 / 湿：涌现的第一性"
+    },
+    {
+      "id": "field",
+      "label": "格子场 field",
+      "blurb": "火 / 水 / 烟 / 自定义通道的蔓延与熄灭"
+    },
+    {
+      "id": "sense",
+      "label": "感知与 AI sense / ai",
+      "blurb": "视野、噪音、记忆、阵营、状态机"
+    },
+    {
+      "id": "physics",
+      "label": "物理 physics",
+      "blurb": "刚体、冲量、抛掷、射线（jbox2d）"
+    },
+    {
+      "id": "scene",
+      "label": "场景 scene",
+      "blurb": "场景列表、切换、场景代数与切换回调"
+    },
+    {
+      "id": "spatial",
+      "label": "空间 spatial",
+      "blurb": "多层建筑：区域、楼层、垂直连接、可见性"
+    },
+    {
+      "id": "collision",
+      "label": "碰撞 collision",
+      "blurb": "碰撞 / 触发事件、几何查询、射线、传感器"
+    },
+    {
+      "id": "actions",
+      "label": "输入动作 actions",
+      "blurb": "动作映射、上下文栈、可配置改键"
+    },
+    {
+      "id": "road",
+      "label": "路网 road",
+      "blurb": "道路节点与路段、最短时间路径"
+    },
+    {
+      "id": "vehicle",
+      "label": "车辆 vehicle",
+      "blurb": "上下车、油门刹车转向、沿路网自动驾驶"
+    },
+    {
+      "id": "combat",
+      "label": "战斗 combat",
+      "blurb": "武器参数、命中判定、格挡与弹药"
+    },
+    {
+      "id": "debug",
+      "label": "调试 debug",
+      "blurb": "碰撞盒 / 路径 / 区域 / 阻挡图的调试绘制"
+    }
+  ],
+  "apis": [
+    {
+      "name": "onStart",
+      "signature": "function onStart(ctx)",
+      "summary": "对象生成时执行一次",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#onstartctx--void"
+    },
+    {
+      "name": "onUpdate",
+      "signature": "function onUpdate(ctx, dt)",
+      "summary": "每帧执行；dt = 本帧秒数",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#onupdatectx-dt--void"
+    },
+    {
+      "name": "onClick",
+      "signature": "function onClick(ctx)",
+      "summary": "鼠标左键点中这个对象",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#onclickctx--void"
+    },
+    {
+      "name": "onEnter",
+      "signature": "function onEnter(ctx, other)",
+      "summary": "触发区：别的对象进来了",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#onenterctx-other--void"
+    },
+    {
+      "name": "onLeave",
+      "signature": "function onLeave(ctx, other)",
+      "summary": "触发区：别的对象离开了",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#onleavectx-other--void"
+    },
+    {
+      "name": "onInteract",
+      "signature": "function onInteract(ctx, actor)",
+      "summary": "玩家走近并按下交互键",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#oninteractctx-actor--void"
+    },
+    {
+      "name": "onDamage",
+      "signature": "function onDamage(ctx, amount, from)",
+      "summary": "受到伤害；amount 是实际扣血",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#ondamagectx-amount-from--void"
+    },
+    {
+      "name": "onDeath",
+      "signature": "function onDeath(ctx, by)",
+      "summary": "生命值归零",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#ondeathctx-by--void"
+    },
+    {
+      "name": "onDestroy",
+      "signature": "function onDestroy(ctx)",
+      "summary": "销毁前最后一个回调",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#ondestroyctx--void"
+    },
+    {
+      "name": "onKey",
+      "signature": "function onKey(ctx, key)",
+      "summary": "任意按键按下（可选，全局按键更推荐 bwe.on(\"keydown\")）",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#onkeyctx-key--void"
+    },
+    {
+      "name": "onSceneStart",
+      "signature": "function onSceneStart(ctx)",
+      "summary": "场景脚本：场景载入完、对象 spawn 完之后执行一次",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#onscenestartctx--void"
+    },
+    {
+      "name": "onSceneEnd",
+      "signature": "function onSceneEnd(ctx)",
+      "summary": "场景脚本：离开 / 销毁场景时执行",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "lifecycle",
+      "link": "docs/api/lifecycle.md#onsceneendctx--void"
+    },
+    {
+      "name": "bwe.on",
+      "signature": "bwe.on(name, fn)",
+      "summary": "全局钩子：\"update\" / \"draw\" / \"keydown\" / \"click\"",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bweonname-fn--void"
+    },
+    {
+      "name": "bwe.off",
+      "signature": "bwe.off(name, fn)",
+      "summary": "取消 bwe.on 注册的全局钩子",
+      "group": "life",
+      "groupLabel": "生命周期 Lifecycle",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#二全局钩子bweon--bweoff"
+    },
+    {
+      "name": "bwe.world.mapSize",
+      "signature": "bwe.world.mapSize() → {w, h}",
+      "summary": "地图尺寸（像素）",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldmapsize--w-h"
+    },
+    {
+      "name": "bwe.world.tileSize",
+      "signature": "bwe.world.tileSize() → number",
+      "summary": "每格多少像素",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldtilesize--number"
+    },
+    {
+      "name": "bwe.world.scene",
+      "signature": "bwe.world.scene → {name, width, height}",
+      "summary": "当前场景信息",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldscene--sceneinfo"
+    },
+    {
+      "name": "bwe.world.find",
+      "signature": "bwe.world.find(q) → Entity | null",
+      "summary": "找第一个匹配的实体；q 可以是名字/标签字符串，或 {name, tag, kind, id}",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldfindq--entity--null"
+    },
+    {
+      "name": "bwe.world.findAll",
+      "signature": "bwe.world.findAll(q) → Entity[]",
+      "summary": "找所有匹配的实体",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldfindallq--entity"
+    },
+    {
+      "name": "bwe.world.spawn",
+      "signature": "bwe.world.spawn({x, y, asset?, name?, kind?, tags?, z?, layer?, halfW?, halfH?, scaleX?, scaleY?, rotation?, visible?, animMode?, animFps?, script?, modules?, props?, parent?}) → Entity",
+      "summary": "运行时生成一个实体",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldspawnopts--entity--null"
+    },
+    {
+      "name": "bwe.world.spawnMany",
+      "signature": "bwe.world.spawnMany(list) → Entity[]",
+      "summary": "批量生成（每个元素一份 spawn 参数）",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldspawnmanylist--entity"
+    },
+    {
+      "name": "bwe.world.spawnAt",
+      "signature": "bwe.world.spawnAt(opts, x, y) → Entity",
+      "summary": "便捷式：生成并强制指定 x/y",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldspawnatopts-x-y--entity--null"
+    },
+    {
+      "name": "bwe.world.clone",
+      "signature": "bwe.world.clone(e, opts?) → Entity | null",
+      "summary": "复制实体（tags/模块/props/子精灵一并带上）",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldclonee-opts--entity--null"
+    },
+    {
+      "name": "bwe.world.destroy",
+      "signature": "bwe.world.destroy(e)",
+      "summary": "销毁实体（同 e.destroy()）",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworlddestroye--void"
+    },
+    {
+      "name": "bwe.world.clear",
+      "signature": "bwe.world.clear()",
+      "summary": "销毁所有实体（含场景原生对象）",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldclear--void"
+    },
+    {
+      "name": "bwe.world.clearTag",
+      "signature": "bwe.world.clearTag(tag)",
+      "summary": "只销毁带该标签的实体",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldcleartagtag--void"
+    },
+    {
+      "name": "bwe.world.destroyAll",
+      "signature": "bwe.world.destroyAll(filter?) → number",
+      "summary": "批量销毁，返回实际删除数",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworlddestroyallfilter--number"
+    },
+    {
+      "name": "bwe.world.count",
+      "signature": "bwe.world.count(q?) → number",
+      "summary": "数量：无参 = 存活实体数，有参 = 匹配数",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldcountq--number"
+    },
+    {
+      "name": "bwe.world.each",
+      "signature": "bwe.world.each(q, fn(e))",
+      "summary": "遍历（快照迭代，回调里 spawn/destroy 安全）",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldeachq-fn--void"
+    },
+    {
+      "name": "bwe.world.entities",
+      "signature": "bwe.world.entities() → Entity[]",
+      "summary": "当前所有实体（只读数组）",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldentities--entity"
+    },
+    {
+      "name": "bwe.world.paused",
+      "signature": "bwe.world.paused = true",
+      "summary": "暂停整个运行时",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldpaused--boolean"
+    },
+    {
+      "name": "bwe.world.timeScale",
+      "signature": "bwe.world.timeScale = 0.5",
+      "summary": "时间缩放，1 = 正常",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldtimescale--number"
+    },
+    {
+      "name": "bwe.world.on",
+      "signature": "bwe.world.on(name, fn)",
+      "summary": "全局事件总线：注册",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldonname-fn--void"
+    },
+    {
+      "name": "bwe.world.off",
+      "signature": "bwe.world.off(name, fn)",
+      "summary": "全局事件总线：取消",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldoffname-fn--void"
+    },
+    {
+      "name": "bwe.world.emit",
+      "signature": "bwe.world.emit(name, payload)",
+      "summary": "全局事件总线：派发",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "link": "docs/api/world.md#bweworldemitname-payload--void"
+    },
+    {
+      "name": "bwe.world.layers",
+      "signature": "bwe.world.layers() → Layer[]",
+      "summary": "图层信息（Phase 2，当前返回空数组）",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "function",
+      "phase2": true,
+      "link": "docs/api/world.md#bweworldlayers--layer"
+    },
+    {
+      "name": "e.id",
+      "signature": "e.id",
+      "summary": "唯一 id（只读）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eid--string"
+    },
+    {
+      "name": "e.name",
+      "signature": "e.name",
+      "summary": "对象名（可读写，用于 find）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ename--string"
+    },
+    {
+      "name": "e.kind",
+      "signature": "e.kind",
+      "summary": "对象大类：ACTOR / PROP / TILE / ZONE / SPAWN / PORTAL / LIGHT",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ekind--string"
+    },
+    {
+      "name": "e.x",
+      "signature": "e.x / e.y",
+      "summary": "位置（世界像素，中心点，Y 向下）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ex--ey--number"
+    },
+    {
+      "name": "e.y",
+      "signature": "e.y",
+      "summary": "位置（世界像素，中心点，Y 向下）：与 e.x 同一节，可直接赋值",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ex--ey--number"
+    },
+    {
+      "name": "e.z",
+      "signature": "e.z",
+      "summary": "排序层级，大的盖住小的",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ez--number"
+    },
+    {
+      "name": "e.rotation",
+      "signature": "e.rotation",
+      "summary": "角度，顺时针，单位度",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#erotation--number"
+    },
+    {
+      "name": "e.scaleX",
+      "signature": "e.scaleX / e.scaleY",
+      "summary": "缩放倍数（1 = 原尺寸；-1 = 水平翻转）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#escalex--escaley--number"
+    },
+    {
+      "name": "e.scaleY",
+      "signature": "e.scaleY",
+      "summary": "缩放倍数：与 e.scaleX 同一节，可直接赋值",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#escalex--escaley--number"
+    },
+    {
+      "name": "e.visible",
+      "signature": "e.visible",
+      "summary": "显示 / 隐藏",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#evisible--boolean"
+    },
+    {
+      "name": "e.alive",
+      "signature": "e.alive",
+      "summary": "是否还活着（只读）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ealive--boolean"
+    },
+    {
+      "name": "e.tags",
+      "signature": "e.tags → Tags",
+      "summary": "标签集合：e.tags.has(\"敌人\") / e.tags.includes(\"敌人\")",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#etags--tags"
+    },
+    {
+      "name": "e.actor",
+      "signature": "type Entity",
+      "summary": "所有 e.xxx 里的 e 都是 Entity（脚本里 e = ctx.self）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md"
+    },
+    {
+      "name": "e.pos",
+      "signature": "e.pos → {x, y}",
+      "summary": "位置（只读快照）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#epos--vec2"
+    },
+    {
+      "name": "e.setPos",
+      "signature": "e.setPos(x, y)",
+      "summary": "设置位置（世界像素，中心点）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#esetposx-y--void"
+    },
+    {
+      "name": "e.size",
+      "signature": "e.size → {w, h}（可写）",
+      "summary": "可视化尺寸（与编辑器 halfW/halfH 同一套规则）；写 size = {w,h} 等价 setSize",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#esize--size"
+    },
+    {
+      "name": "e.setSize",
+      "signature": "e.setSize(w, h)",
+      "summary": "设置尺寸",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#esetsizew-h--void"
+    },
+    {
+      "name": "e.layer",
+      "signature": "e.layer",
+      "summary": "图层下标（绘制顺序 layer → z → y）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#elayer--number"
+    },
+    {
+      "name": "e.locked",
+      "signature": "e.locked",
+      "summary": "锁定标记（运行时只记忆，不影响行为）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#elocked--boolean"
+    },
+    {
+      "name": "e.animMode",
+      "signature": "e.animMode",
+      "summary": "\"默认\" / \"只显示首帧\" / \"单次播放\"（写时 loop/first/once 也认）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eanimmode--string"
+    },
+    {
+      "name": "e.animFps",
+      "signature": "e.animFps",
+      "summary": "每秒帧数（写会解除 setFrame 的帧锁定）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eanimfps--number"
+    },
+    {
+      "name": "e.asset",
+      "signature": "e.asset",
+      "summary": "当前素材名（可读写；写入等价换图但不改播放参数）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#easset--string"
+    },
+    {
+      "name": "e.setColor",
+      "signature": "e.setColor(r, g, b, a?)",
+      "summary": "染色：0~1；任一通道 > 1 时整组按 0~255 解释",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#esetcolorr-g-b-a--void"
+    },
+    {
+      "name": "e.setAlpha",
+      "signature": "e.setAlpha(a)",
+      "summary": "只改透明度（0~1；>1 视作 0~255），与 blink 模块 alpha 相乘",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#esetalphaa--void"
+    },
+    {
+      "name": "e.clearColor",
+      "signature": "e.clearColor()",
+      "summary": "清除染色，恢复原样",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eclearcolor--void"
+    },
+    {
+      "name": "e.color",
+      "signature": "e.color → {r, g, b, a}",
+      "summary": "当前染色值（只读）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ecolor--r-g-b-a"
+    },
+    {
+      "name": "e.addTag",
+      "signature": "e.addTag(t) → boolean",
+      "summary": "加标签（已存在返回 true 且不重复）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eaddtagtag--boolean"
+    },
+    {
+      "name": "e.removeTag",
+      "signature": "e.removeTag(t) → boolean",
+      "summary": "删标签；原本没有返回 false",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eremovetagtag--boolean"
+    },
+    {
+      "name": "e.hasTag",
+      "signature": "e.hasTag(t) → boolean",
+      "summary": "有没有这个标签",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ehastagtag--boolean"
+    },
+    {
+      "name": "e.setTags",
+      "signature": "e.setTags(arr)",
+      "summary": "整体替换标签集合",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#esettagstags--void"
+    },
+    {
+      "name": "e.props",
+      "signature": "e.props() → Record<string, string>",
+      "summary": "全部对象属性（快照）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eprops--recordstring-string"
+    },
+    {
+      "name": "e.setProps",
+      "signature": "e.setProps(obj)",
+      "summary": "批量写属性（值归一成编辑器同构文本）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#esetpropsobj--void"
+    },
+    {
+      "name": "e.addModule",
+      "signature": "e.addModule(def, params?, when?) → boolean",
+      "summary": "追加模块；同 def 已存在时合并参数。加 combat.health 会立刻重算 hpMax/hp",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eaddmoduledef-params-when--boolean"
+    },
+    {
+      "name": "e.removeModule",
+      "signature": "e.removeModule(def) → boolean",
+      "summary": "移除模块；不存在返回 false。移除 combat.health 不重置当前 hp/hpMax",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eremovemoduledef--boolean"
+    },
+    {
+      "name": "e.parent",
+      "signature": "e.parent（可写）→ Entity | null",
+      "summary": "父实体；设 null 解除关系",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eparent--entity--null"
+    },
+    {
+      "name": "e.children",
+      "signature": "e.children() → Entity[]",
+      "summary": "直接子级（只读快照）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#echildren--entity"
+    },
+    {
+      "name": "e.sprite",
+      "signature": "e.sprite({asset, frame?, fps?, mode?})",
+      "summary": "换精灵；mode: \"loop\" | \"once\" | \"first\"",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#espriteopts--void"
+    },
+    {
+      "name": "e.play",
+      "signature": "e.play(assetName)",
+      "summary": "直接换素材（沿用当前播放参数）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eplayassetname--void"
+    },
+    {
+      "name": "e.setFrame",
+      "signature": "e.setFrame(i)",
+      "summary": "冻结到第 i 帧（0 起）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#esetframei--void"
+    },
+    {
+      "name": "e.prop",
+      "signature": "e.prop(key, def?)",
+      "summary": "读对象属性（与编辑器 props 打通）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#epropkey-def--unknown"
+    },
+    {
+      "name": "e.setProp",
+      "signature": "e.setProp(key, val)",
+      "summary": "写对象属性；会影响下一帧绘制尺寸",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#esetpropkey-val--void"
+    },
+    {
+      "name": "e.hasModule",
+      "signature": "e.hasModule(\"move.patrol\")",
+      "summary": "有没有挂这个模块",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ehasmoduleid--boolean"
+    },
+    {
+      "name": "e.module",
+      "signature": "e.module(id) → {enabled, get(k), set(k, v)}",
+      "summary": "取模块实例，读写它的参数与开关",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#emoduleid--moduleinstance--null"
+    },
+    {
+      "name": "e.modules",
+      "signature": "e.modules() → ModuleInstance[]",
+      "summary": "所有模块实例",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#emodules--moduleinstance"
+    },
+    {
+      "name": "e.attach",
+      "signature": "e.attach({asset, dx?, dy?, z?, rotation?, alpha?, w?, h?}) → {id, remove()}",
+      "summary": "挂一个子精灵（武器 / 影子 / 特效），返回**对象**句柄",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eattachopts--attachhandle"
+    },
+    {
+      "name": "e.detach",
+      "signature": "e.detach(handle | id)",
+      "summary": "摘掉子精灵（传 attach 的返回值，或直接传 id）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#edetachhandle--void"
+    },
+    {
+      "name": "e.distanceTo",
+      "signature": "e.distanceTo(other) → number",
+      "summary": "到另一个实体的距离（像素）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#edistancetoother--number"
+    },
+    {
+      "name": "e.angleTo",
+      "signature": "e.angleTo(other) → number",
+      "summary": "到另一个实体的角度（度，0 = 向右）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eangletoother--number"
+    },
+    {
+      "name": "e.destroy",
+      "signature": "e.destroy()",
+      "summary": "销毁自己",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#edestroy--void"
+    },
+    {
+      "name": "e.hp",
+      "signature": "e.hp / e.hpMax",
+      "summary": "生命值（读写 combat.health 模块，没有则用内部值）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ehp--number"
+    },
+    {
+      "name": "e.hpMax",
+      "signature": "e.hpMax",
+      "summary": "生命值上限：与 e.hp 同一节，可写（改它不会自动回满）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ehpmax--number"
+    },
+    {
+      "name": "e.damage",
+      "signature": "e.damage(n)",
+      "summary": "扣血（走受击流程：闪白 / 无敌帧 / onDamage）",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#edamagen--number"
+    },
+    {
+      "name": "e.heal",
+      "signature": "e.heal(n)",
+      "summary": "回血",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#ehealn--number"
+    },
+    {
+      "name": "e.on",
+      "signature": "e.on(\"click\"|\"enter\"|\"leave\"|\"damage\"|\"death\", fn)",
+      "summary": "注册实体事件",
+      "group": "entity",
+      "groupLabel": "实体 Entity",
+      "kind": "entity",
+      "link": "docs/api/entity.md#eonname-fn--void"
+    },
+    {
+      "name": "bwe.input.down",
+      "signature": "bwe.input.down(key) → boolean",
+      "summary": "当前是否按住；key 支持 \"Space\" / \" \" / \"KeyW\" / \"ArrowLeft\" / \"Mouse0\" / 32",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bweinputdownkey--boolean"
+    },
+    {
+      "name": "bwe.input.pressed",
+      "signature": "bwe.input.pressed(key) → boolean",
+      "summary": "本帧刚按下（边沿）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bweinputpressedkey--boolean"
+    },
+    {
+      "name": "bwe.input.released",
+      "signature": "bwe.input.released(key) → boolean",
+      "summary": "本帧刚抬起（边沿）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bweinputreleasedkey--boolean"
+    },
+    {
+      "name": "bwe.input.axis",
+      "signature": "bwe.input.axis() → {x, y}",
+      "summary": "方向轴，WASD + 方向键都算，已归一化",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bweinputaxis--vec2"
+    },
+    {
+      "name": "bwe.input.mouse",
+      "signature": "bwe.input.mouse → {x, y, worldX, worldY, left, middle, right, wheel}",
+      "summary": "鼠标状态；worldX/Y 已过视口反变换",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bweinputmouse--mousestate"
+    },
+    {
+      "name": "bwe.input.cursor",
+      "signature": "bwe.input.cursor(visible)",
+      "summary": "显示 / 隐藏鼠标光标",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bweinputcursorvisible--void"
+    },
+    {
+      "name": "bwe.camera.follow",
+      "signature": "bwe.camera.follow(e, {smooth = 0.15, lookAhead = 0})",
+      "summary": "跟随实体；传 null 取消跟随",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecamerafollowe-opts--void"
+    },
+    {
+      "name": "bwe.camera.pos",
+      "signature": "bwe.camera.pos → {x, y}",
+      "summary": "相机中心（世界坐标）",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecamerapos--vec2"
+    },
+    {
+      "name": "bwe.camera.setPos",
+      "signature": "bwe.camera.setPos(x, y)",
+      "summary": "直接摆相机中心",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecamerasetposx-y--void"
+    },
+    {
+      "name": "bwe.camera.zoom",
+      "signature": "bwe.camera.zoom",
+      "summary": "当前缩放，1 = 1:1 像素",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecamerazoom--number"
+    },
+    {
+      "name": "bwe.camera.setZoom",
+      "signature": "bwe.camera.setZoom(z)",
+      "summary": "设置缩放",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecamerasetzoomz--void"
+    },
+    {
+      "name": "bwe.camera.shake",
+      "signature": "bwe.camera.shake(strength = 6, duration = 0.25)",
+      "summary": "屏幕抖动",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecamerashakestrength-duration--void"
+    },
+    {
+      "name": "bwe.camera.bounds",
+      "signature": "bwe.camera.bounds({x, y, w, h} | null)",
+      "summary": "限制相机范围；null 取消限制",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecameraboundsrect--void"
+    },
+    {
+      "name": "bwe.camera.worldToScreen",
+      "signature": "bwe.camera.worldToScreen(x, y) → {x, y}",
+      "summary": "世界坐标 → 屏幕坐标",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecameraworldtoscreenx-y--vec2"
+    },
+    {
+      "name": "bwe.camera.screenToWorld",
+      "signature": "bwe.camera.screenToWorld(x, y) → {x, y}",
+      "summary": "屏幕坐标 → 世界坐标",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecamerascreentoworldx-y--vec2"
+    },
+    {
+      "name": "bwe.camera.setFit",
+      "signature": "bwe.camera.setFit(\"contain\" | \"cover\")",
+      "summary": "覆盖默认的画面适配方式",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwecamerasetfitmode--void"
+    },
+    {
+      "name": "bwe.time.now",
+      "signature": "bwe.time.now",
+      "summary": "已运行秒数",
+      "group": "time",
+      "groupLabel": "时间 time",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwetimenow--number"
+    },
+    {
+      "name": "bwe.time.dt",
+      "signature": "bwe.time.dt",
+      "summary": "本帧步长（秒）",
+      "group": "time",
+      "groupLabel": "时间 time",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwetimedt--number"
+    },
+    {
+      "name": "bwe.time.frame",
+      "signature": "bwe.time.frame",
+      "summary": "已运行帧数",
+      "group": "time",
+      "groupLabel": "时间 time",
+      "kind": "function",
+      "link": "docs/api/input-camera-time.md#bwetimeframe--number"
+    },
+    {
+      "name": "bwe.after",
+      "signature": "bwe.after(sec, fn) → id",
+      "summary": "延时执行一次（代替 setTimeout）",
+      "group": "time",
+      "groupLabel": "时间 time",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bweaftersec-fn--number"
+    },
+    {
+      "name": "bwe.every",
+      "signature": "bwe.every(sec, fn, {times?}) → id",
+      "summary": "每 sec 秒执行一次（代替 setInterval）",
+      "group": "time",
+      "groupLabel": "时间 time",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bweeverysec-fn-opts--number"
+    },
+    {
+      "name": "bwe.cancel",
+      "signature": "bwe.cancel(id)",
+      "summary": "取消 after / every 的 id",
+      "group": "time",
+      "groupLabel": "时间 time",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwecancelid--void"
+    },
+    {
+      "name": "bwe.tween",
+      "signature": "bwe.tween(target, props, dur, opts) → {done(fn), cancel()}",
+      "summary": "补间动画（Phase 2，当前不保证有行为）",
+      "group": "time",
+      "groupLabel": "时间 time",
+      "kind": "member",
+      "phase2": true,
+      "link": "docs/api/lifecycle.md#bwetweentarget-props-dur-opts--tweenhandle"
+    },
+    {
+      "name": "bwe.draw.text",
+      "signature": "bwe.draw.text(x, y, text, {size = 16, color = \"#fff\", align = \"left\", alpha = 1, shadow = true})",
+      "summary": "在屏幕空间画文字（HUD / 调试）",
+      "group": "draw",
+      "groupLabel": "绘制 draw",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwedrawtextx-y-text-opts--void"
+    },
+    {
+      "name": "bwe.draw.rect",
+      "signature": "bwe.draw.rect(x, y, w, h, {fill, stroke, width, alpha, radius})",
+      "summary": "画矩形",
+      "group": "draw",
+      "groupLabel": "绘制 draw",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwedrawrectx-y-w-h-opts--void"
+    },
+    {
+      "name": "bwe.draw.line",
+      "signature": "bwe.draw.line(x1, y1, x2, y2, {color, width, alpha})",
+      "summary": "画线",
+      "group": "draw",
+      "groupLabel": "绘制 draw",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwedrawlinex1-y1-x2-y2-opts--void"
+    },
+    {
+      "name": "bwe.draw.circle",
+      "signature": "bwe.draw.circle(x, y, r, {fill, stroke, width, alpha})",
+      "summary": "画圆",
+      "group": "draw",
+      "groupLabel": "绘制 draw",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwedrawcirclex-y-r-opts--void"
+    },
+    {
+      "name": "bwe.draw.sprite",
+      "signature": "bwe.draw.sprite(assetName, x, y, {w, h, alpha, tint, rotation, frame})",
+      "summary": "画一张素材 / 精灵",
+      "group": "draw",
+      "groupLabel": "绘制 draw",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwedrawspriteasset-x-y-opts--void"
+    },
+    {
+      "name": "bwe.draw.bar",
+      "signature": "bwe.draw.bar(x, y, w, h, pct, {bg, fg, border})",
+      "summary": "进度条（血条 / 经验条）",
+      "group": "draw",
+      "groupLabel": "绘制 draw",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwedrawbarx-y-w-h-pct-opts--void"
+    },
+    {
+      "name": "bwe.draw.measureText",
+      "signature": "bwe.draw.measureText(text, size) → {w, h}",
+      "summary": "量文字尺寸（居中排版用）",
+      "group": "draw",
+      "groupLabel": "绘制 draw",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwedrawmeasuretexttext-size--size"
+    },
+    {
+      "name": "bwe.draw.world",
+      "signature": "bwe.draw.world(fn)",
+      "summary": "该回调内的绘制改用世界坐标（画在世界里）",
+      "group": "draw",
+      "groupLabel": "绘制 draw",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwedrawworldfn--void"
+    },
+    {
+      "name": "bwe.audio.play",
+      "signature": "bwe.audio.play(name, {volume = 1, loop = false, pitch = 1}) → id",
+      "summary": "播放音效",
+      "group": "audio",
+      "groupLabel": "音频 audio",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bweaudioplayname-opts--number"
+    },
+    {
+      "name": "bwe.audio.stop",
+      "signature": "bwe.audio.stop(id | name)",
+      "summary": "停止音效",
+      "group": "audio",
+      "groupLabel": "音频 audio",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bweaudiostopidorname--void"
+    },
+    {
+      "name": "bwe.audio.music",
+      "signature": "bwe.audio.music(name, {volume, loop = true})",
+      "summary": "播放背景音乐（同时只有一首）",
+      "group": "audio",
+      "groupLabel": "音频 audio",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bweaudiomusicname-opts--number"
+    },
+    {
+      "name": "bwe.audio.volume",
+      "signature": "bwe.audio.volume(0..1)",
+      "summary": "全局音量",
+      "group": "audio",
+      "groupLabel": "音频 audio",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bweaudiovolumev--void"
+    },
+    {
+      "name": "bwe.save.set",
+      "signature": "bwe.save.set(k, v)",
+      "summary": "存一个 JSON 值（不能存函数）",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesavesetk-v--void"
+    },
+    {
+      "name": "bwe.save.get",
+      "signature": "bwe.save.get(k, def)",
+      "summary": "读，没有则返回 def",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesavegetk-def--unknown"
+    },
+    {
+      "name": "bwe.save.has",
+      "signature": "bwe.save.has(k)",
+      "summary": "有没有这个键",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesavehask--boolean"
+    },
+    {
+      "name": "bwe.save.remove",
+      "signature": "bwe.save.remove(k)",
+      "summary": "删掉这个键",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesaveremovek--void"
+    },
+    {
+      "name": "bwe.save.clear",
+      "signature": "bwe.save.clear()",
+      "summary": "清空当前存档",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesaveclear--void"
+    },
+    {
+      "name": "bwe.save.flush",
+      "signature": "bwe.save.flush()",
+      "summary": "立即落盘",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesaveflush--boolean"
+    },
+    {
+      "name": "bwe.save.write",
+      "signature": "bwe.save.write(slot = \"auto\")",
+      "summary": "写到槽位文件",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesavewriteslot--boolean"
+    },
+    {
+      "name": "bwe.save.read",
+      "signature": "bwe.save.read(slot = \"auto\")",
+      "summary": "从槽位读回",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesavereadslot--boolean"
+    },
+    {
+      "name": "bwe.save.exists",
+      "signature": "bwe.save.exists(slot)",
+      "summary": "槽位文件是否存在",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesaveexistsslot--boolean"
+    },
+    {
+      "name": "bwe.save.delete",
+      "signature": "bwe.save.delete(slot)",
+      "summary": "删除槽位文件",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "function",
+      "link": "docs/api/draw-audio-save.md#bwesavedeleteslot--boolean"
+    },
+    {
+      "name": "bwe.grid.cellSize",
+      "signature": "bwe.grid.cellSize",
+      "summary": "一格多少像素（= tileSize）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwegridcellsize--number"
+    },
+    {
+      "name": "bwe.grid.toCell",
+      "signature": "bwe.grid.toCell(x, y) → {cx, cy}",
+      "summary": "世界像素 → 格子（floor）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwegridtocellx-y--cellpos"
+    },
+    {
+      "name": "bwe.grid.toWorld",
+      "signature": "bwe.grid.toWorld(cx, cy) → {x, y}",
+      "summary": "格子 → 格子中心的世界像素",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwegridtoworldcx-cy--vec2"
+    },
+    {
+      "name": "bwe.grid.snap",
+      "signature": "bwe.grid.snap(x, y) → {x, y}",
+      "summary": "对齐到格子中心",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwegridsnapx-y--vec2"
+    },
+    {
+      "name": "bwe.tilemap.get",
+      "signature": "bwe.tilemap.get(cx, cy) → number",
+      "summary": "取格子上的瓦片 id（0 = 空）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwetilemapgetcx-cy--number"
+    },
+    {
+      "name": "bwe.tilemap.set",
+      "signature": "bwe.tilemap.set(cx, cy, tileId)",
+      "summary": "写格子",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwetilemapsetcx-cy-tileid--void"
+    },
+    {
+      "name": "bwe.tilemap.solid",
+      "signature": "bwe.tilemap.solid(cx, cy) → boolean",
+      "summary": "这一格是否阻挡",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwetilemapsolidcx-cy--boolean"
+    },
+    {
+      "name": "bwe.tilemap.setSolid",
+      "signature": "bwe.tilemap.setSolid(tileId, solid)",
+      "summary": "设置某种瓦片是否阻挡",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwetilemapsetsolidtileid-solid--void"
+    },
+    {
+      "name": "bwe.tilemap.blocked",
+      "signature": "bwe.tilemap.blocked(x, y, w, h) → boolean",
+      "summary": "矩形是否撞墙（AABB，像素）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwetilemapblockedx-y-w-h--boolean"
+    },
+    {
+      "name": "bwe.tilemap.raycast",
+      "signature": "bwe.tilemap.raycast(x1, y1, x2, y2) → {hit, x, y, cx, cy}",
+      "summary": "射线与阻挡格子求交",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwetilemapraycastx1-y1-x2-y2--rayhit"
+    },
+    {
+      "name": "bwe.nav.find",
+      "signature": "bwe.nav.find(from, to, {diagonal = true, maxNodes = 2000, smooth = true}) → [{x, y}, …]",
+      "summary": "A* 寻路，返回世界像素路径点",
+      "group": "nav",
+      "groupLabel": "寻路 nav",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwenavfindfrom-to-opts--vec2"
+    },
+    {
+      "name": "bwe.nav.lineOfSight",
+      "signature": "bwe.nav.lineOfSight(a, b) → boolean",
+      "summary": "两点之间有没有阻挡",
+      "group": "nav",
+      "groupLabel": "寻路 nav",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwenavlineofsighta-b--boolean"
+    },
+    {
+      "name": "bwe.nav.follow",
+      "signature": "bwe.nav.follow(e, path, {speed = 100, arrive = 2, onArrive})",
+      "summary": "让实体沿路径走",
+      "group": "nav",
+      "groupLabel": "寻路 nav",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwenavfollowe-path-opts--void"
+    },
+    {
+      "name": "bwe.nav.stop",
+      "signature": "bwe.nav.stop(e)",
+      "summary": "停下沿路径走",
+      "group": "nav",
+      "groupLabel": "寻路 nav",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwenavstope--void"
+    },
+    {
+      "name": "bwe.interact.nearest",
+      "signature": "bwe.interact.nearest(actor, {radius = 48, tag, filter}) → Entity | null",
+      "summary": "找离 actor 最近的交互物",
+      "group": "interact",
+      "groupLabel": "交互 interact",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bweinteractnearestactor-opts--entity--null"
+    },
+    {
+      "name": "bwe.interact.prompt",
+      "signature": "bwe.interact.prompt(text | null)",
+      "summary": "在交互物头顶画提示；null 清除",
+      "group": "interact",
+      "groupLabel": "交互 interact",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bweinteractprompttext--void"
+    },
+    {
+      "name": "bwe.interact.setKey",
+      "signature": "bwe.interact.setKey(\"KeyE\")",
+      "summary": "设置交互触发键",
+      "group": "interact",
+      "groupLabel": "交互 interact",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bweinteractsetkeykey--void"
+    },
+    {
+      "name": "bwe.interact.onTrigger",
+      "signature": "bwe.interact.onTrigger(fn(target, actor))",
+      "summary": "玩家按触发键时回调",
+      "group": "interact",
+      "groupLabel": "交互 interact",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bweinteractontriggerfn--void"
+    },
+    {
+      "name": "bwe.spawner.create",
+      "signature": "bwe.spawner.create({asset?, script?, count = 1, interval = 2, max = 10, area?, onSpawn}) → handle",
+      "summary": "定时刷怪 / 掉落",
+      "group": "spawner",
+      "groupLabel": "生成器 spawner",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwespawnercreateopts--number"
+    },
+    {
+      "name": "bwe.spawner.stop",
+      "signature": "bwe.spawner.stop(handle)",
+      "summary": "停掉生成器",
+      "group": "spawner",
+      "groupLabel": "生成器 spawner",
+      "kind": "function",
+      "link": "docs/api/map-nav-interact-spawner.md#bwespawnerstophandle--void"
+    },
+    {
+      "name": "bwe.prefab.define",
+      "signature": "bwe.prefab.define(name, spec) → boolean",
+      "summary": "注册 / 覆盖一个预制体模板（spec 字段同 boot.json prefabs[]）",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bweprefabdefinename-spec--boolean"
+    },
+    {
+      "name": "bwe.prefab.get",
+      "signature": "bwe.prefab.get(name) → PrefabSpec | null",
+      "summary": "读模板的深拷贝快照（改它不影响注册表）",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bweprefabgetname--prefabspec--null"
+    },
+    {
+      "name": "bwe.prefab.list",
+      "signature": "bwe.prefab.list() → string[]",
+      "summary": "所有模板名（顺序 = define 顺序）",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bweprefablist--string"
+    },
+    {
+      "name": "bwe.prefab.has",
+      "signature": "bwe.prefab.has(name) → boolean",
+      "summary": "模板是否存在",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bweprefabhasname--boolean"
+    },
+    {
+      "name": "bwe.prefab.remove",
+      "signature": "bwe.prefab.remove(name) → boolean",
+      "summary": "移除模板（已生成的实例不受影响）",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bweprefabremovename--boolean"
+    },
+    {
+      "name": "bwe.prefab.spawn",
+      "signature": "bwe.prefab.spawn(name, {x, y, z, rotation, scaleX, scaleY, tags, modules, props, name, parent, jitter}?) → Entity | null",
+      "summary": "实例化；opts 在模板之上覆盖。给了 x/y 就精确落位不抖，jitter:true 才抖",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bweprefabspawnname-opts--entity--null"
+    },
+    {
+      "name": "bwe.prefab.spawnMany",
+      "signature": "bwe.prefab.spawnMany(name, optsList) → Entity[]",
+      "summary": "批量实例化（每个元素一份覆盖）",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bweprefabspawnmanyname-optslist--entity"
+    },
+    {
+      "name": "bwe.prefab.count",
+      "signature": "bwe.prefab.count(name) → number",
+      "summary": "当前存活的该预制体实例数（对象池 / 上限用）",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bweprefabcountname--number"
+    },
+    {
+      "name": "bwe.prefab.fromEntity",
+      "signature": "bwe.prefab.fromEntity(e, name?) → string | null",
+      "summary": "把场上实体抓成模板并注册（含模块/属性/标签/子精灵）",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bweprefabfromentitye-name--string--null"
+    },
+    {
+      "name": "bwe.pool.create",
+      "signature": "bwe.pool.create(prefabName, capacity?, {prewarm}?) → handle",
+      "summary": "建对象池；prewarm 会预生成隐藏实例。预制体不存在返回 -1",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bwepoolcreateprefabname-capacity-opts--number"
+    },
+    {
+      "name": "bwe.pool.acquire",
+      "signature": "bwe.pool.acquire(handle, x, y) → Entity | null",
+      "summary": "取一个实例（优先复用空闲），池满返回 null",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bwepoolacquirehandle-x-y--entity--null"
+    },
+    {
+      "name": "bwe.pool.release",
+      "signature": "bwe.pool.release(handle, e) → boolean",
+      "summary": "归还实例；不属于该池 / 已销毁返回 false",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bwepoolreleasehandle-e--boolean"
+    },
+    {
+      "name": "bwe.pool.stats",
+      "signature": "bwe.pool.stats(handle) → {idle, active, total, capacity} | null",
+      "summary": "池统计",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "function",
+      "link": "docs/api/prefab.md#bwepoolstatshandle--poolstats--null"
+    },
+    {
+      "name": "bwe.random",
+      "signature": "bwe.random(min, max) → number",
+      "summary": "随机小数",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwerandommin-max--number"
+    },
+    {
+      "name": "bwe.randomInt",
+      "signature": "bwe.randomInt(min, max) → number",
+      "summary": "随机整数（含两端）",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwerandomintmin-max--number"
+    },
+    {
+      "name": "bwe.chance",
+      "signature": "bwe.chance(p) → boolean",
+      "summary": "概率命中（p = 0~1）",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwechancep--boolean"
+    },
+    {
+      "name": "bwe.pick",
+      "signature": "bwe.pick(arr) → element",
+      "summary": "从数组里随机取一个",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwepickarr--unknown"
+    },
+    {
+      "name": "bwe.clamp",
+      "signature": "bwe.clamp(v, a, b) → number",
+      "summary": "夹取到 [a, b]",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bweclampv-a-b--number"
+    },
+    {
+      "name": "bwe.lerp",
+      "signature": "bwe.lerp(a, b, t) → number",
+      "summary": "线性插值",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwelerpa-b-t--number"
+    },
+    {
+      "name": "bwe.dist",
+      "signature": "bwe.dist(x1, y1, x2, y2) → number",
+      "summary": "两点距离",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwedistx1-y1-x2-y2--number"
+    },
+    {
+      "name": "bwe.log",
+      "signature": "bwe.log(...args)",
+      "summary": "写日志到 Build/bwe.log（带脚本名）",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwelogargs--void"
+    },
+    {
+      "name": "bwe.error",
+      "signature": "bwe.error(...args)",
+      "summary": "写错误日志",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bweerrorargs--void"
+    },
+    {
+      "name": "bwe.call",
+      "signature": "bwe.call(scriptName, handlerName, ...args)",
+      "summary": "调用另一个脚本里的具名函数",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwecallscriptname-handlername-args--unknown"
+    },
+    {
+      "name": "bwe.has",
+      "signature": "bwe.has(scriptName) → boolean",
+      "summary": "该脚本是否存在",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "member",
+      "link": "docs/api/lifecycle.md#bwehasscriptname--boolean"
+    },
+    {
+      "name": "bwe.scripts.call",
+      "signature": "bwe.scripts.call(scriptName, handlerName, ...args)",
+      "summary": "bwe.call 的等价写法",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "function",
+      "link": "docs/api/lifecycle.md#bwescriptscallscriptname-handlername-args--unknown"
+    },
+    {
+      "name": "bwe.scripts.has",
+      "signature": "bwe.scripts.has(scriptName) → boolean",
+      "summary": "该脚本是否存在",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "function",
+      "link": "docs/api/lifecycle.md#bwescriptshasscriptname--boolean"
+    },
+    {
+      "name": "bwe.material.define",
+      "signature": "bwe.material.define(name, {flammable, burnTime, conductive, wet, hardness, density, tags})",
+      "summary": "定义 / 覆盖材质：一切燃烧与导电源自这些数字",
+      "group": "material",
+      "groupLabel": "材质 material",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwematerialdefinename-props--material"
+    },
+    {
+      "name": "bwe.material.get",
+      "signature": "bwe.material.get(name) → Material | null",
+      "summary": "读材质属性",
+      "group": "material",
+      "groupLabel": "材质 material",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwematerialgetname--material--null"
+    },
+    {
+      "name": "bwe.material.tags",
+      "signature": "bwe.material.tags(name) → string[]",
+      "summary": "材质的语义标签（如 plant / liquid）",
+      "group": "material",
+      "groupLabel": "材质 material",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwematerialtagsname--string"
+    },
+    {
+      "name": "bwe.material.of",
+      "signature": "bwe.material.of(cx, cy) → string | null",
+      "summary": "该格子的材质名",
+      "group": "material",
+      "groupLabel": "材质 material",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwematerialofcx-cy--string--null"
+    },
+    {
+      "name": "bwe.material.setTile",
+      "signature": "bwe.material.setTile(cx, cy, name | null)",
+      "summary": "改格子材质（设成 water 就成了永久水源）",
+      "group": "material",
+      "groupLabel": "材质 material",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwematerialsettilecx-cy-name--void"
+    },
+    {
+      "name": "bwe.material.ofEntity",
+      "signature": "bwe.material.ofEntity(e) → string | null",
+      "summary": "实体材质",
+      "group": "material",
+      "groupLabel": "材质 material",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwematerialofentitye--string--null"
+    },
+    {
+      "name": "bwe.material.setEntity",
+      "signature": "bwe.material.setEntity(e, name | null)",
+      "summary": "改实体材质",
+      "group": "material",
+      "groupLabel": "材质 material",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwematerialsetentitye-name--void"
+    },
+    {
+      "name": "bwe.field.emit",
+      "signature": "bwe.field.emit(channel, cx, cy, intensity = 1)",
+      "summary": "点火 / 灌水 / 放烟",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefieldemitchannel-cx-cy-intensity--void"
+    },
+    {
+      "name": "bwe.field.sample",
+      "signature": "bwe.field.sample(channel, cx, cy) → number",
+      "summary": "读某通道强度 0~1",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefieldsamplechannel-cx-cy--number"
+    },
+    {
+      "name": "bwe.field.clear",
+      "signature": "bwe.field.clear(channel)",
+      "summary": "清空通道",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefieldclearchannel--void"
+    },
+    {
+      "name": "bwe.field.tickRate",
+      "signature": "bwe.field.tickRate(sec = 0.1) → number",
+      "summary": "模拟步长（与帧率解耦）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefieldtickratesec--number"
+    },
+    {
+      "name": "bwe.field.channel",
+      "signature": "bwe.field.channel(name) → {max(v)}",
+      "summary": "自定义通道",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefieldchannelname--channelhandle"
+    },
+    {
+      "name": "bwe.field.wind",
+      "signature": "bwe.field.wind(dx, dy) → Vec2",
+      "summary": "风向：影响烟雾与火势偏向",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefieldwinddx-dy--vec2"
+    },
+    {
+      "name": "bwe.field.on",
+      "signature": "bwe.field.on(\"ignite\" | \"extinguish\" | \"burned\", fn) → 取消函数",
+      "summary": "场事件：被点燃 / 熄灭 / 烧尽",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefieldonev-fn----void"
+    },
+    {
+      "name": "bwe.field.off",
+      "signature": "bwe.field.off(ev, fn?)",
+      "summary": "取消订阅：给 fn 只摘那一个，不给 fn 清空该事件全部回调",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefieldoffev-fn--void"
+    },
+    {
+      "name": "bwe.field.burning",
+      "signature": "bwe.field.burning() → [{cx, cy, intensity, material}]",
+      "summary": "当前正在燃烧的格子",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefieldburning--burningcell"
+    },
+    {
+      "name": "bwe.noise.emit",
+      "signature": "bwe.noise.emit(x, y, {radius = 260, intensity = 1, tag})",
+      "summary": "制造噪音（墙会衰减，AI 会听见）",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwenoiseemitx-y-opts--void"
+    },
+    {
+      "name": "bwe.noise.events",
+      "signature": "bwe.noise.events() → NoiseEvent[]",
+      "summary": "最近的噪音事件",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwenoiseevents--noiseevent"
+    },
+    {
+      "name": "bwe.sense.canSee",
+      "signature": "bwe.sense.canSee(a, b) → boolean",
+      "summary": "看得见？（半径 + 视野角 + 瓦片遮挡 + 烟雾）",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwesensecanseea-b--boolean"
+    },
+    {
+      "name": "bwe.sense.inSightRange",
+      "signature": "bwe.sense.inSightRange(a, b) → boolean",
+      "summary": "只判距离",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwesenseinsightrangea-b--boolean"
+    },
+    {
+      "name": "bwe.sense.audible",
+      "signature": "bwe.sense.audible(e) → boolean",
+      "summary": "听得到最近的噪音？",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwesenseaudiblee--boolean"
+    },
+    {
+      "name": "bwe.sense.lastKnown",
+      "signature": "bwe.sense.lastKnown(e) → {x, y, age, from} | null",
+      "summary": "记忆中的目标位置（会随时间过期）",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwesenselastknowne--lastknown--null"
+    },
+    {
+      "name": "bwe.faction.set",
+      "signature": "bwe.faction.set(e, name | null)",
+      "summary": "设置阵营",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefactionsete-name--void"
+    },
+    {
+      "name": "bwe.faction.relation",
+      "signature": "bwe.faction.relation(a, b, v = ?) → number",
+      "summary": "关系：-1 敌 / 0 中立 / 1 友",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefactionrelationa-b-v--number"
+    },
+    {
+      "name": "bwe.faction.hostile",
+      "signature": "bwe.faction.hostile(a, b) → boolean",
+      "summary": "是否敌对",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefactionhostilea-b--boolean"
+    },
+    {
+      "name": "bwe.faction.members",
+      "signature": "bwe.faction.members(name) → Entity[]",
+      "summary": "该阵营成员",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwefactionmembersname--entity"
+    },
+    {
+      "name": "bwe.ai.attach",
+      "signature": "bwe.ai.attach(e, {sight = 260, fov = 120, hearing = 300, memory = 6, speed = 90})",
+      "summary": "挂感知/记忆/状态（决策仍写在脚本里）",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweaiattache-opts--void"
+    },
+    {
+      "name": "bwe.ai.detach",
+      "signature": "bwe.ai.detach(e)",
+      "summary": "摘掉感知",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweaidetache--void"
+    },
+    {
+      "name": "bwe.ai.state",
+      "signature": "bwe.ai.state(e) → string | null",
+      "summary": "当前状态字符串（引擎不做决策）",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweaistatee--string--null"
+    },
+    {
+      "name": "bwe.ai.setState",
+      "signature": "bwe.ai.setState(e, s)",
+      "summary": "设置状态",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweaisetstatee-s--void"
+    },
+    {
+      "name": "bwe.ai.target",
+      "signature": "bwe.ai.target(e) → Entity | null",
+      "summary": "引擎锁定的最近可见敌对目标",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweaitargete--entity--null"
+    },
+    {
+      "name": "bwe.ai.alert",
+      "signature": "bwe.ai.alert(e, pos | entity)",
+      "summary": "同阵营警报（一跳延迟传播）",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweaialerte-pos--void"
+    },
+    {
+      "name": "bwe.ai.onAlert",
+      "signature": "bwe.ai.onAlert(fn({entity, position, from})) → 取消函数",
+      "summary": "收到同伴警报",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweaionalertfn--void"
+    },
+    {
+      "name": "bwe.ai.onSpot",
+      "signature": "bwe.ai.onSpot(fn({entity, target})) → 取消函数",
+      "summary": "发现新目标",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweaionspotfn--void"
+    },
+    {
+      "name": "bwe.target.cell",
+      "signature": "bwe.target.cell() → {cx, cy, x, y, material} | null",
+      "summary": "鼠标所在格子",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwetargetcell--targetcell--null"
+    },
+    {
+      "name": "bwe.target.entity",
+      "signature": "bwe.target.entity() → Entity | null",
+      "summary": "鼠标下最上层实体",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwetargetentity--entity--null"
+    },
+    {
+      "name": "bwe.target.inFront",
+      "signature": "bwe.target.inFront(e, range = 1格) → Entity | cell | null",
+      "summary": "实体面前的东西",
+      "group": "sense",
+      "groupLabel": "感知与 AI sense / ai",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwetargetinfronte-range--entity--cell--null"
+    },
+    {
+      "name": "bwe.physics.enable",
+      "signature": "bwe.physics.enable() / bwe.physics.enabled()",
+      "summary": "打开物理子步（默认关）；enabled() 读当前状态",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsenable--boolean"
+    },
+    {
+      "name": "bwe.physics.enabled",
+      "signature": "bwe.physics.enabled() → boolean",
+      "summary": "物理子步当前是否开启（与 enable 同一节）",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsenabled--boolean"
+    },
+    {
+      "name": "bwe.physics.gravity",
+      "signature": "bwe.physics.gravity(gy = 0) → number",
+      "summary": "重力 px/s²（俯视角默认 0）",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsgravitygy--number"
+    },
+    {
+      "name": "bwe.physics.body",
+      "signature": "bwe.physics.body(e, {type, shape, radius, halfW, halfH, density, friction, restitution, sensor})",
+      "summary": "给实体建刚体（瓦片阻挡会自动成为静态墙）",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsbodye-opts--entity--null"
+    },
+    {
+      "name": "bwe.physics.remove",
+      "signature": "bwe.physics.remove(e)",
+      "summary": "移除刚体",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsremovee--boolean"
+    },
+    {
+      "name": "bwe.physics.applyImpulse",
+      "signature": "bwe.physics.applyImpulse(e, ix, iy) → boolean",
+      "summary": "施加冲量（400 ≈ 箱子 400px/s）",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsapplyimpulsee-ix-iy--boolean"
+    },
+    {
+      "name": "bwe.physics.velocity",
+      "signature": "bwe.physics.velocity(e) → {vx, vy}",
+      "summary": "读速度",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsvelocitye--vx-vy"
+    },
+    {
+      "name": "bwe.physics.setVelocity",
+      "signature": "bwe.physics.setVelocity(e, vx, vy)",
+      "summary": "设速度",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicssetvelocitye-vx-vy--boolean"
+    },
+    {
+      "name": "bwe.physics.throwAt",
+      "signature": "bwe.physics.throwAt(e, tx, ty, speed = 自适应)",
+      "summary": "朝目标抛出（丢油瓶）",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsthrowate-tx-ty-speed--boolean"
+    },
+    {
+      "name": "bwe.physics.raycast",
+      "signature": "bwe.physics.raycast(x1, y1, x2, y2) → {hit, x, y, entity, nx, ny, fraction, sensor}",
+      "summary": "射线检测",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsraycastx1-y1-x2-y2--rayhit"
+    },
+    {
+      "name": "bwe.physics.queryPoint",
+      "signature": "bwe.physics.queryPoint(x, y) → Entity[]",
+      "summary": "点查询",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsquerypointx-y--entity"
+    },
+    {
+      "name": "bwe.physics.queryAABB",
+      "signature": "bwe.physics.queryAABB(x, y, w, h) → Entity[]",
+      "summary": "矩形查询（x,y 为左上角）",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsqueryaabbx-y-w-h--entity"
+    },
+    {
+      "name": "bwe.physics.on",
+      "signature": "bwe.physics.on(\"collision\", fn({a, b, impulse, sensor})) → 取消函数",
+      "summary": "碰撞回调",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsonev-fn--function--null"
+    },
+    {
+      "name": "bwe.physics.debug",
+      "signature": "bwe.physics.debug(on = true) → boolean",
+      "summary": "画碰撞体线框",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsdebugon--boolean"
+    },
+    {
+      "name": "bwe.physics.bodyCount",
+      "signature": "bwe.physics.bodyCount() → number",
+      "summary": "当前动态刚体数量（性能水位观察）",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicsbodycount--number"
+    },
+    {
+      "name": "bwe.physics.tileBodyCount",
+      "signature": "bwe.physics.tileBodyCount() → number",
+      "summary": "当前瓦片静态墙体数量（建/拆 tilemap 后核对）",
+      "group": "physics",
+      "groupLabel": "物理 physics",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bwephysicstilebodycount--number"
+    },
+    {
+      "name": "bwe.seed.set",
+      "signature": "bwe.seed.set(n)",
+      "summary": "固定随机种子（同种子 + 同输入 ⇒ 同结果，对拍用）",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweseedsetn--number"
+    },
+    {
+      "name": "bwe.seed.get",
+      "signature": "bwe.seed.get() → number",
+      "summary": "当前种子",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweseedget--number"
+    },
+    {
+      "name": "bwe.seed.reset",
+      "signature": "bwe.seed.reset()",
+      "summary": "恢复默认种子",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweseedreset--number"
+    },
+    {
+      "name": "bwe.seed.defaultSeed",
+      "signature": "bwe.seed.defaultSeed() → number",
+      "summary": "引擎内置的默认种子常量",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "function",
+      "link": "docs/api/emergence.md#bweseeddefaultseed--number"
+    },
+    {
+      "name": "bwe.scene.list",
+      "signature": "bwe.scene.list() → SceneListItem[]",
+      "summary": "工程里的全部场景（name / file / index / width / height / current）",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwescenelist--scenelistitem"
+    },
+    {
+      "name": "bwe.scene.current",
+      "signature": "bwe.scene.current() → SceneCurrent | null",
+      "summary": "当前场景信息（含 epoch / tileSize）",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwescenecurrent--scenecurrent--null"
+    },
+    {
+      "name": "bwe.scene.count",
+      "signature": "bwe.scene.count() → number",
+      "summary": "场景总数",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwescenecount--number"
+    },
+    {
+      "name": "bwe.scene.has",
+      "signature": "bwe.scene.has(name) → boolean",
+      "summary": "是否存在该场景（名字 / 文件名 / 去扩展名 basename 都认）",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwescenehasname--boolean"
+    },
+    {
+      "name": "bwe.scene.switchTo",
+      "signature": "bwe.scene.switchTo(name) → boolean",
+      "summary": "请求切场景：只登记，帧末生效；返回是否登记成功",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwesceneswitchtoname--boolean"
+    },
+    {
+      "name": "bwe.scene.load",
+      "signature": "bwe.scene.load(name) → boolean",
+      "summary": "switchTo 的别名（加载并切过去）",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwesceneloadname--boolean"
+    },
+    {
+      "name": "bwe.scene.pending",
+      "signature": "bwe.scene.pending() → string | null",
+      "summary": "待切换的场景名（没有 = null）",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwescenepending--string--null"
+    },
+    {
+      "name": "bwe.scene.epoch",
+      "signature": "bwe.scene.epoch() → number",
+      "summary": "场景代数：每次真正切换 +1",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwesceneepoch--number"
+    },
+    {
+      "name": "bwe.scene.on",
+      "signature": "bwe.scene.on(\"willChange\" | \"changed\", fn({name, epoch}))",
+      "summary": "注册切换回调（切换前 / 切换后），返回该函数，未知事件返回 null",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwesceneonwillchange--changed-fnname-epoch"
+    },
+    {
+      "name": "bwe.scene.off",
+      "signature": "bwe.scene.off(fn) → boolean",
+      "summary": "按函数引用摘掉切换回调",
+      "group": "scene",
+      "groupLabel": "场景 scene",
+      "kind": "function",
+      "link": "docs/api/scene.md#bwesceneofffn--boolean"
+    },
+    {
+      "name": "bwe.spatial.hasData",
+      "signature": "bwe.spatial.hasData() → boolean",
+      "summary": "当前场景是否有楼层/区域数据（旧工程 = false，所有查询不阻挡）",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialhasdata--boolean"
+    },
+    {
+      "name": "bwe.spatial.buildingCount",
+      "signature": "bwe.spatial.buildingCount() → number",
+      "summary": "建筑数量",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialbuildingcount--number"
+    },
+    {
+      "name": "bwe.spatial.zoneCount",
+      "signature": "bwe.spatial.zoneCount() → number",
+      "summary": "区域数量",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialzonecount--number"
+    },
+    {
+      "name": "bwe.spatial.linkCount",
+      "signature": "bwe.spatial.linkCount() → number",
+      "summary": "垂直连接（楼梯/电梯）数量",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatiallinkcount--number"
+    },
+    {
+      "name": "bwe.spatial.all",
+      "signature": "bwe.spatial.all() → SpatialZone[]",
+      "summary": "全部区域（只读快照）",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialall--spatialzone"
+    },
+    {
+      "name": "bwe.spatial.byId",
+      "signature": "bwe.spatial.byId(id) → SpatialZone | null",
+      "summary": "按区域 id 取",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialbyidid--spatialzone--null"
+    },
+    {
+      "name": "bwe.spatial.at",
+      "signature": "bwe.spatial.at(x, y) → SpatialZone | null",
+      "summary": "坐标所在的区域",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialatx-y--spatialzone--null"
+    },
+    {
+      "name": "bwe.spatial.current",
+      "signature": "bwe.spatial.current() → CurrentSpace | null",
+      "summary": "玩家当前空间 {zoneId, buildingId, floorId, level, indoor}",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialcurrent--currentspace--null"
+    },
+    {
+      "name": "bwe.spatial.level",
+      "signature": "bwe.spatial.level() → number",
+      "summary": "玩家楼层序号（无数据 = 0）",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatiallevel--number"
+    },
+    {
+      "name": "bwe.spatial.levelOf",
+      "signature": "bwe.spatial.levelOf(e) → number",
+      "summary": "某实体所在楼层序号（跨层判断的关键）",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatiallevelofe--number"
+    },
+    {
+      "name": "bwe.spatial.zoneOf",
+      "signature": "bwe.spatial.zoneOf(e) → SpatialZone | null",
+      "summary": "某实体所在区域",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialzoneofe--spatialzone--null"
+    },
+    {
+      "name": "bwe.spatial.visibility",
+      "signature": "bwe.spatial.visibility(zoneId | zone) → {renderVisible, collisionEnabled, navPassable}",
+      "summary": "某区域本帧解析出的三个运行时状态",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialvisibilityzoneid--zone--rendervisible-collisionenabled-navpassable"
+    },
+    {
+      "name": "bwe.spatial.links",
+      "signature": "bwe.spatial.links() → SpatialLink[]",
+      "summary": "全部垂直连接",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatiallinks--spatiallink"
+    },
+    {
+      "name": "bwe.spatial.link",
+      "signature": "bwe.spatial.link(id) → SpatialLink | null",
+      "summary": "按 id 取连接",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatiallinkid--spatiallink--null"
+    },
+    {
+      "name": "bwe.spatial.linkBetween",
+      "signature": "bwe.spatial.linkBetween(aLevel, bLevel) → SpatialLink | null",
+      "summary": "两楼层之间是否有连接（“楼梯存在吗”）",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatiallinkbetweenalevel-blevel--spatiallink--null"
+    },
+    {
+      "name": "bwe.spatial.canReachLevel",
+      "signature": "bwe.spatial.canReachLevel(from, to) → boolean",
+      "summary": "靠 link 能否从一层到另一层",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialcanreachlevelfrom-to--boolean"
+    },
+    {
+      "name": "bwe.spatial.useLink",
+      "signature": "bwe.spatial.useLink(id, e) → boolean",
+      "summary": "把实体沿连接传送到另一端（电梯/楼梯搬家）",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialuselinkid-e--boolean"
+    },
+    {
+      "name": "bwe.spatial.enter",
+      "signature": "bwe.spatial.enter(zoneId | zone, e?) → boolean",
+      "summary": "从门口走进某区域（设置楼层归属）；省略 e = 作用于玩家",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialenterzone-e--boolean"
+    },
+    {
+      "name": "bwe.spatial.leave",
+      "signature": "bwe.spatial.leave(e?) → boolean",
+      "summary": "走出建筑，楼层归属退回地面层；省略 e = 作用于玩家",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialleavee--boolean"
+    },
+    {
+      "name": "bwe.spatial.setVisibilityRule",
+      "signature": "bwe.spatial.setVisibilityRule(rule = \"default\") → boolean",
+      "summary": "自定义楼层可见性规则；v1 只接受 default，其它值返回 false",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialsetvisibilityrulerule--default--boolean"
+    },
+    {
+      "name": "bwe.spatial.clear",
+      "signature": "bwe.spatial.clear() → boolean",
+      "summary": "清空空间索引（场景卸载时引擎自己会清）",
+      "group": "spatial",
+      "groupLabel": "空间 spatial",
+      "kind": "function",
+      "link": "docs/api/spatial.md#bwespatialclear--boolean"
+    },
+    {
+      "name": "bwe.collision.on",
+      "signature": "bwe.collision.on(ev, fn({event, self, other, a, b, sensor}), e?)",
+      "summary": "订阅 enter / stay / exit / trigger* 碰撞事件；传 e = 只看该实体",
+      "group": "collision",
+      "groupLabel": "碰撞 collision",
+      "kind": "function",
+      "link": "docs/api/collision.md#bwecollisiononev-fn-e--function--null"
+    },
+    {
+      "name": "bwe.collision.off",
+      "signature": "bwe.collision.off(fn) → boolean",
+      "summary": "摘掉碰撞回调（全局与按实体的都会找）",
+      "group": "collision",
+      "groupLabel": "碰撞 collision",
+      "kind": "function",
+      "link": "docs/api/collision.md#bwecollisionofffn--boolean"
+    },
+    {
+      "name": "bwe.collision.query",
+      "signature": "bwe.collision.query(rect) → Entity[]",
+      "summary": "矩形几何查询（全部可见实体）",
+      "group": "collision",
+      "groupLabel": "碰撞 collision",
+      "kind": "function",
+      "link": "docs/api/collision.md#bwecollisionqueryrect--entity"
+    },
+    {
+      "name": "bwe.collision.overlapCircle",
+      "signature": "bwe.collision.overlapCircle(x, y, r) → Entity[]",
+      "summary": "圆形查询（圆 vs AABB）",
+      "group": "collision",
+      "groupLabel": "碰撞 collision",
+      "kind": "function",
+      "link": "docs/api/collision.md#bwecollisionoverlapcirclex-y-r--entity"
+    },
+    {
+      "name": "bwe.collision.raycast",
+      "signature": "bwe.collision.raycast(x1, y1, x2, y2) → {hit, x, y, entity, distance}",
+      "summary": "线段射线检测（纯几何，不含瓦片）",
+      "group": "collision",
+      "groupLabel": "碰撞 collision",
+      "kind": "function",
+      "link": "docs/api/collision.md#bwecollisionraycastx1-y1-x2-y2--hit-x-y-entity-distance"
+    },
+    {
+      "name": "bwe.collision.setTrigger",
+      "signature": "bwe.collision.setTrigger(e, on = true) → boolean",
+      "summary": "把实体的碰撞体标为传感器（触发区）",
+      "group": "collision",
+      "groupLabel": "碰撞 collision",
+      "kind": "function",
+      "link": "docs/api/collision.md#bwecollisionsettriggere-on--true--boolean"
+    },
+    {
+      "name": "bwe.collision.isTrigger",
+      "signature": "bwe.collision.isTrigger(e) → boolean",
+      "summary": "该实体是否传感器",
+      "group": "collision",
+      "groupLabel": "碰撞 collision",
+      "kind": "function",
+      "link": "docs/api/collision.md#bwecollisionistriggere--boolean"
+    },
+    {
+      "name": "bwe.collision.contacts",
+      "signature": "bwe.collision.contacts(e) → Entity[]",
+      "summary": "当前与该实体接触的实体（几何重叠）",
+      "group": "collision",
+      "groupLabel": "碰撞 collision",
+      "kind": "function",
+      "link": "docs/api/collision.md#bwecollisioncontactse--entity"
+    },
+    {
+      "name": "bwe.collision.count",
+      "signature": "bwe.collision.count() → number",
+      "summary": "当前接触对数（诊断/断言用）",
+      "group": "collision",
+      "groupLabel": "碰撞 collision",
+      "kind": "function",
+      "link": "docs/api/collision.md#bwecollisioncount--number"
+    },
+    {
+      "name": "bwe.actions.bind",
+      "signature": "bwe.actions.bind({action: [\"KeyW\", ...]}) → boolean",
+      "summary": "批量写入动作映射（合并，不动未提到的动作）",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsbindaction---boolean"
+    },
+    {
+      "name": "bwe.actions.unbind",
+      "signature": "bwe.actions.unbind(action) → boolean",
+      "summary": "解绑单个动作",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsunbindaction--boolean"
+    },
+    {
+      "name": "bwe.actions.reset",
+      "signature": "bwe.actions.reset() → boolean",
+      "summary": "恢复默认映射",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsreset--boolean"
+    },
+    {
+      "name": "bwe.actions.actions",
+      "signature": "bwe.actions.actions() → string[]",
+      "summary": "全部动作名",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsactions--string"
+    },
+    {
+      "name": "bwe.actions.keys",
+      "signature": "bwe.actions.keys(action) → string[]",
+      "summary": "某动作绑定的键",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionskeysaction--string"
+    },
+    {
+      "name": "bwe.actions.down",
+      "signature": "bwe.actions.down(action) → boolean",
+      "summary": "持续按住（且当前上下文放行）",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsdownaction--boolean"
+    },
+    {
+      "name": "bwe.actions.pressed",
+      "signature": "bwe.actions.pressed(action) → boolean",
+      "summary": "本帧刚按下",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionspressedaction--boolean"
+    },
+    {
+      "name": "bwe.actions.released",
+      "signature": "bwe.actions.released(action) → boolean",
+      "summary": "本帧刚松开",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsreleasedaction--boolean"
+    },
+    {
+      "name": "bwe.actions.axis",
+      "signature": "bwe.actions.axis() → {x, y}",
+      "summary": "方向轴（用 move_* 动作算，已归一化，Y 向下）",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsaxis--x-y"
+    },
+    {
+      "name": "bwe.actions.context",
+      "signature": "bwe.actions.context() → string",
+      "summary": "当前上下文名（栈空 = \"game\"）",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionscontext--string"
+    },
+    {
+      "name": "bwe.actions.pushContext",
+      "signature": "bwe.actions.pushContext(name) → boolean",
+      "summary": "压入上下文（如 \"ui\"）",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionspushcontextname--boolean"
+    },
+    {
+      "name": "bwe.actions.popContext",
+      "signature": "bwe.actions.popContext() → string | null",
+      "summary": "弹出上下文，返回被弹出的名字",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionspopcontext--string--null"
+    },
+    {
+      "name": "bwe.actions.setContext",
+      "signature": "bwe.actions.setContext(name) → boolean",
+      "summary": "直接设为单一上下文（空串 = 清空栈）",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionssetcontextname--boolean"
+    },
+    {
+      "name": "bwe.actions.allow",
+      "signature": "bwe.actions.allow(context, actions[]) → boolean",
+      "summary": "声明某上下文只放行哪些动作（不调用 = 全部放行）",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsallowcontext-actions--boolean"
+    },
+    {
+      "name": "bwe.actions.on",
+      "signature": "bwe.actions.on(action, fn)",
+      "summary": "订阅动作触发（按下时派发），返回该函数",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsonaction-fn--function--null"
+    },
+    {
+      "name": "bwe.actions.off",
+      "signature": "bwe.actions.off(fn) → boolean",
+      "summary": "摘掉动作回调；也支持 off(action, fn)",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsofffn--boolean"
+    },
+    {
+      "name": "bwe.actions.focused",
+      "signature": "bwe.actions.focused() → boolean",
+      "summary": "窗口是否有焦点（失焦时所有动作立即为 false）",
+      "group": "actions",
+      "groupLabel": "输入动作 actions",
+      "kind": "function",
+      "link": "docs/api/actions.md#bweactionsfocused--boolean"
+    },
+    {
+      "name": "bwe.road.hasData",
+      "signature": "bwe.road.hasData() → boolean",
+      "summary": "当前场景是否有路网数据",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadhasdata--boolean"
+    },
+    {
+      "name": "bwe.road.nodeCount",
+      "signature": "bwe.road.nodeCount() → number",
+      "summary": "路网节点数量",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadnodecount--number"
+    },
+    {
+      "name": "bwe.road.edgeCount",
+      "signature": "bwe.road.edgeCount() → number",
+      "summary": "路网路段数量",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadedgecount--number"
+    },
+    {
+      "name": "bwe.road.nodes",
+      "signature": "bwe.road.nodes() → RoadNode[]",
+      "summary": "全部节点 {id, x, y, kind}",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadnodes--roadnode"
+    },
+    {
+      "name": "bwe.road.edges",
+      "signature": "bwe.road.edges() → RoadEdge[]",
+      "summary": "全部路段 {from, to, width, speedLimit, oneway, length}",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadedges--roadedge"
+    },
+    {
+      "name": "bwe.road.node",
+      "signature": "bwe.road.node(id) → RoadNode | null",
+      "summary": "按 id 取节点",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadnodeid--roadnode--null"
+    },
+    {
+      "name": "bwe.road.nearest",
+      "signature": "bwe.road.nearest(x, y) → {id, x, y, kind, dist} | null",
+      "summary": "最近的节点（带距离）",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadnearestx-y--id-x-y-kind-dist--null"
+    },
+    {
+      "name": "bwe.road.route",
+      "signature": "bwe.road.route(from, to) → RoadNode[]",
+      "summary": "最短时间路径（权重 = 长度 / 限速）；不可达 = 空数组",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadroutefrom-to--roadnode"
+    },
+    {
+      "name": "bwe.road.canReach",
+      "signature": "bwe.road.canReach(from, to) → boolean",
+      "summary": "两点是否连通",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadcanreachfrom-to--boolean"
+    },
+    {
+      "name": "bwe.road.routeThrough",
+      "signature": "bwe.road.routeThrough(from, via, to) → RoadNode[]",
+      "summary": "途经点的两段路径（先接客再送客），任一段不可达 = 空",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadroutethroughfrom-via-to--roadnode"
+    },
+    {
+      "name": "bwe.road.cachedRoutes",
+      "signature": "bwe.road.cachedRoutes() → number",
+      "summary": "当前缓存的路径条数（诊断用）",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadcachedroutes--number"
+    },
+    {
+      "name": "bwe.road.clear",
+      "signature": "bwe.road.clear() → boolean",
+      "summary": "清空路径缓存",
+      "group": "road",
+      "groupLabel": "路网 road",
+      "kind": "function",
+      "link": "docs/api/road.md#bweroadclear--boolean"
+    },
+    {
+      "name": "bwe.vehicle.spawn",
+      "signature": "bwe.vehicle.spawn(opts) → Entity | null",
+      "summary": "生成一辆车（opts 与 world.spawn 同构，另认 kind）",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclespawnopts--entity--null"
+    },
+    {
+      "name": "bwe.vehicle.of",
+      "signature": "bwe.vehicle.of(e) → VehicleInfo | null",
+      "summary": "车辆完整状态 {id, kind, speed, speedLimit, heading, damage, driver, autoDrive, ...}",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehicleofe--vehicleinfo--null"
+    },
+    {
+      "name": "bwe.vehicle.isVehicle",
+      "signature": "bwe.vehicle.isVehicle(e) → boolean",
+      "summary": "该实体是否车辆",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehicleisvehiclee--boolean"
+    },
+    {
+      "name": "bwe.vehicle.driver",
+      "signature": "bwe.vehicle.driver(e) → Entity | null",
+      "summary": "该车的驾驶员",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehicledrivere--entity--null"
+    },
+    {
+      "name": "bwe.vehicle.vehicleOf",
+      "signature": "bwe.vehicle.vehicleOf(e) → Entity | null",
+      "summary": "该实体正在驾驶的车",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclevehicleofe--entity--null"
+    },
+    {
+      "name": "bwe.vehicle.enter",
+      "signature": "bwe.vehicle.enter(driver, vehicle) → boolean",
+      "summary": "上车",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehicleenterdriver-vehicle--boolean"
+    },
+    {
+      "name": "bwe.vehicle.exit",
+      "signature": "bwe.vehicle.exit(driver) → boolean",
+      "summary": "下车（车留下）",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehicleexitdriver--boolean"
+    },
+    {
+      "name": "bwe.vehicle.hijack",
+      "signature": "bwe.vehicle.hijack(hijacker, vehicle) → boolean",
+      "summary": "劫车：原驾驶员被踢出并派发 hijack 事件",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclehijackhijacker-vehicle--boolean"
+    },
+    {
+      "name": "bwe.vehicle.throttle",
+      "signature": "bwe.vehicle.throttle(e, v = 1) → boolean",
+      "summary": "油门 0..1",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclethrottlee-v--1--boolean"
+    },
+    {
+      "name": "bwe.vehicle.brake",
+      "signature": "bwe.vehicle.brake(e, v = 1) → boolean",
+      "summary": "制动 0..1",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclebrakee-v--1--boolean"
+    },
+    {
+      "name": "bwe.vehicle.steer",
+      "signature": "bwe.vehicle.steer(e, v = 0) → boolean",
+      "summary": "转向 -1..1",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclesteere-v--0--boolean"
+    },
+    {
+      "name": "bwe.vehicle.speed",
+      "signature": "bwe.vehicle.speed(e) → number",
+      "summary": "当前速度 px/s",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclespeede--number"
+    },
+    {
+      "name": "bwe.vehicle.heading",
+      "signature": "bwe.vehicle.heading(e) → number",
+      "summary": "朝向角度（0 = 朝右，顺时针为正）",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehicleheadinge--number"
+    },
+    {
+      "name": "bwe.vehicle.damage",
+      "signature": "bwe.vehicle.damage(e, n = ?) → number",
+      "summary": "读损伤，或累加损伤后返回 0..1",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehicledamagee-n--number"
+    },
+    {
+      "name": "bwe.vehicle.followRoad",
+      "signature": "bwe.vehicle.followRoad(e, target, {onArrive} = {}) → boolean",
+      "summary": "沿路网自动驾驶到某节点，到达时回调",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclefollowroade-target-onarrive----boolean"
+    },
+    {
+      "name": "bwe.vehicle.stop",
+      "signature": "bwe.vehicle.stop(e) → boolean",
+      "summary": "停车（取消自动驾驶与路线、油门/制动归零、驻车平滑减速到 0）",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclestope--boolean"
+    },
+    {
+      "name": "bwe.vehicle.setSpeed",
+      "signature": "bwe.vehicle.setSpeed(e, v) → boolean",
+      "summary": "本帧把速度直接设为 v（px/s，负=倒车），不经过加减速；下一帧恢复正常物理",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclesetspeede-v--boolean"
+    },
+    {
+      "name": "bwe.vehicle.count",
+      "signature": "bwe.vehicle.count() → number",
+      "summary": "当前车辆总数",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehiclecount--number"
+    },
+    {
+      "name": "bwe.vehicle.on",
+      "signature": "bwe.vehicle.on(\"crash\" | \"hijack\" | \"enter\" | \"exit\" | \"arrive\", fn)",
+      "summary": "订阅车辆事件，返回该函数",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehicleonev-fn--function--null"
+    },
+    {
+      "name": "bwe.vehicle.off",
+      "signature": "bwe.vehicle.off(fn) → boolean",
+      "summary": "摘掉车辆事件回调",
+      "group": "vehicle",
+      "groupLabel": "车辆 vehicle",
+      "kind": "function",
+      "link": "docs/api/vehicle.md#bwevehicleofffn--boolean"
+    },
+    {
+      "name": "bwe.combat.params",
+      "signature": "bwe.combat.params(kind) → WeaponParams | null",
+      "summary": "查武器参数（数据驱动）；未知武器 = null",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatparamskind--weaponparams--null"
+    },
+    {
+      "name": "bwe.combat.weapons",
+      "signature": "bwe.combat.weapons() → string[]",
+      "summary": "全部武器名",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatweapons--string"
+    },
+    {
+      "name": "bwe.combat.hit",
+      "signature": "bwe.combat.hit({from, to, weapon}) → {hit, target, amount, blocked, killed}",
+      "summary": "发起一次攻击并返回结果",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombathitfrom-to-weapon--hit-target-amount-blocked-killed"
+    },
+    {
+      "name": "bwe.combat.defend",
+      "signature": "bwe.combat.defend(e, on = true) → boolean",
+      "summary": "开/关格挡",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatdefende-on--true--boolean"
+    },
+    {
+      "name": "bwe.combat.defending",
+      "signature": "bwe.combat.defending(e) → boolean",
+      "summary": "是否在格挡",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatdefendinge--boolean"
+    },
+    {
+      "name": "bwe.combat.setDefense",
+      "signature": "bwe.combat.setDefense(e, v = 0.5) → boolean",
+      "summary": "格挡减伤系数 0..1",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatsetdefensee-v--05--boolean"
+    },
+    {
+      "name": "bwe.combat.weapon",
+      "signature": "bwe.combat.weapon(e, name = ?) → string | boolean",
+      "summary": "读武器（不传 name）或换武器（传 name，未知武器返回 false）",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatweapone-name--string--boolean"
+    },
+    {
+      "name": "bwe.combat.weaponOf",
+      "signature": "bwe.combat.weaponOf(e) → string",
+      "summary": "该实体当前武器名",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatweaponofe--string"
+    },
+    {
+      "name": "bwe.combat.switchWeapon",
+      "signature": "bwe.combat.switchWeapon(e) → string | boolean",
+      "summary": "循环切到下一把武器，返回新武器名",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatswitchweapone--string--boolean"
+    },
+    {
+      "name": "bwe.combat.ammo",
+      "signature": "bwe.combat.ammo(e) → number",
+      "summary": "当前弹药",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatammoe--number"
+    },
+    {
+      "name": "bwe.combat.setAmmo",
+      "signature": "bwe.combat.setAmmo(e, n) → boolean",
+      "summary": "设置弹药",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatsetammoe-n--boolean"
+    },
+    {
+      "name": "bwe.combat.on",
+      "signature": "bwe.combat.on(\"kill\" | \"damage\", fn({event, from, to, amount, killed}))",
+      "summary": "订阅战斗事件，返回该函数",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatonkill--damage-fn--function--null"
+    },
+    {
+      "name": "bwe.combat.off",
+      "signature": "bwe.combat.off(fn) → boolean",
+      "summary": "摘掉战斗事件回调",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatofffn--boolean"
+    },
+    {
+      "name": "bwe.combat.inRange",
+      "signature": "bwe.combat.inRange(a, b, range = 无限) → boolean",
+      "summary": "两点距离是否在射程内",
+      "group": "combat",
+      "groupLabel": "战斗 combat",
+      "kind": "function",
+      "link": "docs/api/combat.md#bwecombatinrangea-b-range--boolean"
+    },
+    {
+      "name": "bwe.debug.on",
+      "signature": "bwe.debug.on() → boolean",
+      "summary": "打开调试绘制总开关",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugon--boolean"
+    },
+    {
+      "name": "bwe.debug.off",
+      "signature": "bwe.debug.off() → boolean",
+      "summary": "关闭总开关并复位所有逐项开关",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugoff--boolean"
+    },
+    {
+      "name": "bwe.debug.enabled",
+      "signature": "bwe.debug.enabled() → boolean",
+      "summary": "当前是否开启",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugenabled--boolean"
+    },
+    {
+      "name": "bwe.debug.colliders",
+      "signature": "bwe.debug.colliders(on = true) → boolean",
+      "summary": "画所有有碰撞盒的实体",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugcolliderson--true--boolean"
+    },
+    {
+      "name": "bwe.debug.paths",
+      "signature": "bwe.debug.paths(on = true) → boolean",
+      "summary": "画沿路径跟随的实体的路径",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugpathson--true--boolean"
+    },
+    {
+      "name": "bwe.debug.zones",
+      "signature": "bwe.debug.zones(on = true) → boolean",
+      "summary": "画空间区域边界",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugzoneson--true--boolean"
+    },
+    {
+      "name": "bwe.debug.nav",
+      "signature": "bwe.debug.nav(on = true) → boolean",
+      "summary": "画瓦片阻挡图（小地图开销大，慎用）",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugnavon--true--boolean"
+    },
+    {
+      "name": "bwe.debug.box",
+      "signature": "bwe.debug.box(x, y, w, h, color = \"#00ff88\")",
+      "summary": "单次画矩形",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugboxx-y-w-h-color--00ff88"
+    },
+    {
+      "name": "bwe.debug.circle",
+      "signature": "bwe.debug.circle(x, y, r, color = \"#00ff88\")",
+      "summary": "单次画圆",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugcirclex-y-r-color--00ff88"
+    },
+    {
+      "name": "bwe.debug.line",
+      "signature": "bwe.debug.line(x1, y1, x2, y2, color = \"#00ff88\")",
+      "summary": "单次画线",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebuglinex1-y1-x2-y2-color--00ff88"
+    },
+    {
+      "name": "bwe.debug.actor",
+      "signature": "bwe.debug.actor(e, color = \"#00ff88\")",
+      "summary": "画某实体的碰撞框",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugactore-color--00ff88"
+    },
+    {
+      "name": "bwe.debug.stats",
+      "signature": "bwe.debug.stats() → {actors, pendingDestroy, sceneEpoch, colliders, vehicles, spatialZones, drawCommands, enabled}",
+      "summary": "运行时统计（性能水位观察）",
+      "group": "debug",
+      "groupLabel": "调试 debug",
+      "kind": "function",
+      "link": "docs/api/debug.md#bwedebugstats--actors-pendingdestroy-sceneepoch-colliders-vehicles-spatialzones-drawcommands-enabled"
+    },
+    {
+      "name": "bwe.world",
+      "signature": "bwe.world → World",
+      "summary": "World 命名空间",
+      "group": "world",
+      "groupLabel": "世界 world",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/world.md"
+    },
+    {
+      "name": "bwe.input",
+      "signature": "bwe.input → Input",
+      "summary": "Input 命名空间",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md#bweinput--bwecamera--bwetime--输入--相机--时间"
+    },
+    {
+      "name": "bwe.stick",
+      "signature": "bwe.stick → Stick",
+      "summary": "Stick 命名空间",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.stick.mount",
+      "signature": "bwe.stick.mount(spec?: string) → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.stick.unmount",
+      "signature": "bwe.stick.unmount() → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.stick.show",
+      "signature": "bwe.stick.show() → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.stick.hide",
+      "signature": "bwe.stick.hide() → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.stick.opacity",
+      "signature": "bwe.stick.opacity(value: number) → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.stick.axis",
+      "signature": "bwe.stick.axis() → Vec2",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.stick.down",
+      "signature": "bwe.stick.down(id: string) → boolean",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.stick.mounted",
+      "signature": "bwe.stick.mounted → boolean",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "input",
+      "groupLabel": "输入 input",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.board",
+      "signature": "bwe.board → Board",
+      "summary": "Board 命名空间",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md"
+    },
+    {
+      "name": "bwe.board.mounted",
+      "signature": "bwe.board.mounted → boolean",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md"
+    },
+    {
+      "name": "bwe.board.size",
+      "signature": "bwe.board.size() → { rows: number; cols: number; count: number }",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md"
+    },
+    {
+      "name": "bwe.board.opened",
+      "signature": "bwe.board.opened(idx: number) → boolean",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md"
+    },
+    {
+      "name": "bwe.board.flagged",
+      "signature": "bwe.board.flagged(idx: number) → boolean",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md"
+    },
+    {
+      "name": "bwe.board.indexAt",
+      "signature": "bwe.board.indexAt(wx: number, wy: number) → number",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md"
+    },
+    {
+      "name": "bwe.board.open",
+      "signature": "bwe.board.open(idx: number) → boolean",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md"
+    },
+    {
+      "name": "bwe.board.toggle",
+      "signature": "bwe.board.toggle(idx: number) → boolean",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md"
+    },
+    {
+      "name": "bwe.board.floodCount",
+      "signature": "bwe.board.floodCount(idx: number) → number",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md"
+    },
+    {
+      "name": "bwe.textinput",
+      "signature": "bwe.textinput → TextInput",
+      "summary": "TextInput 命名空间",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.textinput.define",
+      "signature": "bwe.textinput.define(id: string, value: string | number, min?: number, max?: number, numeric?: boolean) → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.textinput.rect",
+      "signature": "bwe.textinput.rect(id: string, nx: number, ny: number, nw: number, nh: number) → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.textinput.value",
+      "signature": "bwe.textinput.value(id: string) → string",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.textinput.number",
+      "signature": "bwe.textinput.number(id: string, fallback: number) → number",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.textinput.setValue",
+      "signature": "bwe.textinput.setValue(id: string, value: string) → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.textinput.active",
+      "signature": "bwe.textinput.active() → string",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.textinput.cancel",
+      "signature": "bwe.textinput.cancel() → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.textinput.onSubmit",
+      "signature": "bwe.textinput.onSubmit(fn: (id: string, text: string) => void) → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.textinput.editing",
+      "signature": "bwe.textinput.editing → string | false",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.camera",
+      "signature": "bwe.camera → Camera",
+      "summary": "Camera 命名空间",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md#bweinput--bwecamera--bwetime--输入--相机--时间"
+    },
+    {
+      "name": "bwe.camera.size",
+      "signature": "bwe.camera.size → { w: number; h: number }",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "camera",
+      "groupLabel": "相机 camera",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md"
+    },
+    {
+      "name": "bwe.time",
+      "signature": "bwe.time → Time",
+      "summary": "Time 命名空间",
+      "group": "time",
+      "groupLabel": "时间 time",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/input-camera-time.md#bweinput--bwecamera--bwetime--输入--相机--时间"
+    },
+    {
+      "name": "bwe.draw",
+      "signature": "bwe.draw → Draw",
+      "summary": "Draw 命名空间",
+      "group": "draw",
+      "groupLabel": "绘制 draw",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/draw-audio-save.md#一bwedraw--立即模式绘制"
+    },
+    {
+      "name": "bwe.audio",
+      "signature": "bwe.audio → Audio",
+      "summary": "Audio 命名空间",
+      "group": "audio",
+      "groupLabel": "音频 audio",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/draw-audio-save.md#二bweaudio--音频"
+    },
+    {
+      "name": "bwe.mine",
+      "signature": "bwe.mine → Mine",
+      "summary": "Mine 命名空间",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.mine.set",
+      "signature": "bwe.mine.set(cfg: MineConfig) → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.mine.reset",
+      "signature": "bwe.mine.reset() → void",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.mine.state",
+      "signature": "bwe.mine.state() → MineState",
+      "summary": "仅类型声明（docs/api 没有速查条目）",
+      "group": "field",
+      "groupLabel": "格子场 field",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/emergence.md"
+    },
+    {
+      "name": "bwe.save",
+      "signature": "bwe.save → Save",
+      "summary": "Save 命名空间",
+      "group": "save",
+      "groupLabel": "存档 save",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/draw-audio-save.md#三bwesave--本地-json-存档"
+    },
+    {
+      "name": "bwe.grid",
+      "signature": "bwe.grid → Grid",
+      "summary": "Grid 命名空间",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md#一bwegrid--网格换算"
+    },
+    {
+      "name": "bwe.tilemap",
+      "signature": "bwe.tilemap → Tilemap",
+      "summary": "Tilemap 命名空间",
+      "group": "map",
+      "groupLabel": "网格与瓦片 grid / tilemap",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md#二bwetilemap--瓦片地图"
+    },
+    {
+      "name": "bwe.nav",
+      "signature": "bwe.nav → Nav",
+      "summary": "Nav 命名空间",
+      "group": "nav",
+      "groupLabel": "寻路 nav",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md#三bwenav--寻路"
+    },
+    {
+      "name": "bwe.interact",
+      "signature": "bwe.interact → Interact",
+      "summary": "Interact 命名空间",
+      "group": "interact",
+      "groupLabel": "交互 interact",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md#四bweinteract--交互"
+    },
+    {
+      "name": "bwe.spawner",
+      "signature": "bwe.spawner → Spawner",
+      "summary": "Spawner 命名空间",
+      "group": "spawner",
+      "groupLabel": "生成器 spawner",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/map-nav-interact-spawner.md#五bwespawner--刷怪器"
+    },
+    {
+      "name": "bwe.prefab",
+      "signature": "bwe.prefab → Prefab",
+      "summary": "Prefab 命名空间",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/prefab.md#一bweprefab-成员一览"
+    },
+    {
+      "name": "bwe.pool",
+      "signature": "bwe.pool → Pool",
+      "summary": "Pool 命名空间",
+      "group": "prefab",
+      "groupLabel": "预制体 prefab / pool",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/prefab.md#二bwepool-成员一览"
+    },
+    {
+      "name": "bwe.scripts",
+      "signature": "bwe.scripts → Scripts",
+      "summary": "Scripts 命名空间",
+      "group": "util",
+      "groupLabel": "辅助函数",
+      "kind": "typeOnly",
+      "typeOnly": true,
+      "link": "docs/api/lifecycle.md"
+    }
+  ]
+}

@@ -38,7 +38,8 @@ export const CATEGORIES: Record<ModuleCategoryId, { label: string; en: string; b
   combat: { label: "战斗", en: "Combat", blurb: "生命值、攻击、伤害、死亡", color: "var(--cat-combat)" },
   dialogue: { label: "对话", en: "Dialogue", blurb: "气泡台词、对话框、分支选项", color: "var(--cat-dialogue)" },
   fx: { label: "表现", en: "Feedback", blurb: "音效、音乐、特效、震屏、转场", color: "var(--cat-fx)" },
-  game: { label: "玩法", en: "Gameplay", blurb: "棋盘、换装、小游戏规则", color: "var(--cat-game)" }
+  grid: { label: "网格", en: "Grid", blurb: "格子棋盘、格子渲染、翻开与标记规则", color: "var(--cat-grid)" },
+  game: { label: "玩法", en: "Gameplay", blurb: "完整小游戏组合、换装", color: "var(--cat-game)" }
 };
 
 /** 游戏对象类型。 */

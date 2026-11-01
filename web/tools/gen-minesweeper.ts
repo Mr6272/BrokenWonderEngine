@@ -134,6 +134,7 @@ function buildScene(assets: any[]): SceneModel {
       cols: "16",
       mines: "40",
       cellSize: "32",
+      mode: "普通 Normal",
       winCondition: "清空所有安全格 Clear Safe Cells",
       firstClickSafe: "开",
       rightClickFlag: "开",

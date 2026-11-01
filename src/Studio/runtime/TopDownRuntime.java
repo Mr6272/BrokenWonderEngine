@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -131,6 +132,10 @@ public final class TopDownRuntime implements GLEventListener {
 
     private Actor player;
     Minesweeper minesweeper;
+    /** 虚拟摇杆/按键（bwe.stick）：引擎内建模块，绘制在最上层并优先消费触摸。 */
+    ScriptStick stick;
+    /** 文本输入框（bwe.textinput）：点一下就能直接键入数字/文字，两端共用状态机。 */
+    ScriptTextInput textInput;
     private final List<DressPart> dressParts = new ArrayList<>();
     private GameData.RtObject dressController;
     private String dressTag = "";
@@ -146,6 +151,10 @@ public final class TopDownRuntime implements GLEventListener {
     private boolean dumpedFrame = false;
     private boolean loggedScaleInfo = false;
     private int clickLogCount = 0;
+    /** 当前触摸是否被虚拟摇杆占用（占用时 pointer 移动交给摇杆）。 */
+    boolean stickTouchActive = false;
+    /** 点击标记诊断：屏幕坐标 + 世界坐标 + 存活帧数（排查「点击与画面错位」用）。 */
+    private int dbgMatrixProbe = 0;
     private FPSAnimator animator;
     private String lastTitle = "";
     private boolean loggedDisplayError = false;
@@ -353,109 +362,7 @@ public final class TopDownRuntime implements GLEventListener {
         batchTexture = -1;
     }
 
-    static final class Texture {
-        int id;
-        int w;
-        int h;
-    }
 
-    static final class Actor {
-        GameData.RtObject o;
-        float x;
-        float y;
-        float faceX = 0f;
-        float faceY = 1f;
-        float hp = 10f;
-        float hpMax = 10f;
-        boolean dead;
-        float animT;
-        int animIdx;
-
-        /**
-         * 稳定唯一 id（首次被 {@code bwe.collision} 用到时由静态计数器分配）。
-         *
-         * <p>为什么不用 {@code o.id}：脚本 {@code spawn()} 出来的实体的 {@code o.id}
-         * 可能是空串或重复（编辑器生成的 uuid 与运行期生成的对象混在一起）。
-         * 碰撞 pair 的 key 必须<b>严格唯一且稳定</b>，否则会出现"同一对物体反复 enter/exit"。
-         */
-        long uid;
-
-        /** 是否传感器（触发区）：不参与碰撞求解，只派发 trigger 事件。 */
-        boolean trigger;
-
-        /**
-         * 实体当前所在楼层序号（<b>空间归属的权威值</b>）。
-         *
-         * <p>为什么必须存状态、不能只按坐标现算：俯视角下各楼层在 2D 空间上
-         * <b>完全重叠</b>（二楼房间的 AABB 与一楼一模一样）。只按 (x,y) 反查区域，
-         * 永远只能查到"后建的那个 zone"，等于分不出楼层 —— NPC 就会"穿楼板"。
-         * 所以楼层归属由 <b>link 驱动</b>：走楼梯 / 电梯时改写这个值；只有通过 link
-         * 才能改变层级。这正是任务书「NPC 不能穿过楼板寻路」的落地方式。
-         *
-         * <p>缺省 -1 = 尚未解析（由位置推导一次，见 {@code ScriptSpatial.resolveLevel}）。
-         */
-        int floorLevel = -1;
-
-        GameData.RtAsset asset;
-        final List<Texture> textures = new ArrayList<>();
-        final List<Frame> frames = new ArrayList<>();
-        int texW;
-        int texH;
-
-        DressPart dress;
-        Minesweeper mine;
-
-        float baseX;
-        float baseY;
-        float wanderT;
-        float wanderDirX;
-        float wanderDirY;
-
-        /**
-         * 纯色块颜色的解析缓存（{@code props.color}）。
-         *
-         * <p>无贴图对象每帧都要取颜色，而 HashMap 查 props + 解析 "#rrggbb" 是热路径开销。
-         * 缓存按「props 表身份 + 原始字符串」校验，所以脚本改了 color 会立刻生效。
-         */
-        java.util.Map<String, String> colorCacheProps;
-        String colorCacheRaw;
-        java.awt.Color colorCache;
-
-        /**
-         * 染色（0~1 的 r,g,b,a 乘数）。{@code null} = 不染色，走最快的原路径。
-         * 由脚本 {@code e.setColor(r,g,b,a)} 设置 —— 存在 Actor 上而不是 Map 里，
-         * 因为这是每帧每精灵都要读的热字段；Map 查询会让染色实例的绘制成本翻倍。
-         */
-        float[] tint;
-        /** 染色乘数缓存（避免每帧从 float[] 拆包 4 次）。 */
-        float tintR = 1f;
-        float tintG = 1f;
-        float tintB = 1f;
-        float tintA = 1f;
-        /** 染色版本号：脚本改了颜色就 +1，渲染侧据此决定要不要重新拆包。 */
-        int tintVersion;
-        int tintAppliedVersion = -1;
-
-        /**
-         * 绘制尺寸的缓存 + 它的原始输入。{@code sizeOf()} 要读 props 的 "w"/"h"
-         * （HashMap 查找 + parseFloat），而 drawActor/drawHp 一帧内会问 5~7 次。
-         * 缓存<b>按输入校验</b>（不是按帧），所以脚本在同一帧内改尺寸也能立刻生效。
-         */
-        float cachedW;
-        float cachedH;
-        /** 缓存失效标记：-1 = 从没算过。 */
-        int sizeStamp = -1;
-        // 缓存对应的原始输入（用于下次校验）
-        float sigHalfW;
-        float sigHalfH;
-        float sigScaleX;
-        float sigScaleY;
-        int sigTexW;
-        int sigTexH;
-        GameData.RtAsset sigAsset;
-        float sigPropsW;
-        float sigPropsH;
-    }
 
     /** 脚本侧设置染色（包内可见，ScriptApi 调）。null / 缺省 = 清除染色。 */
     void setActorTint(Actor a, float[] rgba) {
@@ -475,7 +382,7 @@ public final class TopDownRuntime implements GLEventListener {
         a.tintVersion++;
     }
 
-    private static final class Frame {
+    static final class Frame {
         Texture texture;
         float u0, v0, u1, v1;
 
@@ -492,18 +399,63 @@ public final class TopDownRuntime implements GLEventListener {
      * 只读数据 + 建 Actor，不碰 OpenGL：LayoutDump 也走这个入口，
      * 保证「自检看到的布局」和「真正画出来的布局」是同一份代码算的。
      */
+    /**
+     * 无数据构造：给单元测试用（摇杆/输入这类纯状态逻辑不需要加载工程）。
+     *
+     * <p>只初始化能安全初始化的字段；{@code data}/{@code scene} 保持 null，
+     * 任何碰地图/渲染的代码在测试里都不该被调用。
+     */
+    static TopDownRuntime newStub() {
+        try {
+            return new TopDownRuntime();
+        } catch (Exception e) {
+            throw new IllegalStateException("无法创建测试桩", e);
+        }
+    }
+
+    private TopDownRuntime() {
+        this.bootFile = null;
+        this.data = null;
+        this.scene = null;
+        this.assetRoot = null;
+        this.stick = new ScriptStick(this);
+        this.textInput = new ScriptTextInput();
+        this.textInput.setKeyboardHost(visible -> { });
+    }
+
     TopDownRuntime(File bootFile) throws IOException {
         this.bootFile = bootFile;
         this.data = GameData.load(bootFile);
         this.assetRoot = GameData.resolveRoot(bootFile);
         if (data.scenes.isEmpty()) {
-            throw new IOException("boot.json 里没有场景");
+            // 只有 UI 场景的工程：运行时也得能起来（否则用户在编辑器里做的第一版界面
+            // 一打包就黑屏崩溃）。用一张最小空地图兜底，界面层照常叠在上面。
+            if (!data.uiScenes.isEmpty()) {
+                BweLauncher.log(bootFile, "[UI] boot.json 没有世界场景，使用空地图兜底（界面临时层仍会绘制）");
+                this.sceneName = data.uiScenes.get(0).name;
+                GameData.RtScene emptyScene = new GameData.RtScene();
+                emptyScene.width = 60;
+                emptyScene.height = 40;
+                emptyScene.tileSize = Math.max(1, data.tileSize);
+                this.scene = emptyScene;
+            } else {
+                throw new IOException("boot.json 里没有场景");
+            }
+        } else {
+            GameData.SceneRef ref = data.scenes.get(0);
+            this.sceneName = ref.name;
+            File sceneFile = new File(bootFile.getParentFile(), ref.file);
+            this.scene = GameData.loadScene(sceneFile, data.tileSize);
         }
-        GameData.SceneRef ref = data.scenes.get(0);
-        this.sceneName = ref.name;
-        File sceneFile = new File(bootFile.getParentFile(), ref.file);
-        this.scene = GameData.loadScene(sceneFile, data.tileSize);
+        // UI 场景：世界场景就绪后再载入（顺序无所谓，但失败必须只告警不中断 ——
+        // 界面画不出来是「难看」，起不来是「不能用」，后者严重得多）。
+        loadUiScenes();
         spawn();
+        // 虚拟摇杆：默认不 mount（由脚本调 bwe.stick.mount() 启用）。
+        this.stick = new ScriptStick(this);
+        this.textInput = new ScriptTextInput();
+        // 桌面端有物理键盘，软键盘后端是空实现（接口存在只为两端统一）。
+        this.textInput.setKeyboardHost(visible -> { });
         // 脚本要在场景对象就绪后启动（onStart 里可能马上要 find/spawn）。
         try {
             this.scripts = new ScriptEngine(this);
@@ -512,6 +464,86 @@ public final class TopDownRuntime implements GLEventListener {
             this.scripts = null;
             BweLauncher.log(bootFile, "[脚本] 引擎初始化失败: " + t);
         }
+    }
+
+    // ---------------- UI 场景 ----------------
+
+    /**
+     * 已载入的 UI 场景层（按 {@code boot.uiScenes[]} 顺序，后面的画在上面）。
+     *
+     * <p>每个层持有自己的 {@code RtScene}（沿用同一套对象模型）与 Actor 表。
+     * 绘制时按「设计分辨率 → 视口等比 contain 居中」做一次缩放，所以 1280×720 的
+     * 设计稿在任何窗口尺寸下都完整可见，相对位置比例不变。
+     *
+     * <p><b>为什么不复用 {@code actors}</b>：世界 Actor 会被玩法模块（物理/碰撞/寻路/
+     * 相机/bwe.world.find）当成「活物」处理 —— 把界面文字塞进去就会跟着角色一起被推、
+     * 被物理步进。分开一张表，世界逻辑一行都不用改。
+     */
+    private static final class UiLayer {
+        final GameData.RtScene scene;
+        final java.util.List<Actor> actors = new java.util.ArrayList<Actor>();
+
+        UiLayer(GameData.RtScene scene) {
+            this.scene = scene;
+        }
+    }
+
+    private final java.util.List<UiLayer> uiLayers = new java.util.ArrayList<UiLayer>();
+
+    /** 载入 boot.json 里列出的全部 UI 场景。失败只告警不中断（起不来比难看严重）。 */
+    private void loadUiScenes() {
+        uiLayers.clear();
+        if (data == null || data.uiScenes.isEmpty()) {
+            return;
+        }
+        for (GameData.UiSceneRef ref : data.uiScenes) {
+            File f = new File(bootFile.getParentFile(), ref.file);
+            try {
+                GameData.RtScene s = GameData.loadScene(f, 1);
+                if (!s.ui) {
+                    s.ui = true;
+                }
+                UiLayer layer = new UiLayer(s);
+                for (GameData.RtObject o : s.objects) {
+                    Actor a = new Actor();
+                    a.o = o;
+                    a.x = o.x;
+                    a.y = o.y;
+                    a.baseX = o.x;
+                    a.baseY = o.y;
+                    a.asset = o.asset != null ? o.asset : data.assetById(o.assetId);
+                    if (a.asset == null) {
+                        a.asset = data.assetByName(o.assetName);
+                    }
+                    loadActorFrames(a);
+                    layer.actors.add(a);
+                }
+                uiLayers.add(layer);
+                int w = s.designW > 0 ? s.designW : s.width;
+                int h = s.designH > 0 ? s.designH : s.height;
+                BweLauncher.log(bootFile, "[UI] 已载入 UI 场景「" + ref.name + "」 "
+                        + w + "×" + h + "，对象 " + s.objects.size() + " 个");
+            } catch (Throwable t) {
+                BweLauncher.log(bootFile, "[UI] UI 场景载入失败（跳过，不影响游戏本体）: " + ref.file + " → " + t);
+            }
+        }
+    }
+
+    /** UI 场景在设计分辨率里的宽高（导出时 width×tileSize 已等于设计像素，这里再做一次兜底）。 */
+    private static float uiSceneW(GameData.RtScene s) {
+        if (s.designW > 0) {
+            return s.designW;
+        }
+        float v = s.width * (float) Math.max(1, s.tileSize);
+        return v > 0f ? v : 1280f;
+    }
+
+    private static float uiSceneH(GameData.RtScene s) {
+        if (s.designH > 0) {
+            return s.designH;
+        }
+        float v = s.height * (float) Math.max(1, s.tileSize);
+        return v > 0f ? v : 720f;
     }
 
     // ---------------- 启动 ----------------
@@ -571,8 +603,34 @@ public final class TopDownRuntime implements GLEventListener {
         canvas.addGLEventListener(this);
         canvas.addKeyListener(new KeyAdapter() {
             @Override
+            public void keyTyped(KeyEvent e) {
+                // 字符输入（真正的「敲了什么字」）：输入框激活时优先给它。
+                // keyPressed 拿到的是键码（VK_0..VK_9），那是「按了哪个键」，
+                // 要还原成数字字符得另外映射；keyTyped 直接给字符，更可靠。
+                if (textInput != null && textInput.isActive()) {
+                    textInput.type(e.getKeyChar());
+                    e.consume();
+                }
+            }
+
+            @Override
             public void keyPressed(KeyEvent e) {
                 int code = e.getKeyCode();
+                // 输入框激活时，Esc = 取消编辑，其它按键别触发游戏快捷键
+                // （否则一边输入行数一边按 R 就把局面重置了）。
+                if (textInput != null && textInput.isActive()) {
+                    if (code == KeyEvent.VK_ESCAPE) {
+                        textInput.cancelKey();
+                        e.consume();
+                        return;
+                    }
+                    if (code == KeyEvent.VK_ENTER) {
+                        textInput.commitActive();
+                        e.consume();
+                        return;
+                    }
+                    // 其余按键继续往下走（退格由 keyTyped 处理）
+                }
                 if (code >= 0 && code < keys.length) {
                     keys[code] = true;
                 }
@@ -775,23 +833,59 @@ public final class TopDownRuntime implements GLEventListener {
     }
 
     private void handleClick(MouseEvent e) {
-        // 鼠标是屏幕坐标，玩法判定是世界坐标：必须走视口逆变换（含 zoom / 居中偏移）。
-        int wx = Math.round(view.toWorldX(e.getX()));
-        int wy = Math.round(view.toWorldY(e.getY()));
-        if (clickLogCount < 3) {
-            clickLogCount++;
-            BweLauncher.log(bootFile, "点击诊断: 组件坐标=(" + e.getX() + "," + e.getY() + ")"
-                    + " 组件尺寸=" + (canvas == null ? "?" : canvas.getWidth() + "x" + canvas.getHeight())
-                    + " 视口=" + viewW + "x" + viewH
-                    + " drawable=" + drawableW + "x" + drawableH
-                    + " → 世界=(" + wx + "," + wy + ") " + view.describe());
+        clickAt(e.getX(), e.getY(), e.getButton() == MouseEvent.BUTTON3);
+    }
+
+    /**
+     * 平台无关的点击入口：<b>屏幕坐标 + 是否右键</b>。
+     *
+     * <p>桌面端（AWT MouseEvent）与 Android（触摸手势识别成左/右键）共用这一份逻辑 ——
+     * 不复制判定流程，避免两端行为分叉。手机上没有右键，所以由宿主把「长按」映射成
+     * {@code right=true}（扫雷的插旗就是右键语义）。
+     *
+     * <p>注释里的「鼠标是屏幕坐标、玩法判定是世界坐标」约束在这里统一处理：
+     * 内部走视口逆变换（含 zoom / 居中偏移）。
+     *
+     * @param sx    组件/视口内屏幕坐标 X
+     * @param sy    组件/视口内屏幕坐标 Y
+     * @param right true = 右键（插旗/次要动作），false = 左键（主要动作）
+     */
+    /** 指针移动（触摸拖动时）：摇杆占用则更新轴值，否则只同步鼠标坐标。 */
+    void pointerMoveAt(int sx, int sy) {
+        mouseX = sx;
+        mouseY = sy;
+        if (stick != null && stickTouchActive) {
+            stick.pointerMove(0, sx, sy);
         }
-        boolean right = e.getButton() == MouseEvent.BUTTON3;
-        mouseX = e.getX();
-        mouseY = e.getY();
+    }
+
+    /** 指针抬起：释放摇杆占用。 */
+    void pointerUpAt() {
+        if (stick != null) {
+            stick.releaseAll();
+        }
+        stickTouchActive = false;
+    }
+
+    void clickAt(int sx, int sy, boolean right) {
+        int wx = Math.round(view.toWorldX(sx));
+        int wy = Math.round(view.toWorldY(sy));
+        mouseX = sx;
+        mouseY = sy;
+        // 虚拟摇杆优先：手指落在摇杆/按键上时，这次点击被它消费，不传给场景
+        // （否则「点摇杆」会顺带把地图点一下）。
+        if (stick != null && stick.pointerDown(0, sx, sy)) {
+            stickTouchActive = true;
+            return;
+        }
+        stickTouchActive = false;
+        // 输入框优先于场景：点击框即激活并弹软键盘；点框外=提交。
+        if (textInput != null && textInput.pointerDown(sx, sy, viewW, viewH)) {
+            return;
+        }
         // 脚本先拿点击（目前统一派发，不阻断可视化模块的行为）。
         if (scripts != null) {
-            scripts.pointerDown(wx, wy, right, e.getX(), e.getY());
+            scripts.pointerDown(wx, wy, right, sx, sy);
         }
         if (minesweeper != null && minesweeper.click(wx, wy, right)) {
             updateTitle();
@@ -857,10 +951,22 @@ public final class TopDownRuntime implements GLEventListener {
         }
 
         for (Actor a : actors) {
-            GameData.RtModule mineMod = data.module(a.o, "game.minesweeper", "game.minesweeper");
-            if (mineMod != null && minesweeper == null) {
-                minesweeper = new Minesweeper(this, a, mineMod);
-                a.mine = minesweeper;
+            // 网格类模块：game.minesweeper 是「全开」组合，grid.* 是可选能力。
+            // 任何对象只要挂 game.minesweeper 或任一 grid.*，都走这条路径建棋盘。
+            GridModules.Bundle grid = GridModules.Bundle.of(a.o);
+            // 只要挂了任一网格模块就建棋盘（grid.tile / grid.reveal / grid.flag 单独挂也成立，
+            // 否则「只挂 grid.reveal」会因为没有 grid.board 而静默不生效）。
+            if (grid.any()) {
+                // 参数要从**所有**网格模块合并：拆分后 rows/cols 在 grid.board、
+                // firstClickSafe 在 grid.reveal、rightClickFlag 在 grid.flag……
+                // 只读某一个模块会丢掉其它模块的参数（那正是拆分后最容易漏的地方）。
+                GameData.RtModule merged = GridModules.Bundle.mergedParams(a.o, "grid.board");
+                if (minesweeper == null) {
+                    minesweeper = new Minesweeper(this, a, merged, grid);
+                    a.mine = minesweeper;
+                    BweLauncher.log(bootFile, "网格模块: " + grid.describe()
+                            + " 参数源=" + merged.def + " 对象=" + a.o.name);
+                }
             }
             if (dressController == null) {
                 GameData.RtModule dressMod = data.module(a.o, "game.dressup", "game.dressup");
@@ -1415,7 +1521,89 @@ public final class TopDownRuntime implements GLEventListener {
     final Map<Texture, BufferedImage> pendingUploads = new HashMap<>();
     private final List<Texture> uploadedTextures = new ArrayList<>();
 
-    private void uploadTextures(GL2 gl) {
+    /** 每个已上传纹理的<b>源位图</b>（GL 上下文重建时要拿它重新上传）。 */
+    private final Map<Texture, BufferedImage> textureSources = new IdentityHashMap<>();
+
+    /**
+     * <b>GL 上下文重建后，在新上下文里重建所有 GPU 资源。</b>
+     *
+     * <p><b>为什么必须有这个方法（「偶发黑屏」的根因）</b>：纹理 id、显示列表 id 都隶属于
+     * <b>某一个 GL 上下文</b>。Android 上上下文会因切后台 / 内存压力 / 旋转 / 驱动重置
+     * 而丢失并重建，重建后旧 id 全部失效 —— 但引擎侧仍持有它们并继续 {@code glBindTexture}，
+     * 结果就是<b>静默黑屏</b>：不报错、不崩溃、只是不显示。
+     *
+     * <p>做法是让所有 GPU 资源「重新申请」：
+     * <ul>
+     *   <li>每个已上传纹理的 id 置回 -1，并把<b>源位图</b>重新放进 {@link #pendingUploads}，
+     *       这样下次 {@link #uploadTextures} 会重新 {@code glGenTextures} 并上传像素；</li>
+     *   <li>丢弃显示列表 id（地图合批缓存），下次按需重建；</li>
+     *   <li>清掉文字纹理缓存（同样全是旧上下文的 id）；</li>
+     *   <li>让玩法模块（扫雷棋盘）把自绘纹理标脏、整块重画。</li>
+     * </ul>
+     *
+     * <p>本方法<b>不改任何 CPU 侧状态</b>（棋盘进度、脚本、对象位置），所以玩家进度不会丢。
+     */
+    void rebuildGpuResources() {
+        // ① 待删队列里的纹理属于旧上下文，新上下文里 delete 它们毫无意义
+        //    （id 可能恰好被新上下文复用成别人的纹理 → 删掉别人的画）。
+        //    直接丢弃登记，别让 flushPendingDeletes 在新上下文里乱删。
+        pendingDeletes.clear();
+
+        // ② <b>先</b>让玩法模块丢弃自绘纹理，并把那张纹理从「待重建」名单里摘掉。
+        //
+        // ⚠ 顺序很关键：早先写成「先重新排队所有纹理、再让模块丢引用」。
+        // 模块把引用丢了、下一帧自己 new 一张新的 —— 而旧的已经在队列里，
+        // 会被照常上传，变成一张谁都不画、也没人删的 GPU 纹理（每次切窗口泄漏一张）。
+        // 所以这里先丢弃、再按「仍在被引用」来重建。
+        Texture orphanedBoard = null;
+        if (minesweeper != null) {
+            orphanedBoard = minesweeper.invalidateTexture();
+        }
+
+        // ③ 每个仍在使用的纹理：id 作废、源位图重新排队。
+        for (Texture t : new ArrayList<>(uploadedTextures)) {
+            if (t == orphanedBoard) {
+                // 已被模块丢弃：不再重建（新纹理由模块自己申请），也从队列里清掉。
+                pendingUploads.remove(t);
+                continue;
+            }
+            BufferedImage src = textureSources.get(t);
+            t.id = -1;
+            if (src != null) {
+                pendingUploads.put(t, src);
+            }
+        }
+        uploadedTextures.clear();
+        textureSources.clear();
+
+        // ③ 按文件路径共享纹理的 {@code textureCache}：<b>不能清空</b>。
+        //    它缓存的是 Texture 对象本身，而这些对象已经在第 ② 步重新排进 pendingUploads；
+        //    清空索引会把它们变成不可达对象，下次 textureForFile 重新 readImage + new Texture，
+        //    旧对象就永远卡在 pendingUploads 里（显存与位图两头泄漏）。
+        //    保留索引后，下次取到的是同一个「id=-1、已排队」的对象，uploadTextures 会重新
+        //    glGenTextures 并上传。
+
+        // ④ 显示列表属于旧上下文
+        mapListId = 0;
+        mapListW = 0;
+        mapListH = 0;
+        mapListTile = 0;
+
+        // ⑤ 文字纹理缓存全是旧 id（缓存在 ScriptRender 里，不在 ScriptEngine 上）
+        if (scripts != null && scripts.render != null) {
+            scripts.render.clearTextTextures();
+        }
+    }
+
+    /** 上传待处理纹理（包内可见：玩法模块自绘时也要触发上传）。 */
+    /** 包内日志：玩法模块（Minesweeper/GridPainter）打诊断用，不要各自去碰 bootFile。 */
+    void logLine(String message) {
+        BweLauncher.log(bootFile, message);
+    }
+
+    void uploadTextures(GL2 gl) {
+        // 先在当前 GL 上下文里删掉上一轮标记的纹理，再上传新的。
+        flushPendingDeletes(gl);
         if (pendingUploads.isEmpty()) {
             return;
         }
@@ -1429,6 +1617,7 @@ public final class TopDownRuntime implements GLEventListener {
                 uploadedTextures.add(t);
             }
             uploadImage(gl, t.id, img);
+            textureSources.put(t, img);
             pendingUploads.remove(t);
         }
     }
@@ -1511,9 +1700,30 @@ public final class TopDownRuntime implements GLEventListener {
 
     // ---------------- OpenGL 生命周期 ----------------
 
-    @Override
-    public void init(GLAutoDrawable drawable) {
-        GL2 gl = drawable.getGL().getGL2();
+    /**
+     * 是否已经初始化过 GL 上下文。
+     *
+     * <p><b>为什么需要这个标志</b>：{@code init()} 在 JOGL 里<b>不只会被调一次</b> ——
+     * 窗口最小化还原、切到别的窗口、显卡驱动重置、远程桌面接管，都会让 GL 上下文丢失，
+     * JOGL 重建后<b>再次回调 {@code init()}</b>。
+     *
+     * <p>重建后的上下文里，之前 {@code glGenTextures} / {@code glGenLists} 拿到的 id
+     * <b>全部无效</b>，但引擎仍持有它们并继续 bind —— 结果是<b>静默黑屏</b>
+     * （不报错、不崩溃、就是不显示）。这正是「切一下窗口就黑屏」的根因。
+     *
+     * <p>所以第二次及以后的 {@code init()} 必须先把所有 GPU 资源重新申请一遍
+     * （见 {@link #rebuildGpuResources()}），而不能只设状态了事。
+     */
+    private boolean glInitialized;
+
+    /**
+     * 当前 GL 上下文的状态初始化（混合、纹理环境、清屏色、显示列表失效）。
+     *
+     * <p>这些<b>全是「每个上下文独立」的状态</b>：新上下文里不会继承旧上下文的
+     * {@code glEnable(GL_BLEND)}，忘了重设就会出现「纹理透明通道失效 → 整片黑/整片白」。
+     * 因此上下文重建路径必须重跑本方法，不能只重建资源。
+     */
+    private void initGlState(GL2 gl) {
         gl.glEnable(GL2.GL_BLEND);
         gl.glBlendFunc(GL2.GL_SRC_ALPHA, GL2.GL_ONE_MINUS_SRC_ALPHA);
         gl.glEnable(GL2.GL_TEXTURE_2D);
@@ -1523,6 +1733,32 @@ public final class TopDownRuntime implements GLEventListener {
         invalidateMapList();
         // 保证窗口关闭 / 进程退出时 onSceneEnd 一定会派发。
         installSceneEndHook();
+    }
+
+    /**
+     * JOGL 的 GL 初始化回调。<b>同一进程里会被调用多次</b>（上下文丢失 → 重建）。
+     *
+     * <p>两次以下的语义完全不同：
+     * <ul>
+     *   <li><b>第一次</b>：全新上下文，只设状态、什么都不用重建；</li>
+     *   <li><b>第二次及以后</b>：旧上下文已死，旧纹理/显示列表 id 全部失效 ——
+     *       必须先重设状态（新上下文不继承 blend/清屏色），再把所有 GPU 资源
+     *       重新申请（{@link #rebuildGpuResources()}），否则就是「切一下窗口黑屏」。</li>
+     * </ul>
+     *
+     * <p>⚠ 不要以为「init 只会跑一次」：这正是上一版桌面端黑屏的成因 ——
+     * 只设状态、不清资源，旧 id 继续 bind，画面静默变黑。
+     */
+    @Override
+    public void init(GLAutoDrawable drawable) {
+        GL2 gl = drawable.getGL().getGL2();
+        initGlState(gl);
+        if (glInitialized) {
+            // 上下文重建：旧 id 全部作废，重建资源。
+            BweLauncher.log(bootFile, "GL 上下文重建：重设状态并重建纹理/显示列表");
+            rebuildGpuResources();
+        }
+        glInitialized = true;
     }
 
     /**
@@ -1630,8 +1866,10 @@ public final class TopDownRuntime implements GLEventListener {
     @Override
     public void reshape(GLAutoDrawable drawable, int x, int y, int width, int height) {
         // ⚠ Windows 高 DPI（125%/150%）下：
-        //   - JOGL 的 reshape 尺寸 / GL 绘制表面 = 物理像素
+        //   - GL 绘制表面（framebuffer）= 物理像素 = AWT 组件逻辑尺寸 × GraphicsConfiguration 缩放
         //   - AWT 组件尺寸 / 鼠标事件坐标 / 文字布局 = 逻辑像素
+        // reshape 的 width/height 在「有 canvas」时只用于 headless（FBO）路径；窗口路径统一以
+        // canvas.getWidth()/getHeight()（逻辑）+ getDefaultTransform().scale（物理）为准。
         // 之前把物理尺寸当成逻辑用：投影按 1920x1080 算、鼠标按 1280x720 报，
         // 于是「画面只画了一部分 + 点击整体偏移」。现在投影用逻辑尺寸，glViewport 用物理尺寸。
         updateSurfaceSize(width, height);
@@ -1642,6 +1880,18 @@ public final class TopDownRuntime implements GLEventListener {
         applyCameraPolicy(true);
         logViewportOnce();
         GL2 gl = drawable.getGL().getGL2();
+        applyGLViewportAndProjection(gl);
+    }
+
+    /**
+     * 把「当前逻辑视口 + 物理 framebuffer」刷到 GL：glViewport 用<b>物理</b>像素（= 逻辑 × DPI 缩放），
+     * 投影（glOrtho）用<b>逻辑</b>像素。
+     *
+     * <p>reshape 与 display 共用这份实现，保证任何时刻（窗口化、全屏、窗口拉伸、HiDPI、首帧建帧）
+     * 都不出现「glViewport 比 framebuffer 大/小」——后者正是旧故障「画面只画了一部分 / 只显示左下角一块」的根因
+     * （视口被钉死在旧尺寸上，内容只压进 framebuffer 的子矩形）。
+     */
+    private void applyGLViewportAndProjection(GL2 gl) {
         gl.glViewport(0, 0, surfaceW, surfaceH);
         gl.glMatrixMode(GL2.GL_PROJECTION);
         gl.glLoadIdentity();
@@ -1696,6 +1946,60 @@ public final class TopDownRuntime implements GLEventListener {
     }
 
     /**
+     * 只设置物理 framebuffer 尺寸（glViewport 用），不改逻辑视口。
+     *
+     * <p><b>给 Android 宿主用</b>：桌面端 updateSurfaceSize 能从 canvas + GraphicsConfiguration
+     * 自己推出「逻辑 / 物理」两套尺寸；Android 没有 canvas（canvas==null 分支会把两者设成同一个值），
+     * 于是逻辑视口被错误地当成物理像素 —— 脚本 HUD 按逻辑像素设计的字号就会显得只有一半大。
+     *
+     * <p>Android 侧由桥接类显式区分：调用 {@code reshape(logicalW, logicalH)} 让逻辑视口等于
+     * 「物理 / dpr」，再调本方法把物理尺寸补回去，{@code glViewport} 才能铺满整块屏幕。
+     */
+    void setSurfaceSize(int physicalW, int physicalH) {
+        this.surfaceW = Math.max(1, physicalW);
+        this.surfaceH = Math.max(1, physicalH);
+    }
+
+    /**
+     * 重新把「逻辑视口 + 物理 framebuffer」刷到 GL。
+     *
+     * <p>Android 宿主先调 {@code reshape(逻辑宽, 逻辑高)}（让 viewW/viewH 正确），
+     * 再调 {@link #setSurfaceSize} 补物理尺寸 —— 但 reshape 当时已经把 glViewport
+     * 按<b>逻辑</b>尺寸下发过了，不重刷就会出现「画面只画在屏幕左下角一块」。
+     *
+     * @param gl 当前 GL 上下文
+     */
+    void refreshViewport(GL2 gl) {
+        applyGLViewportAndProjection(gl);
+    }
+
+    /**
+     * Android 专用 reshape：一次给出「逻辑视口 + 物理 framebuffer」，内部算完再下发。
+     *
+     * <p>为什么不复用 {@link #reshape}：桌面 reshape 依赖 canvas + GraphicsConfiguration
+     * 自己推导两套尺寸；Android 没有 canvas，那条分支会把逻辑与物理设成同一个值。
+     * 而「先 reshape 再补 setSurfaceSize」会让 glViewport 与 glOrtho 各被下发两次，
+     * 第二次覆盖第一次的矩阵状态 —— 实测表现为整屏全黑。所以必须在一次调用里算对再下发。
+     *
+     * @param logicalW  逻辑视口宽（脚本 UI 的坐标系宽度）
+     * @param logicalH  逻辑视口高
+     * @param physicalW 物理 framebuffer 宽（glViewport 用）
+     * @param physicalH 物理 framebuffer 高
+     */
+    void reshapeForAndroid(int logicalW, int logicalH, int physicalW, int physicalH, GL2 gl) {
+        this.viewW = Math.max(1, logicalW);
+        this.viewH = Math.max(1, logicalH);
+        this.surfaceW = Math.max(1, physicalW);
+        this.surfaceH = Math.max(1, physicalH);
+        this.drawableW = this.viewW;
+        this.drawableH = this.viewH;
+        view.setViewport(viewW, viewH);
+        view.setMap(mapWidth(), mapHeight());
+        applyCameraPolicy(true);
+        applyGLViewportAndProjection(gl);
+    }
+
+    /**
      * 高 DPI 排查专用：设置环境变量 BWE_FBPROBE=1 后，把第一帧的 framebuffer 原样存成
      * {@code Build/fb-frame.png}。用它可以直接量出「GL 到底画了多大一块、留白在哪」，
      * 不依赖看屏幕，也不依赖 glReadPixels 的越界行为。
@@ -1745,32 +2049,16 @@ public final class TopDownRuntime implements GLEventListener {
             update(dt);
 
             GL2 gl = drawable.getGL().getGL2();
+            // 窗口化之后（窗口尺寸/DPI/全屏切换/首帧建帧），「画布实际尺寸 → 逻辑/物理」可能晚于 reshape 一次。
+            // 所以 display 帧内也做一次幂等刷新：先把 canvas 实际尺寸刷进逻辑/物理两套尺寸，再把
+            // viewport + 投影下发。杜绝「窗口化后 glViewport 仍按旧尺寸钉死」导致的「只显示左上/左下角一块」。
+            if (canvas != null) {
+                updateSurfaceSize(canvas.getWidth(), canvas.getHeight());
+            }
+            applyGLViewportAndProjection(gl);
             // 每帧自增，失效「本帧尺寸缓存」与「本帧排序缓存」之外的一次性缓存。
             frameStamp++;
-            gl.glClear(GL2.GL_COLOR_BUFFER_BIT);
-            gl.glLoadIdentity();
-            uploadTextures(gl);
-
-            gl.glDisable(GL2.GL_TEXTURE_2D);
-            // 唯一的视图变换：screen = (world - cam) * zoom + view/2
-            view.applyGL(gl);
-
-            drawMap(gl);
-            drawActors(gl);
-
-            // 脚本的立即模式绘制（HUD / 文字 / 特效）。世界/屏幕空间的切换由脚本 API 自己负责。
-            if (scripts != null) {
-                gl.glLoadIdentity();
-                try {
-                    scripts.draw(gl);
-                } catch (Throwable t) {
-                    BweLauncher.log(bootFile, "[脚本] draw 异常: " + t);
-                }
-                gl.glLoadIdentity();
-            }
-
-            gl.glFlush();
-            dumpFrameOnce(gl);
+            renderFrame(dt, gl);
         } catch (Throwable t) {
             if (!loggedDisplayError) {
                 loggedDisplayError = true;
@@ -1779,9 +2067,57 @@ public final class TopDownRuntime implements GLEventListener {
         }
     }
 
+    /**
+     * 窗口无关的帧渲染：逻辑更新 + GL 绘制 + 脚本 draw。桌面（reshape/display）与安卓
+     * （GLSurfaceRenderer / JOGL Android）共用这份帧循环，只是谁在驱动谁。
+     */
+    void renderFrame(float dt, GL2 gl) {
+        gl.glClear(GL2.GL_COLOR_BUFFER_BIT);
+        gl.glLoadIdentity();
+        uploadTextures(gl);
+
+        gl.glDisable(GL2.GL_TEXTURE_2D);
+        // 唯一的视图变换：screen = (world - cam) * zoom + view/2
+        view.applyGL(gl);
+
+        drawMap(gl);
+        drawActors(gl);
+
+        // ★ UI 场景层：世界画面之上、脚本 HUD 之下。
+        //
+        // 为什么夹在中间（而不是最上层）：脚本 HUD（bwe.draw.*）通常是「临时调试信息 / 数值」，
+        // 用户希望它压在上面；而 UI 场景是「正式界面」，应当压在地图/角色之上，
+        // 否则界面会被地图物件遮挡（这正是「把 UI 混在场景里编辑」最直接的后果）。
+        // 虚拟摇杆仍然最后画，保证它永远能点到。
+        drawUiScenes(gl);
+
+        // 脚本的立即模式绘制（HUD / 文字 / 特效）。世界/屏幕空间的切换由脚本 API 自己负责。
+        if (scripts != null) {
+            gl.glLoadIdentity();
+            try {
+                scripts.draw(gl);
+            } catch (Throwable t) {
+                BweLauncher.log(bootFile, "[脚本] draw 异常: " + t);
+            }
+            gl.glLoadIdentity();
+        }
+
+
+        // 虚拟摇杆画在所有内容之上（包括脚本 HUD），保证不被遮挡。
+        if (stick != null && stick.isMounted() && stick.isVisible()) {
+            gl.glLoadIdentity();
+            drawStick(gl);
+            gl.glLoadIdentity();
+        }
+
+        gl.glFlush();
+        dumpFrameOnce(gl);
+    }
+
     // ---------------- 更新 ----------------
 
-    private void update(float dt) {
+    /** 包内可见：桌面 display() 与安卓宿主共用这套更新管线（安卓在 GLSurfaceRenderer 里调它）。 */
+    void update(float dt) {
         // 脚本先跑：这样 onUpdate 里改的位置/相机/可见性，本帧的模块与绘制都能立刻用上。
         if (scripts != null) {
             try {
@@ -2321,6 +2657,10 @@ public final class TopDownRuntime implements GLEventListener {
         }
 
         if (tex == null) {
+            // 挂了网格模块的对象（没素材）**不要**在这里额外画棋盘：
+            // drawFallback 内部已经会画（它在纯色块批完之后调 a.mine.draw(gl)）。
+            // 早先在这里又加了一次 → 棋盘被画两遍：第一遍小、第二遍大，
+            // 重叠后看起来像「格子被放大 / 位置错位」。
             // ⚠ 这里原来先 flushSprites 再画 fallback。那是错的：3600 个 TILE 就是
             // 3600 次「冲批 + 重新开批」，等于把批处理的收益全扔了（实测 glBegin 3575/帧）。
             // 纯色块有自己的批，两条批交替时各存各的、按需 flush，顺序天然正确。
@@ -2388,6 +2728,71 @@ public final class TopDownRuntime implements GLEventListener {
             a.mine.draw(gl);
         }
         drawHp(gl, a, alpha);
+    }
+
+
+    /**
+     * ★ UI 场景层绘制：世界画面之上、脚本 HUD 之下。
+     *
+     * <p>坐标契约：UI 场景的 (x, y) 是**设计分辨率像素**（1280×720 里的坐标）。
+     * 这里用一次「等比 contain + 居中」的变换把它映射到当前逻辑视口：
+     * <pre>
+     *   z  = min(viewW / designW, viewH / designH)
+     *   ox = (viewW - designW * z) / 2
+     *   oy = (viewH - designH * z) / 2
+     * </pre>
+     * 与 {@link Viewport#fitWholeMap()} 的 contain 语义一致 —— 所以「编辑器里 WYSIWYG」，
+     * 窗口怎么缩放，界面的相对位置都不变、四边可能留底色（不会被裁掉）。
+     *
+     * <p>绘制顺序与世界场景同一套规则：layer → z → y（与编辑器 orderObjects 一致）。
+     * 文字对象（tags 含 label）走 {@link #drawLabel} 的真实字体路径，
+     * 其余走精灵 / 纯色块，全部复用世界绘制链路，避免「界面和场景两套画法各说各话」。
+     */
+    private void drawUiScenes(GL2 gl) {
+        if (uiLayers.isEmpty() || viewW <= 0 || viewH <= 0) {
+            return;
+        }
+        for (UiLayer layer : uiLayers) {
+            GameData.RtScene s = layer.scene;
+            float dw = uiSceneW(s);
+            float dh = uiSceneH(s);
+            if (!(dw > 0f) || !(dh > 0f)) {
+                continue;
+            }
+            float z = Math.min(viewW / dw, viewH / dh);
+            if (!(z > 0f)) {
+                continue;
+            }
+            float ox = (viewW - dw * z) / 2f;
+            float oy = (viewH - dh * z) / 2f;
+
+            // 先把世界批冲掉：世界精灵带着世界变换矩阵提交，混在 UI 变换里会画错位置。
+            flushSprites(gl);
+
+            gl.glLoadIdentity();
+            gl.glTranslatef(ox, oy, 0f);
+            gl.glScalef(z, z, 1f);
+
+            // 排序：layer → z → y（与编辑器 orderObjects 同一规则）
+            java.util.List<Actor> ordered = new java.util.ArrayList<Actor>(layer.actors);
+            Collections.sort(ordered, actorOrder());
+            for (Actor a : ordered) {
+                if (a.o != null && !a.o.visible) {
+                    continue;
+                }
+                if (a.o != null && a.o.tags != null && a.o.tags.contains("label")) {
+                    flushSprites(gl);
+                    drawLabel(gl, a, 1f, z * displayScale());
+                    continue;
+                }
+                drawActor(gl, a);
+            }
+            flushSprites(gl);
+        }
+        gl.glLoadIdentity();
+        // 恢复「没有绑纹理、白色」的干净状态：后续脚本 HUD 依赖这个前提。
+        gl.glDisable(GL2.GL_TEXTURE_2D);
+        gl.glColor4f(1f, 1f, 1f, 1f);
     }
 
 
@@ -2556,6 +2961,17 @@ public final class TopDownRuntime implements GLEventListener {
     private final Map<String, Texture> labelTex = new HashMap<String, Texture>();
 
     private void drawLabel(GL2 gl, Actor a, float alpha) {
+        drawLabel(gl, a, alpha, 1f);
+    }
+
+    /**
+     * 画文字对象。
+     *
+     * @param alpha      透明度
+     * @param extraScale 额外缩放（UI 场景层用：该层已经 {@code glScalef(z)}，
+     *                   所以字形纹理也要按 z 超采样，否则界面文字在大窗口下会发虚）
+     */
+    private void drawLabel(GL2 gl, Actor a, float alpha, float extraScale) {
         String txt = propStr(a.o, "text");
         if (txt.isEmpty()) {
             return;
@@ -2569,13 +2985,15 @@ public final class TopDownRuntime implements GLEventListener {
             color = "#101010";
         }
         String align = propStr(a.o, "textAlign");
-        Texture t = labelTexture(txt, size, color);
+        // 超采样倍率：物理像素密度 × 当前层缩放。纹理按放大后的字号生成，
+        // 贴出去时再除回来，于是「1 个纹理像素 ≈ 1 个物理像素」。
+        float ss = displayScale() * Math.max(0.25f, extraScale);
+        Texture t = labelTexture(txt, size, color, ss);
         if (t == null) {
             return;
         }
-        float sc = displayScale();
-        float w = t.w / sc;
-        float h = t.h / sc;
+        float w = t.w / ss;
+        float h = t.h / ss;
         float x = a.x;
         if ("center".equalsIgnoreCase(align) || "middle".equalsIgnoreCase(align)) {
             x -= w / 2f;
@@ -2591,7 +3009,11 @@ public final class TopDownRuntime implements GLEventListener {
     }
 
     private Texture labelTexture(String txt, float size, String color) {
-        String key = Math.round(size) + "|" + color + "|" + txt;
+        return labelTexture(txt, size, color, displayScale());
+    }
+
+    private Texture labelTexture(String txt, float size, String color, float superSample) {
+        String key = Math.round(size) + "|" + color + "|" + Math.round(superSample * 100f) + "|" + txt;
         Texture cached = labelTex.get(key);
         if (cached != null) {
             return cached;
@@ -2600,7 +3022,7 @@ public final class TopDownRuntime implements GLEventListener {
             labelTex.clear();
         }
         try {
-            int px = Math.max(6, Math.round(size * displayScale()));
+            int px = Math.max(6, Math.round(size * Math.max(0.5f, superSample)));
             Font f = new Font("Microsoft YaHei", Font.PLAIN, px);
             BufferedImage probe = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
             Graphics2D pg = probe.createGraphics();
@@ -2802,6 +3224,117 @@ public final class TopDownRuntime implements GLEventListener {
         gl.glEnd();
     }
 
+    /** 画虚拟摇杆/按键（屏幕空间，调用前矩阵应为单位阵）。 */
+    private void drawStick(GL2 gl) {
+        float w = viewW, h = viewH;
+        float base = stick.opacity();
+        gl.glDisable(GL2.GL_TEXTURE_2D);
+        gl.glEnable(GL2.GL_BLEND);
+        for (ScriptStick.Control c : stick.controls()) {
+            if (c.analog) {
+                // 摇杆：底盘 + 摇杆头
+                float cx = c.cxN * w, cy = c.cyN * h;
+                float r = c.radiusN * Math.min(w, h) * 1.6f;
+                drawCircleFill(gl, cx, cy, r, 0.85f, 0.88f, 0.92f, base * 0.45f);
+                drawCircleFill(gl, cx, cy, r * 0.92f, 0.25f, 0.28f, 0.34f, base * 0.55f);
+                float hx = cx + c.axisX * r * 0.55f;
+                float hy = cy + c.axisY * r * 0.55f;
+                drawCircleFill(gl, hx, hy, r * 0.38f, 0.95f, 0.96f, 1f, base * 0.95f);
+            } else {
+                float bx = c.nx * w, by = c.ny * h;
+                float bw = c.nw * w, bh = c.nh * h;
+                float a = c.pressed ? base : base * 0.62f;
+                gl.glColor4f(0.15f, 0.17f, 0.22f, a);
+                gl.glBegin(GL2.GL_QUADS);
+                gl.glVertex2f(bx, by);
+                gl.glVertex2f(bx + bw, by);
+                gl.glVertex2f(bx + bw, by + bh);
+                gl.glVertex2f(bx, by + bh);
+                gl.glEnd();
+                // 边框
+                gl.glColor4f(0.85f, 0.88f, 0.95f, a);
+                gl.glLineWidth(2f);
+                gl.glBegin(GL2.GL_LINE_LOOP);
+                gl.glVertex2f(bx, by);
+                gl.glVertex2f(bx + bw, by);
+                gl.glVertex2f(bx + bw, by + bh);
+                gl.glVertex2f(bx, by + bh);
+                gl.glEnd();
+                drawKeyLabel(gl, c.id, bx + bw * 0.5f, by + bh * 0.5f, a);
+            }
+        }
+    }
+
+    /** 填充圆（三角扇）。 */
+    private void drawCircleFill(GL2 gl, float cx, float cy, float r,
+                                float cr, float cg, float cb, float ca) {
+        gl.glColor4f(cr, cg, cb, ca);
+        int seg = 28;
+        gl.glBegin(GL2.GL_TRIANGLE_FAN);
+        gl.glVertex2f(cx, cy);
+        for (int i = 0; i <= seg; i++) {
+            float ang = (float) (i * Math.PI * 2.0 / seg);
+            gl.glVertex2f(cx + (float) Math.cos(ang) * r, cy + (float) Math.sin(ang) * r);
+        }
+        gl.glEnd();
+    }
+
+    /** 按键上的文字标签（用文字纹理，避免依赖字体绘制）。 */
+    private void drawKeyLabel(GL2 gl, String id, float cx, float cy, float alpha) {
+        String label = keyLabelOf(id);
+        if (label.isEmpty()) {
+            return;
+        }
+        float size = Math.min(18f, Math.max(11f, viewH * 0.024f));
+        Texture t = labelTexture(label, size);
+        if (t == null) {
+            return;
+        }
+        float tw = t.w / displayScale();
+        float th = t.h / displayScale();
+        gl.glEnable(GL2.GL_TEXTURE_2D);
+        gl.glBindTexture(GL2.GL_TEXTURE_2D, t.id);
+        gl.glColor4f(1f, 1f, 1f, alpha);
+        float x = cx - tw / 2f, y = cy - th / 2f;
+        gl.glBegin(GL2.GL_QUADS);
+        gl.glTexCoord2f(0f, 0f); gl.glVertex2f(x, y);
+        gl.glTexCoord2f(1f, 0f); gl.glVertex2f(x + tw, y);
+        gl.glTexCoord2f(1f, 1f); gl.glVertex2f(x + tw, y + th);
+        gl.glTexCoord2f(0f, 1f); gl.glVertex2f(x, y + th);
+        gl.glEnd();
+        gl.glDisable(GL2.GL_TEXTURE_2D);
+    }
+
+    private static String keyLabelOf(String id) {
+        switch (id) {
+            case "space": return "SPC";
+            case "enter": return "ENT";
+            case "tab": return "TAB";
+            case "esc": return "ESC";
+            default: return id.length() <= 4 ? id.toUpperCase() : id.substring(0, 4).toUpperCase();
+        }
+    }
+
+    /** 标签纹理缓存（每个标签只生成一次）。 */
+    private final java.util.Map<String, Texture> labelTexCache =
+            new java.util.HashMap<String, Texture>();
+
+    private Texture labelTexture(String label, float size) {
+        String key = label + "|" + (int) size;
+        Texture cached = labelTexCache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        java.awt.image.BufferedImage img = ScriptRender.textImageForHost(label, (int) size,
+                new java.awt.Color(255, 255, 255), false);
+        if (img == null) {
+            return null;
+        }
+        Texture t = textureFromImage(img);
+        labelTexCache.put(key, t);
+        return t;
+    }
+
     private void drawEllipse(GL2 gl, float cx, float cy, float rx, float ry, float alpha) {
         gl.glDisable(GL2.GL_TEXTURE_2D);
         gl.glColor4f(0f, 0f, 0f, alpha);
@@ -2967,7 +3500,7 @@ public final class TopDownRuntime implements GLEventListener {
 
     // ---------------- 换装 ----------------
 
-    private static final class DressPart {
+    static final class DressPart {
         final TopDownRuntime rt;
         final Actor actor;
         final String slot;
@@ -3027,430 +3560,97 @@ public final class TopDownRuntime implements GLEventListener {
 
     // ---------------- 扫雷 ----------------
 
-    static final class Minesweeper {
-        final TopDownRuntime rt;
-        final Actor actor;
-        int rows = 10;
-        int cols = 10;
-        int cell = 32;
-        int wantedMines = 10;
-        int mineCount;
-        boolean firstClickSafe = true;
-        boolean rightClickFlag = true;
-        boolean autoOpenZeros = true;
-        boolean revealAllOnLose = true;
-        boolean showTimer = true;
-        int seed;
+    /**
+     * 复雷加殊（Complexweeper）规则内核：<b>纯静态、无状态、不依赖 GL</b>，单测可直接调用。
+     *
+     * <p>唯一事实来源：{@code docs/complexweeper-rules.md}。要点：
+     * <ul>
+     *   <li>雷不是「1 颗」，而是 4 种复数：{@code +1}（实雷+，红）、{@code −1}（实雷−，蓝）、
+     *       {@code +i}（虚雷+，紫）、{@code −i}（虚雷−，青）；</li>
+     *   <li>数字 = 周围八格雷值之和的<b>模长</b>：{@code n = re² + im²}，完全平方显示整数，否则 {@code √n}；</li>
+     *   <li>点已翻开的数字格可连锁翻开（chord），需「旗数正确」+「虚实比例正确」两条同时成立。</li>
+     * </ul>
+     *
+     * <p>普通模式的 {@code sumRe == counts}、{@code sumIm == 0}，所以同一套 {@link #label} 走出来的
+     * 就是旧版的整数串 —— 渲染零回归靠的是这个不变量，而不是两条分支。
+     */
 
-        boolean[] mine;
-        boolean[] open;
-        boolean[] flag;
-        int[] counts;
-        int flags;
-        boolean started;
-        boolean over;
-        boolean won;
-        float elapsed;
-        float timerAcc;
-
-        String hiddenAsset = "";
-        String mineAsset = "";
-        String flagAsset = "";
-
-        BufferedImage image;
-        Texture texture;
-        boolean dirty = true;
-        int boardW;
-        int boardH;
-
-        Minesweeper(TopDownRuntime rt, Actor actor, GameData.RtModule m) {
-            this.rt = rt;
-            this.actor = actor;
-            rows = Math.max(3, Math.min(40, m.intOf("rows", 10)));
-            cols = Math.max(3, Math.min(40, m.intOf("cols", 10)));
-            cell = Math.max(16, Math.min(64, m.intOf("cellSize", 32)));
-            wantedMines = Math.max(1, m.intOf("mines", 10));
-            firstClickSafe = m.bool("firstClickSafe", true);
-            rightClickFlag = m.bool("rightClickFlag", true);
-            autoOpenZeros = m.bool("autoOpenZeros", true);
-            revealAllOnLose = m.bool("revealAllOnLose", true);
-            showTimer = m.bool("showTimer", true);
-            seed = m.intOf("seed", 0);
-            hiddenAsset = m.str("hiddenAsset", "");
-            mineAsset = m.str("mineAsset", "");
-            flagAsset = m.str("flagAsset", "");
-            reset();
-        }
-
-        void reset() {
-            int n = rows * cols;
-            mine = new boolean[n];
-            open = new boolean[n];
-            flag = new boolean[n];
-            counts = new int[n];
-            flags = 0;
-            started = false;
-            over = false;
-            won = false;
-            elapsed = 0f;
-            timerAcc = 0f;
-            dirty = true;
-            boardW = cols * cell;
-            boardH = rows * cell;
-            mineCount = Math.min(wantedMines, Math.max(1, n - 1));
-        }
-
-        void update(float dt) {
-            if (started && !over) {
-                timerAcc += dt;
-                if (timerAcc >= 1f) {
-                    int s = (int) timerAcc;
-                    timerAcc -= s;
-                    elapsed += s;
-                    dirty = true;
-                }
-            }
-        }
-
-        String status() {
-            String state;
-            if (won) {
-                state = "胜利";
-            } else if (over) {
-                state = "踩雷";
-            } else if (started) {
-                state = "进行中";
-            } else {
-                state = "点击开始";
-            }
-            String timer = showTimer ? " · " + (int) elapsed + "s" : "";
-            return "扫雷 " + state + " · " + flags + "/" + mineCount + timer;
-        }
-
-        boolean click(int wx, int wy, boolean right) {
-            if (over) {
-                if (!right) {
-                    reset();
-                    return true;
-                }
-                return false;
-            }
-            float left = actor.x - boardW / 2f;
-            float top = actor.y - boardH / 2f;
-            if (wx < left || wy < top || wx >= left + boardW || wy >= top + boardH) {
-                return false;
-            }
-            int c = (int) ((wx - left) / cell);
-            int r = (int) ((wy - top) / cell);
-            if (c < 0 || r < 0 || c >= cols || r >= rows) {
-                return false;
-            }
-            int idx = r * cols + c;
-            if (right) {
-                if (!rightClickFlag) {
-                    return true;
-                }
-                toggleFlag(idx);
-                return true;
-            }
-            reveal(idx);
-            return true;
-        }
-
-        void toggleFlag(int idx) {
-            if (open[idx] || over) {
-                return;
-            }
-            flag[idx] = !flag[idx];
-            flags += flag[idx] ? 1 : -1;
-            dirty = true;
-        }
-
-        void reveal(int idx) {
-            if (open[idx] || flag[idx] || over) {
-                return;
-            }
-            if (!started) {
-                started = true;
-                placeMines(idx);
-            }
-            if (mine[idx]) {
-                over = true;
-                won = false;
-                if (revealAllOnLose) {
-                    for (int i = 0; i < mine.length; i++) {
-                        if (mine[i]) {
-                            open[i] = true;
-                        }
-                    }
-                }
-                dirty = true;
-                return;
-            }
-            openRegion(idx);
-            checkWin();
-            dirty = true;
-        }
-
-        void openRegion(int start) {
-            if (!autoOpenZeros) {
-                open[start] = true;
-                return;
-            }
-            int[] stack = new int[Math.max(16, rows * cols * 8)];
-            int top = 0;
-            stack[top++] = start;
-            while (top > 0) {
-                int idx = stack[--top];
-                if (open[idx] || flag[idx] || mine[idx]) {
-                    continue;
-                }
-                open[idx] = true;
-                if (counts[idx] == 0) {
-                    int r = idx / cols;
-                    int c = idx % cols;
-                    for (int dr = -1; dr <= 1; dr++) {
-                        for (int dc = -1; dc <= 1; dc++) {
-                            if (dr == 0 && dc == 0) {
-                                continue;
-                            }
-                            int nr = r + dr;
-                            int nc = c + dc;
-                            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
-                                int ni = nr * cols + nc;
-                                if (!open[ni] && !flag[ni]) {
-                                    stack[top++] = ni;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        void placeMines(int safeIdx) {
-            boolean[] blocked = new boolean[rows * cols];
-            blocked[safeIdx] = true;
-            if (firstClickSafe) {
-                int sr = safeIdx / cols;
-                int sc = safeIdx % cols;
-                for (int dr = -1; dr <= 1; dr++) {
-                    for (int dc = -1; dc <= 1; dc++) {
-                        int nr = sr + dr;
-                        int nc = sc + dc;
-                        if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
-                            blocked[nr * cols + nc] = true;
-                        }
-                    }
-                }
-            }
-            List<Integer> pool = new ArrayList<>();
-            for (int i = 0; i < blocked.length; i++) {
-                if (!blocked[i]) {
-                    pool.add(i);
-                }
-            }
-            Random random = seed == 0 ? new Random() : new Random(seed);
-            Collections.shuffle(pool, random);
-            mineCount = Math.min(wantedMines, pool.size());
-            for (int i = 0; i < mineCount; i++) {
-                mine[pool.get(i)] = true;
-            }
-            counts = new int[rows * cols];
-            for (int r = 0; r < rows; r++) {
-                for (int c = 0; c < cols; c++) {
-                    int idx = r * cols + c;
-                    if (mine[idx]) {
-                        continue;
-                    }
-                    int n = 0;
-                    for (int dr = -1; dr <= 1; dr++) {
-                        for (int dc = -1; dc <= 1; dc++) {
-                            if (dr == 0 && dc == 0) {
-                                continue;
-                            }
-                            int nr = r + dr;
-                            int nc = c + dc;
-                            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && mine[nr * cols + nc]) {
-                                n++;
-                            }
-                        }
-                    }
-                    counts[idx] = n;
-                }
-            }
-        }
-
-        void checkWin() {
-            for (int i = 0; i < open.length; i++) {
-                if (!mine[i] && !open[i]) {
-                    return;
-                }
-            }
-            won = true;
-            over = true;
-            dirty = true;
-        }
-
-        void draw(GL2 gl) {
-            if (texture == null || texture.id < 0) {
-                paint();
-                texture = rt.textureFromImage(image);
-                rt.uploadTextures(gl);
-            } else if (dirty) {
-                paint();
-                rt.uploadTextures(gl);
-            }
-            if (texture == null || texture.id < 0) {
-                return;
-            }
-            float x = actor.x - boardW / 2f;
-            float y = actor.y - boardH / 2f;
-            gl.glEnable(GL2.GL_TEXTURE_2D);
-            gl.glBindTexture(GL2.GL_TEXTURE_2D, texture.id);
-            gl.glColor4f(1f, 1f, 1f, 1f);
-            gl.glBegin(GL2.GL_QUADS);
-            gl.glTexCoord2f(0f, 0f);
-            gl.glVertex2f(x, y);
-            gl.glTexCoord2f(1f, 0f);
-            gl.glVertex2f(x + boardW, y);
-            gl.glTexCoord2f(1f, 1f);
-            gl.glVertex2f(x + boardW, y + boardH);
-            gl.glTexCoord2f(0f, 1f);
-            gl.glVertex2f(x, y + boardH);
-            gl.glEnd();
-            gl.glDisable(GL2.GL_TEXTURE_2D);
-        }
-
-        void paint() {
-            int w = Math.max(1, boardW);
-            int h = Math.max(1, boardH);
-            if (image == null || image.getWidth() != w || image.getHeight() != h) {
-                image = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-            }
-            Graphics2D g = image.createGraphics();
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g.setColor(new Color(0, 0, 0, 0));
-            g.fillRect(0, 0, w, h);
-
-            BufferedImage hidden = rt.imageForAssetName(hiddenAsset);
-            BufferedImage mineImg = rt.imageForAssetName(mineAsset);
-            BufferedImage flagImg = rt.imageForAssetName(flagAsset);
-
-            for (int r = 0; r < rows; r++) {
-                for (int c = 0; c < cols; c++) {
-                    int idx = r * cols + c;
-                    int x = c * cell;
-                    int y = r * cell;
-                    // Win9x 风格的 3D 立体 tile：
-                    //   - 未翻开：亮边（左/上 #ffffff） + 暗边（右/下 #808080）+ 银色底 #c0c0c0，
-                    //     再画一条 1px 的深色外框 —— 经典扫雷的凸起地砖。
-                    //   - 已翻开：平铺 #c0c0c0 银色底，+ 1px 灰外框。
-                    //   - 插旗 / 雷：仍优先用素材，素材缺省时用像素画的旗 / 黑色雷。
-                    Color hi = new Color(0xff, 0xff, 0xff);
-                    Color lo = new Color(0x80, 0x80, 0x80);
-                    Color mid = new Color(0xc0, 0xc0, 0xc0);
-                    if (!open[idx]) {
-                        // 底层：Win9x 凸起地砖（银灰 + 亮/暗 3D 边）
-                        g.setColor(mid);
-                        g.fillRect(x, y, cell, cell);
-                        g.setColor(hi);
-                        g.fillRect(x, y, cell - 2, 3);
-                        g.fillRect(x, y, 3, cell - 2);
-                        g.setColor(lo);
-                        g.fillRect(x + 2, y + cell - 3, cell - 2, 3);
-                        g.fillRect(x + cell - 3, y + 2, 3, cell - 2);
-                        g.setColor(new Color(0x40, 0x40, 0x40));
-                        g.drawRect(x, y, cell - 1, cell - 1);
-                        // 手机顶上一格小卖点（素材图叠在 silver 之上，保住可读性）
-                        if (hidden != null) {
-                            // 与「棋子」（旗/人头）同尺寸：cell 的 50%，居中，且不裁切素材
-                            g.drawImage(hidden, x + cell / 4, y + cell / 4, cell / 2, cell / 2, null);
-                        }
-                        if (flag[idx]) {
-                            if (flagImg != null) {
-                                g.drawImage(flagImg, x + cell / 4, y + cell / 4, cell / 2, cell / 2, null);
-                            } else {
-                                g.setColor(new Color(0xf0, 0x52, 0x5f));
-                                g.fillPolygon(new int[]{x + 10, x + 24, x + 10},
-                                        new int[]{y + 8, y + 15, y + 22}, 3);
-                                g.setColor(new Color(0x30, 0x30, 0x30));
-                                g.fillRect(x + cell / 2, y + 8, 3, cell * 9 / 16);
-                            }
-                        }
-                    } else if (mine[idx]) {
-                        g.setColor(mid);
-                        g.fillRect(x, y, cell, cell);
-                        g.setColor(new Color(0x40, 0x40, 0x40));
-                        g.drawRect(x, y, cell - 1, cell - 1);
-                        if (mineImg != null) {
-                            g.drawImage(mineImg, x + 2, y + 2, cell - 4, cell - 4, null);
-                        } else {
-                            g.setColor(new Color(0x14, 0x18, 0x21));
-                            g.fillOval(x + 8, y + 8, cell - 16, cell - 16);
-                        }
-                    } else {
-                        g.setColor(new Color(0xe8, 0xec, 0xf5));
-                        g.fillRect(x + 1, y + 1, cell - 2, cell - 2);
-                        int n = counts[idx];
-                        if (n > 0) {
-                            g.setColor(numberColor(n));
-                            g.setFont(new Font("Microsoft YaHei", Font.BOLD, Math.max(12, cell * 3 / 5)));
-                            String s = String.valueOf(n);
-                            FontMetrics fm = g.getFontMetrics();
-                            int tx = x + (cell - fm.stringWidth(s)) / 2;
-                            int ty = y + (cell - fm.getHeight()) / 2 + fm.getAscent();
-                            g.drawString(s, tx, ty);
-                        }
-                    }
-                }
-            }
-            g.setColor(new Color(0xb6, 0xc0, 0xd4, 0x88));
-            g.setStroke(new BasicStroke(1f));
-            for (int c = 0; c <= cols; c++) {
-                int x = c * cell;
-                g.drawLine(x, 0, x, h);
-            }
-            for (int r = 0; r <= rows; r++) {
-                int y = r * cell;
-                g.drawLine(0, y, w, y);
-            }
-            g.dispose();
-            dirty = false;
-            if (texture != null) {
-                rt.uploadImageTo(texture.id, image);
-            }
-        }
-
-        private static Color numberColor(int n) {
-            switch (n) {
-                case 1:
-                    return new Color(0x2f, 0x64, 0xd8);
-                case 2:
-                    return new Color(0x1f, 0x8a, 0x4c);
-                case 3:
-                    return new Color(0xd9, 0x3b, 0x3b);
-                case 4:
-                    return new Color(0x52, 0x3a, 0xa8);
-                case 5:
-                    return new Color(0xa8, 0x3a, 0x2a);
-                case 6:
-                    return new Color(0x1a, 0x8a, 0x8a);
-                case 7:
-                    return new Color(0x22, 0x22, 0x22);
-                default:
-                    return new Color(0x66, 0x6e, 0x82);
-            }
-        }
-    }
 
     /** 扫雷需要在 paint 里重新上传同一张纹理，这里暴露一个小入口。 */
-    private void uploadImageTo(int id, BufferedImage image) {
+    /** 把一张图上传到指定纹理 id（包内可见：玩法模块自绘复用）。 */
+    /**
+     * 把一张位图重新上传到<b>已有</b>的纹理 id（用于「位图重画后刷新 GPU 像素」）。
+     *
+     * <p><b>踩过的坑（「玩久了越来越卡」）</b>：早先这里每次 {@code new Texture()} 当 map key，
+     * 而 {@link Texture} 没有 {@code equals}/{@code hashCode} —— 每个新对象都是新 key，
+     * 于是 {@link #pendingUploads} 里会不断堆积**永远无法合并**的条目：
+     * <ul>
+     *   <li>内存随帧数线性增长（每帧一整张棋盘位图的引用）；</li>
+     *   <li>每次 {@link #uploadTextures} 都要遍历这些历史条目重传整张位图 → 越玩越卡。</li>
+     * </ul>
+     *
+     * <p>正确做法：按 id 找到**真正的那个 Texture 实例**再入队，这样同一张纹理只占一个 key。
+     */
+    void uploadImageTo(int id, BufferedImage image) {
         // 实际 GL 上下文只在 display() 内可用，这里先缓存，下一帧上传。
-        Texture t = new Texture();
-        t.id = id;
+        Texture t = findTextureById(id);
+        if (t == null) {
+            // id 不属于已托管的纹理（理论上不该发生）：退化成一次性上传，
+            // 但不能污染 pendingUploads 的 key 空间 —— 用一个带标记的临时实例即可，
+            // 上传完立即移除。
+            t = new Texture();
+            t.id = id;
+        }
         t.w = image.getWidth();
         t.h = image.getHeight();
         pendingUploads.put(t, image);
+    }
+
+    /** 待删除的纹理（GL 只能在下一次 draw 里删，所以先记下来）。 */
+    private final List<Texture> pendingDeletes = new ArrayList<Texture>();
+
+    /**
+     * 请求释放一张纹理（真正的 GL 删除推迟到下一次 {@link #flushPendingDeletes}）。
+     *
+     * <p><b>为什么需要</b>：{@code GridPainter} 在改行列/重置时会重建自身，
+     * 旧纹理如果只是「断开引用」而不删，GPU 显存会持续增长
+     * （实测 uploadedTextures 从 18 涨到 54、且只增不减）。
+     */
+    void deleteTexture(Texture t) {
+        if (t == null || t.id < 0) {
+            return;
+        }
+        pendingDeletes.add(t);
+        uploadedTextures.remove(t);
+        textureSources.remove(t);
+    }
+
+    /** 在 GL 上下文可用时真正删除待删纹理。 */
+    private void flushPendingDeletes(GL2 gl) {
+        if (pendingDeletes.isEmpty() || gl == null) {
+            return;
+        }
+        List<Texture> batch = new ArrayList<Texture>(pendingDeletes);
+        pendingDeletes.clear();
+        for (Texture t : batch) {
+            try {
+                if (t.id >= 0) {
+                    int[] ids = {t.id};
+                    gl.glDeleteTextures(1, ids, 0);
+                }
+            } catch (Throwable ignored) {
+            }
+            t.id = -1;
+        }
+    }
+
+    /** 在已上传纹理里按 id 找实例（找不到返回 null）。 */
+    private Texture findTextureById(int id) {
+        for (Texture t : uploadedTextures) {
+            if (t.id == id) {
+                return t;
+            }
+        }
+        return null;
     }
 }

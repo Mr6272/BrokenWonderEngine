@@ -1,0 +1,92 @@
+{
+  "name": "bwe-script",
+  "displayName": "BWE Script",
+  "description": "BWE（BrokenWonderEngine）JS 脚本的补全 / 悬浮提示 / 规则检查 / 本地服务类型检查",
+  "version": "0.1.0",
+  "publisher": "bwe",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "bwe",
+    "brokenwonderengine",
+    "rhino",
+    "game script"
+  ],
+  "main": "./extension.js",
+  "type": "commonjs",
+  "activationEvents": [
+    "onLanguage:javascript",
+    "onCommand:bwe.checkScript",
+    "onCommand:bwe.installTypes",
+    "onCommand:bwe.openDocs"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "bwe.checkScript",
+        "title": "BWE: 检查当前脚本",
+        "category": "BWE"
+      },
+      {
+        "command": "bwe.installTypes",
+        "title": "BWE: 写入类型声明（bwe.d.ts → .bwe/）",
+        "category": "BWE"
+      },
+      {
+        "command": "bwe.openDocs",
+        "title": "BWE: 打开当前 API 的文档",
+        "category": "BWE"
+      }
+    ],
+    "configuration": {
+      "title": "BWE Script",
+      "properties": {
+        "bwe.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:5273",
+          "description": "BWE Studio 本地服务地址（`npm run serve` 启动）。扩展会把脚本源码 POST 到 `<serverUrl>/api/js-check` 拿 TypeScript 诊断。"
+        },
+        "bwe.enableServerCheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用本地服务检查。服务不可达时静默降级为「仅规则检查」，不会弹错误提示。"
+        },
+        "bwe.enableRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用内置规则检查（宿主 API 误用 / import·require·export / onSceneStart 里的 ctx.self）。"
+        },
+        "bwe.serverTimeoutMs": {
+          "type": "number",
+          "default": 2500,
+          "description": "请求 /api/js-check 的超时（毫秒）。超时即按「服务不可达」静默降级。"
+        },
+        "bwe.checkDelayMs": {
+          "type": "number",
+          "default": 500,
+          "description": "编辑后延迟多久开始检查（毫秒），避免每敲一个字都打请求。"
+        }
+      }
+    },
+    "snippets": [
+      {
+        "language": "javascript",
+        "path": "./snippets/bwe.code-snippets"
+      }
+    ]
+  },
+  "scripts": {},
+  "files": [
+    "extension.js",
+    "lib/**",
+    "data/**",
+    "snippets/**",
+    "README.md"
+  ]
+}

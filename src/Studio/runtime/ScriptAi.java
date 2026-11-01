@@ -86,7 +86,7 @@ final class ScriptAi {
 
     /** 一个挂了 ai.attach 的实体的感知状态（引擎只存状态，不做决策）。 */
     static final class Agent {
-        final TopDownRuntime.Actor actor;
+        final Actor actor;
         float sight = ATTACH_SIGHT;
         float fov = ATTACH_FOV;
         float hearing = ATTACH_HEARING;
@@ -94,7 +94,7 @@ final class ScriptAi {
         float speed = ATTACH_SPEED;
 
         String state = "idle";
-        TopDownRuntime.Actor target;
+        Actor target;
         boolean targetVisible;
 
         boolean hasKnown;
@@ -108,7 +108,7 @@ final class ScriptAi {
         float heardY;
         String heardTag = "";
 
-        Agent(TopDownRuntime.Actor actor) {
+        Agent(Actor actor) {
             this.actor = actor;
         }
     }
@@ -123,7 +123,7 @@ final class ScriptAi {
     }
 
     static final class AlertMsg {
-        TopDownRuntime.Actor from;
+        Actor from;
         String faction;
         float x;
         float y;
@@ -149,10 +149,10 @@ final class ScriptAi {
 
         // LinkedHashMap：Actor 没有覆写 equals/hashCode，键仍是身份语义，但能保证
         // 遍历顺序 = onStart 注册顺序（可复现：同种子同输入 ⇒ 同日志序列）。
-        final Map<TopDownRuntime.Actor, Agent> agents =
-                new LinkedHashMap<TopDownRuntime.Actor, Agent>();
-        final Map<TopDownRuntime.Actor, String> factions =
-                new IdentityHashMap<TopDownRuntime.Actor, String>();
+        final Map<Actor, Agent> agents =
+                new LinkedHashMap<Actor, Agent>();
+        final Map<Actor, String> factions =
+                new IdentityHashMap<Actor, String>();
         /** "a\u0000b" → -1/0/1，同时写两个方向。 */
         final Map<String, Integer> relations = new HashMap<String, Integer>();
         /**
@@ -180,8 +180,8 @@ final class ScriptAi {
         // ---- 敌对候选缓存（阵营名 → 敌对实体列表） ----
         // 只在「阵营映射变了」或「场景 actor 数量变了」时重建；阵营与实体构成在
         // 正常情况下逐帧稳定，因此不必每帧重建并分配 Map/List。
-        final Map<String, List<TopDownRuntime.Actor>> hostileByFaction =
-                new HashMap<String, List<TopDownRuntime.Actor>>();
+        final Map<String, List<Actor>> hostileByFaction =
+                new HashMap<String, List<Actor>>();
         int factionVersion;
         int hostileVersion = -1;
         int hostileActorCount = -1;
@@ -215,7 +215,7 @@ final class ScriptAi {
                 return agentOrder;
             }
             agentOrder.clear();
-            for (TopDownRuntime.Actor a : host.actors) {
+            for (Actor a : host.actors) {
                 Agent ag = agents.get(a);
                 if (ag != null) {
                     agentOrder.add(ag);
@@ -316,7 +316,7 @@ final class ScriptAi {
         pruneNoises(st, now);
 
         for (Agent ag : new ArrayList<Agent>(st.agents.values())) {
-            TopDownRuntime.Actor a = ag.actor;
+            Actor a = ag.actor;
             if (a == null || a.dead) {
                 continue;
             }
@@ -366,21 +366,21 @@ final class ScriptAi {
     private static void buildSense(final ScriptApi api, final AiState st) {
         Scriptable sense = api.newObj();
         api.addMethod(sense, "canSee", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
-            TopDownRuntime.Actor b = api.actorOf(ScriptJs.arg(args, 1));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor b = api.actorOf(ScriptJs.arg(args, 1));
             return Boolean.valueOf(canSee(st, a, b));
         });
         api.addMethod(sense, "inSightRange", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
-            TopDownRuntime.Actor b = api.actorOf(ScriptJs.arg(args, 1));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor b = api.actorOf(ScriptJs.arg(args, 1));
             return Boolean.valueOf(inSightRange(st, a, b));
         });
         api.addMethod(sense, "audible", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             return Boolean.valueOf(audible(st, a));
         });
         api.addMethod(sense, "lastKnown", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             Agent ag = agentOf(st, a);
             if (ag == null || !ag.hasKnown) {
                 return null;
@@ -400,11 +400,11 @@ final class ScriptAi {
         api.attach("sense", sense);
     }
 
-    private static Agent agentOf(AiState st, TopDownRuntime.Actor a) {
+    private static Agent agentOf(AiState st, Actor a) {
         return a == null ? null : st.agents.get(a);
     }
 
-    private static boolean inSightRange(AiState st, TopDownRuntime.Actor a, TopDownRuntime.Actor b) {
+    private static boolean inSightRange(AiState st, Actor a, Actor b) {
         if (a == null || b == null || a.dead || b.dead) {
             return false;
         }
@@ -416,7 +416,7 @@ final class ScriptAi {
     }
 
     /** 视野半径 + FOV + 瓦片遮挡 + 烟雾减半（契约 §2.11.4）。 */
-    private static boolean canSee(AiState st, TopDownRuntime.Actor a, TopDownRuntime.Actor b) {
+    private static boolean canSee(AiState st, Actor a, Actor b) {
         if (a == null || b == null || a.dead || b.dead || !b.o.visible) {
             return false;
         }
@@ -458,7 +458,7 @@ final class ScriptAi {
         return true;
     }
 
-    private static boolean audible(AiState st, TopDownRuntime.Actor a) {
+    private static boolean audible(AiState st, Actor a) {
         Agent ag = agentOf(st, a);
         if (ag == null || ag.heardTime < 0) {
             return false;
@@ -478,7 +478,7 @@ final class ScriptAi {
     private static void buildFaction(final ScriptApi api, final AiState st) {
         Scriptable faction = api.newObj();
         api.addMethod(faction, "set", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null) {
                 return null;
             }
@@ -509,14 +509,14 @@ final class ScriptAi {
             return Double.valueOf(rel);
         });
         api.addMethod(faction, "hostile", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
-            TopDownRuntime.Actor b = api.actorOf(ScriptJs.arg(args, 1));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor b = api.actorOf(ScriptJs.arg(args, 1));
             return Boolean.valueOf(hostile(st, a, b));
         });
         api.addMethod(faction, "members", (cx, thisObj, args) -> {
             String name = ScriptJs.str(ScriptJs.arg(args, 0), "");
             List<Object> list = new ArrayList<Object>();
-            for (TopDownRuntime.Actor a : api.actorsSnapshot()) {
+            for (Actor a : api.actorsSnapshot()) {
                 if (a == null || a.dead) {
                     continue;
                 }
@@ -531,7 +531,7 @@ final class ScriptAi {
     }
 
     private static String factionName(ScriptApi api, AiState st, Object v) {
-        TopDownRuntime.Actor a = api.actorOf(v);
+        Actor a = api.actorOf(v);
         if (a != null) {
             return st.factions.get(a);
         }
@@ -582,7 +582,7 @@ final class ScriptAi {
         inner.put(b, boxed);
     }
 
-    private static boolean hostile(AiState st, TopDownRuntime.Actor a, TopDownRuntime.Actor b) {
+    private static boolean hostile(AiState st, Actor a, Actor b) {
         if (a == null || b == null || a == b) {
             return false;
         }
@@ -599,7 +599,7 @@ final class ScriptAi {
     private static void buildAi(final ScriptApi api, final AiState st) {
         Scriptable ai = api.newObj();
         api.addMethod(ai, "attach", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null) {
                 return null;
             }
@@ -620,7 +620,7 @@ final class ScriptAi {
             return null;
         });
         api.addMethod(ai, "detach", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a != null) {
                 st.agents.remove(a);
                 st.invalidateAgentOrder();
@@ -646,12 +646,12 @@ final class ScriptAi {
             if (ag == null) {
                 return null;
             }
-            TopDownRuntime.Actor t = validTarget(st, ag);
+            Actor t = validTarget(st, ag);
             ag.target = t;
             return t == null ? null : api.entityOf(t);
         });
         api.addMethod(ai, "alert", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor from = api.actorOf(ScriptJs.arg(args, 0));
+            Actor from = api.actorOf(ScriptJs.arg(args, 0));
             if (from == null) {
                 return null;
             }
@@ -703,8 +703,8 @@ final class ScriptAi {
         api.attach("ai", ai);
     }
 
-    private static TopDownRuntime.Actor validTarget(AiState st, Agent ag) {
-        TopDownRuntime.Actor t = ag.target;
+    private static Actor validTarget(AiState st, Agent ag) {
+        Actor t = ag.target;
         if (t == null || t.dead) {
             return null;
         }
@@ -718,7 +718,7 @@ final class ScriptAi {
     }
 
     private static float[] pointArg(ScriptApi api, AiState st, Object v) {
-        TopDownRuntime.Actor a = api.actorOf(v);
+        Actor a = api.actorOf(v);
         if (a != null) {
             return new float[]{a.x, a.y};
         }
@@ -747,11 +747,11 @@ final class ScriptAi {
         api.addMethod(target, "entity", (cx, thisObj, args) -> {
             float wx = st.host.view.toWorldX(st.host.mouseX);
             float wy = st.host.view.toWorldY(st.host.mouseY);
-            TopDownRuntime.Actor hit = st.engine.topmostAt(wx, wy);
+            Actor hit = st.engine.topmostAt(wx, wy);
             return hit == null ? null : api.entityOf(hit);
         });
         api.addMethod(target, "inFront", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor e = api.actorOf(ScriptJs.arg(args, 0));
+            Actor e = api.actorOf(ScriptJs.arg(args, 0));
             if (e == null) {
                 return null;
             }
@@ -766,7 +766,7 @@ final class ScriptAi {
             float len = (float) Math.sqrt(fx * fx + fy * fy);
             float px = e.x + fx / len * range;
             float py = e.y + fy / len * range;
-            TopDownRuntime.Actor hit = st.engine.topmostAt(px, py);
+            Actor hit = st.engine.topmostAt(px, py);
             if (hit == null || hit == e) {
                 return cellObj(api, st, st.world.toCellX(px), st.world.toCellY(py));
             }
@@ -913,17 +913,17 @@ final class ScriptAi {
         if (st.agents.isEmpty()) {
             return;
         }
-        List<TopDownRuntime.Actor> dead = null;
-        for (TopDownRuntime.Actor a : st.agents.keySet()) {
+        List<Actor> dead = null;
+        for (Actor a : st.agents.keySet()) {
             if (a == null || a.dead) {
                 if (dead == null) {
-                    dead = new ArrayList<TopDownRuntime.Actor>();
+                    dead = new ArrayList<Actor>();
                 }
                 dead.add(a);
             }
         }
         if (dead != null) {
-            for (TopDownRuntime.Actor a : dead) {
+            for (Actor a : dead) {
                 st.agents.remove(a);
             }
             st.invalidateAgentOrder();
@@ -952,7 +952,7 @@ final class ScriptAi {
                 continue;
             }
             for (Agent ag : st.agentsInSceneOrder()) {
-                TopDownRuntime.Actor a = ag.actor;
+                Actor a = ag.actor;
                 if (a == null || a.dead || a == m.from) {
                     continue;
                 }
@@ -988,7 +988,7 @@ final class ScriptAi {
         if (st.agents.isEmpty()) {
             return;
         }
-        List<TopDownRuntime.Actor> all = st.api.actorsSnapshot();
+        List<Actor> all = st.api.actorsSnapshot();
         // 按「观察者阵营」预筛敌对候选：200 个 AI × 220 个实体的全量两两 hostile 检查
         // 会白白吃掉大半帧预算，先按阵营各算一次（阵营数一般个位数）。
         // 缓存只在阵营映射或场景 actor 数量变化时重建（逐帧稳定时不分配任何容器）。
@@ -1000,9 +1000,9 @@ final class ScriptAi {
                 if (f == null || st.hostileByFaction.containsKey(f)) {
                     continue;
                 }
-                List<TopDownRuntime.Actor> list = new ArrayList<TopDownRuntime.Actor>();
+                List<Actor> list = new ArrayList<Actor>();
                 for (int i = 0; i < all.size(); i++) {
-                    TopDownRuntime.Actor b = all.get(i);
+                    Actor b = all.get(i);
                     if (b == null) {
                         continue;
                     }
@@ -1016,22 +1016,22 @@ final class ScriptAi {
             st.hostileVersion = st.factionVersion;
             st.hostileActorCount = actorCount;
         }
-        Map<String, List<TopDownRuntime.Actor>> hostileCache = st.hostileByFaction;
+        Map<String, List<Actor>> hostileCache = st.hostileByFaction;
         for (Agent ag : st.agentsInSceneOrder()) {
-            TopDownRuntime.Actor a = ag.actor;
+            Actor a = ag.actor;
             if (a == null || a.dead) {
                 continue;
             }
             String f = st.factions.get(a);
-            List<TopDownRuntime.Actor> candidates = f == null ? null : hostileCache.get(f);
-            TopDownRuntime.Actor best = null;
+            List<Actor> candidates = f == null ? null : hostileCache.get(f);
+            Actor best = null;
             float bestD2 = Float.MAX_VALUE;
             if (candidates != null) {
                 // 试过「按空间桶索引只扫视距内候选」：实测反而更慢（visionScan
                 // 39µs → 68µs），因为本场景 20 个敌人摊在 200 个守卫的小地图里，
                 // 桶查找的 Map/散列开销超过了省下的距离比较。已回滚，保留全量扫描。
                 for (int i = 0; i < candidates.size(); i++) {
-                    TopDownRuntime.Actor b = candidates.get(i);
+                    Actor b = candidates.get(i);
                     if (b == a || b.dead || !b.o.visible) {
                         continue;
                     }
@@ -1064,7 +1064,7 @@ final class ScriptAi {
         }
     }
 
-    private static Scriptable spotPayload(AiState st, Agent ag, TopDownRuntime.Actor target) {
+    private static Scriptable spotPayload(AiState st, Agent ag, Actor target) {
         Scriptable o = st.api.newObj();
         put(o, "entity", st.api.entityOf(ag.actor));
         put(o, "target", st.api.entityOf(target));

@@ -20,7 +20,8 @@ export const MODULE_CATEGORIES: ModuleCategory[] = [
   { id: "combat", label: "战斗 Combat", blurb: "生命值、攻击、伤害、死亡", color: "var(--cat-combat)" },
   { id: "dialogue", label: "对话 Dialogue", blurb: "气泡台词、对话框、分支选项", color: "var(--cat-dialogue)" },
   { id: "fx", label: "表现 Feedback", blurb: "音效、音乐、特效、震屏、转场", color: "var(--cat-fx)" },
-  { id: "game", label: "玩法 Gameplay", blurb: "棋盘、换装、小游戏规则", color: "var(--cat-game)" }
+  { id: "grid", label: "网格 Grid", blurb: "格子棋盘、格子渲染、翻开与标记规则", color: "var(--cat-grid)" },
+  { id: "game", label: "玩法 Gameplay", blurb: "完整小游戏组合、换装", color: "var(--cat-game)" }
 ];
 
 export function categoryOf(id: ModuleCategoryId): ModuleCategory {
@@ -696,6 +697,81 @@ export const MODULES: ModuleDef[] = [
     triggers: ["ALWAYS"],
     params: [ref("script", "脚本 Script", "script", "在左栏「剧本」页切到 JS 语言，新建一个脚本再回到这里选择")]
   },
+  // ---------------- 通用网格模块（可组合，任何格子类玩法复用） ----------------
+  //
+  // 设计意图：扫雷原本是「一整个游戏 = 一个模块」（game.minesweeper），
+  // 别的玩法想复用棋盘/渲染/翻开规则只能复制那 600 行。
+  // 这里拆成 4 个正交能力，按需组合；game.minesweeper 仍然保留为「全开」组合体，
+  // 所以老工程零迁移、行为不变。
+  {
+    id: "grid.board",
+    title: "网格棋盘",
+    code: "Grid Board",
+    category: "grid",
+    blurb: "一块可交互的行列格子，带翻开/标记状态与邻域计算",
+    detail: "只提供「格子」这一层：行数、列数、格子尺寸，每格的翻开/标记状态，"
+      + "以及邻域遍历与泛洪展开 —— 不含任何具体玩法规则。"
+      + "适合数织、围线、战棋、消除、推箱子这类「网格 + 每格状态」的玩法："
+      + "挂上它就能在脚本里读写格子状态、做连通判定，规则完全由你的脚本决定。"
+      + "要开箱即用的扫雷，直接用「扫雷棋盘」模块。",
+    triggers: ["ON_START", "ALWAYS"],
+    params: [
+      num("rows", "行数 Rows", 10, 1, 64, "行", "棋盘纵向格数"),
+      num("cols", "列数 Cols", 10, 1, 64, "列", "棋盘横向格数"),
+      num("cellSize", "格子尺寸 Cell Size", 32, 8, 96, "px", "每一格的世界尺寸，也决定棋盘整体大小")
+    ]
+  },
+  {
+    id: "grid.tile",
+    title: "格子渲染",
+    code: "Grid Tile Render",
+    category: "grid",
+    blurb: "把网格画成 Win9x 立体地砖 / 平铺 / 自定义贴图",
+    detail: "只负责「怎么把格子画出来」：未翻开画凸起 3D 地砖（亮边+暗边+银灰底），"
+      + "已翻开画平铺底+格线，可选叠加素材图。数字按大小自动配色（1 蓝、2 绿、3 红…）。"
+      + "搭配「网格棋盘」使用；想换外观就换这里的贴图参数，不用改玩法逻辑。",
+    triggers: ["ALWAYS"],
+    params: [
+      ref("hiddenAsset", "未翻开贴图", "asset", "留空使用内置凸起地砖"),
+      ref("mineAsset", "地雷贴图", "asset", "留空使用内置黑色地雷"),
+      ref("flagAsset", "旗帜贴图", "asset", "留空使用内置红旗")
+    ]
+  },
+  {
+    id: "grid.reveal",
+    title: "翻开规则",
+    code: "Grid Reveal Rules",
+    category: "grid",
+    blurb: "点开格子的行为：首击安全、空白自动展开、失败全亮、点数字自动标记/翻开",
+    detail: "提供「点开」这套通用行为：首次点击保证安全（自身与周围不埋雷）、"
+      + "点到空白格时自动展开相连区域、踩中即判负并可亮出全部雷。"
+      + "「点数字自动操作」开启后，点一个已翻开的数字格会按周围旗数自动推断："
+      + "旗数够了就把剩余格翻开，剩余格数正好等于数字就把它们全部插旗（两者都做 = 智能模式）。"
+      + "推断只用「数字 + 你自己插的旗」，不读隐藏雷位，所以不会替你作弊；条件不满足时什么都不做。",
+    triggers: ["ALWAYS"],
+    params: [
+      bool("firstClickSafe", "首击必安全", true, "第一次点开的格子以及周围八格不埋雷"),
+      bool("autoOpenZeros", "自动展开空白区", true, "点开空白格时自动翻开相连的一圈"),
+      bool("revealAllOnLose", "失败时显示全部", true, "踩中后把全部目标格亮出来，方便复盘"),
+      pick("autoAction", "点数字自动操作", "关闭 Off", ["关闭 Off", "自动翻开 Auto Reveal", "自动插旗 Auto Flag", "智能 Smart（先插旗再翻开）"], "点已翻开的数字格时按旗数自动推断：旗数==数字→翻开其余安全格；未翻开数==数字→把它们全插旗。只用可见信息推断，绝不作弊")
+    ]
+  },
+  {
+    id: "grid.flag",
+    title: "标记规则",
+    code: "Grid Flag Rules",
+    category: "grid",
+    blurb: "插旗/取消插旗、计数与胜利条件",
+    detail: "提供「标记 + 达成条件」这套通用行为：右键（手机上长按）切换插旗状态、"
+      + "维护旗帜计数、按选定条件判定胜利（清空所有安全格 / 标记全部目标），"
+      + "并可选显示计时器。和「网格棋盘」「翻开规则」组合即可拼出完整玩法。",
+    triggers: ["ALWAYS"],
+    params: [
+      bool("rightClickFlag", "右键插旗", true, "关掉后可改用脚本函数切换标记"),
+      pick("winCondition", "胜利条件 Win", "清空所有安全格 Clear Safe Cells", ["清空所有安全格 Clear Safe Cells", "插对所有地雷 Flag All Mines"], "前者是传统玩法；后者只看标记是否全对"),
+      bool("showTimer", "显示计时器", true, "从第一次操作开始计时")
+    ]
+  },
   {
     id: "game.minesweeper",
     title: "扫雷棋盘",
@@ -704,18 +780,22 @@ export const MODULES: ModuleDef[] = [
     blurb: "一整块可自定义行、列、地雷数的扫雷棋盘",
     detail: "把这块积木挂到一个对象上，预览时就会生成完整棋盘：左键翻开、右键插旗、空白区自动展开、首击必安全。"
       + "行数、列数、地雷数都在参数里改，改完点「重新开始」立刻生效。"
-      + "贴图参数留空时使用内置样式；填入素材名即可替换成自己的地砖、地雷和旗帜。",
+      + "贴图参数留空时使用内置样式；填入素材名即可替换成自己的地砖、地雷和旗帜。"
+      + "「玩法模式」选「复雷加殊（Complexweeper）」时，雷分成 +1/−1/+i/−i 四种复数，"
+      + "格子上的数字显示周围雷之和的模长；点已翻开的数字格可连锁翻开（需旗数与虚实比例都对，不需标出每颗雷的属性）。",
     triggers: ["ON_START", "ALWAYS"],
     params: [
       num("rows", "行数 Rows", 10, 3, 40, "行", "棋盘纵向格数，配合列数决定总格数"),
       num("cols", "列数 Cols", 10, 3, 40, "列", "棋盘横向格数，配合行数决定总格数"),
       num("mines", "地雷数 Mines", 10, 1, 400, "颗", "不能超过总格数减 9，否则首击保护没有安全区"),
       num("cellSize", "格子尺寸 Cell Size", 32, 16, 64, "px", "预览里每一格显示多大"),
+      pick("mode", "玩法模式 Mode", "普通 Normal", ["普通 Normal", "复雷加殊 Complexweeper"], "普通 = 经典扫雷；复雷加殊 = 雷分 +1/−1/+i/−i 四种复数，数字显示周围雷之和的模长"),
       pick("winCondition", "胜利条件 Win", "清空所有安全格 Clear Safe Cells", ["清空所有安全格 Clear Safe Cells", "插对所有地雷 Flag All Mines"], "前者是传统扫雷；后者只看旗帜是否全对"),
       bool("firstClickSafe", "首击必安全", true, "第一次点开的格子以及周围八格不埋雷"),
       bool("rightClickFlag", "右键插旗", true, "关掉后仍可用预览里的「标记模式」按钮插旗"),
       bool("autoOpenZeros", "自动展开空白区", true, "点开数字 0 的格子时，自动翻开周围一圈"),
       bool("revealAllOnLose", "失败时显示全部地雷", true, "踩雷后把所有地雷亮出来，方便复盘"),
+      pick("autoAction", "点数字自动操作", "关闭 Off", ["关闭 Off", "自动翻开 Auto Reveal", "自动插旗 Auto Flag", "智能 Smart（先插旗再翻开）"], "点已翻开的数字格时按旗数自动推断：旗数==数字→翻开其余安全格；未翻开数==数字→把它们全插旗。只用可见信息推断，绝不作弊"),
       bool("showTimer", "显示计时器", true, "从第一次翻开开始计时"),
       num("seed", "随机种子 Seed", 0, 0, 999999, "", "0 表示每局随机；填固定数字可以复现同一局"),
       ref("hiddenAsset", "未翻开贴图", "asset", "留空使用内置的凸起地砖"),

@@ -38,11 +38,13 @@ var MS = {
   cell: 32,
   winX: 0, winY: 0,       // 标题栏拖动的窗口偏移（相对 HUD 基准）
   drag: null,
+  baseZoom: 0,      // 整图 fit 的基准 zoom（格子尺寸按它算，缩放后不再变）
   rows: 12,
   cols: 16,
   mines: 40,
   curElapsed: 0,
   started: false,
+  modeIdx: 0,             // 0 = 普通扫雷，1 = 复雷加殊 Complexweeper
 };
 
 var prev = { flags: -1, over: false, won: false };
@@ -58,9 +60,29 @@ function onSceneStart(ctx) {
     var bgmId = bwe.audio.music(BGM.a, { volume: BGM.v, loop: true });
     wlog("bgm id=" + bgmId);
   } catch (e) { wlog("bgm fail " + e); }
+
+  // 输入框提交回调：回车 / 点框外确认时应用新值
+  //
+  // ⚠ 这里**不挂虚拟按键**（bwe.stick）：扫雷是纯触摸/鼠标操作（点格子、
+  // 点笑脸、点配置箭头、直接输入数字），根本不需要 WASD/空格/回车/Tab/Esc
+  // 这些键盘模拟。挂了只会在屏幕上凭空多出四个按钮，挡住棋盘和 HUD。
+  // 需要虚拟按键的是「桌面向键盘操作」的游戏（平台跳跃、RPG 移动等），
+  // 由那些工程自己调 bwe.stick.mount()，不要塞进扫雷。
+  try {
+    bwe.textinput.onSubmit(function (id, text) { applyInputField(id, text); });
+  } catch (e) { wlog("textinput fail " + e); }
+
   MS.rows = 12; MS.cols = 16; MS.mines = 40;
+  // 模式以模块参数为准：先读一次运行时状态，再重建棋盘。
+  // ⚠ 顺序很重要：pushBoard() 会把 MS.modeIdx 下发给 bwe.mine.set()，
+  // 如果先 pushBoard() 就晚了 —— 那会把模块参数里设的「复雷加殊」覆盖回「普通」。
+  try {
+    var s0 = bwe.mine.state();
+    if (s0 && typeof s0.modeIndex === "number") { MS.modeIdx = s0.modeIndex; }
+  } catch (e) { wlog("state fail " + e); }
   pushBoard();
-  wlog("start · " + MS.rows + "×" + MS.cols + " · " + MS.mines + " 雷");
+  wlog("start · " + MS.rows + "×" + MS.cols + " · " + MS.mines + " 雷 · 模式 "
+    + (MS.modeIdx ? "复雷加殊" : "普通"));
   try { bwe.on("update", onUpdate); } catch (e) { wlog("onUpdate bind fail " + e); }
 }
 
@@ -70,9 +92,18 @@ function pushBoard() {
     bwe.mine.set({
       rows: MS.rows, cols: MS.cols, mines: MS.mines, seed: 0,
       cellSize: autoCellSize(MS.rows, MS.cols),
+      // 模式一并下发：set() 里 mode 变化也会 reset，合并成一次调用避免重置两次
+      mode: MS.modeIdx === 1 ? "complex" : "normal",
     });
   } catch (e) { wlog("mine.set fail " + e); }
   fitBoard();
+}
+
+/** 在当前两种模式之间切换，并重建棋盘（行列雷数保持不变）。 */
+function toggleMode() {
+  MS.modeIdx = MS.modeIdx === 1 ? 0 : 1;
+  pushBoard();
+  wlog("模式 " + (MS.modeIdx ? "复雷加殊" : "普通"));
 }
 
 /**
@@ -83,12 +114,20 @@ function pushBoard() {
 function autoCellSize(rows, cols) {
   var scr = screenSize();
   var portrait = isPortrait(scr.w, scr.h);
-  // 交流的三条留白：竖屏顶 92 / 底 116；横屏顶 96 / 底 120
+  // HUD 固定贴边（顶 108 / 底 116 横屏；顶 92 / 底 116 竖屏），中间是棋盘可用区
   var availW = scr.w - (portrait ? 16 : 24);
-  var availH = scr.h - (portrait ? 92 + 116 + 16 : 96 + 120 + 20);
-  var zoom = 1;
-  try { zoom = bwe.camera.zoom || 1; } catch (e) { zoom = 1; }
-  if (zoom <= 0.05) { zoom = 1; }
+  var availH = scr.h - (portrait ? 92 + 116 + 16 : 108 + 116 + 20);
+  // ⚠ 关键：格子尺寸按「初始 fit 的 zoom」算一次，缩放后不再重算。
+  // 旧写法每帧读 bwe.camera.zoom，玩家双指一放大，cell 就变小 → 棋盘整体缩小，
+  // 看起来像「缩放没生效、反而在抖」。
+  // 现在用「整图 fit 时的基准 zoom」：只有屏幕尺寸/行列数变化才重算。
+  var zoom = MS.baseZoom;
+  if (!zoom || zoom <= 0.05) {
+    zoom = 1;
+    try { zoom = bwe.camera.zoom || 1; } catch (e) { zoom = 1; }
+    if (zoom <= 0.05) { zoom = 1; }
+    MS.baseZoom = zoom;
+  }
   var byW = Math.floor((availW / cols) / zoom);
   var byH = Math.floor((availH / rows) / zoom);
   var cell = Math.min(byW, byH);
@@ -105,7 +144,10 @@ function fitBoard() {
     var st = bwe.mine.state();
     var cell = MS.cell || 32;
     var w = st.cols * cell, h = st.rows * cell;
-    b.setSize(w, h);
+    // ⚠ 只更新「逻辑尺寸」元数据（引擎按 props.w/h 知道棋盘多大），
+    // **绝不能调 setSize()**：那个方法改的是对象的渲染尺寸（o.halfW/halfH），
+    // 棋盘对象上挂着美术素材，一改尺寸素材就被拉伸/缩放 ——
+    // 表现就是「那朵花显示出来了」以及「加减行列时花跟着变大变小」。
     b.setProp("w", w);
     b.setProp("h", h);
   } catch (e) { wlog("fitBoard fail " + e); }
@@ -114,8 +156,10 @@ function fitBoard() {
 // ---------------------------------------------------------------- 每帧
 
 function onUpdate(dt) {
-  var S = { rows: MS.rows, cols: MS.cols, mines: MS.mines, flags: 0, started: false, over: false, won: false, hitMine: false, elapsed: 0 };
+  var S = { rows: MS.rows, cols: MS.cols, mines: MS.mines, flags: 0, started: false, over: false, won: false, hitMine: false, elapsed: 0, modeIndex: 0 };
   try { S = bwe.mine.state(); } catch (e) { }
+  // 模式以运行时为准（模块参数里也可以直接设成复雷加殊）
+  if (typeof S.modeIndex === "number") { MS.modeIdx = S.modeIndex; }
 
   // —— 音效 ——
   if (prev.flags === -1) prev.flags = S.flags;
@@ -403,10 +447,18 @@ function drawHud(S) {
   }
 
   // 横屏：上下两条带
-  var topH2 = Math.max(96, br.h > 0 ? br.y - 10 : 96);
-  var botY = br.h > 0 ? br.y + br.h + 10 : Math.min(H - 96, H * 0.72);
-  if (botY > H - 76) { botY = H - 76; }
-  var botH2 = H - botY;
+  //
+  // ⚠ 这里**不能**用棋盘的屏幕位置来定 HUD 高度。
+  // 旧写法是 topH2 = br.y - 10、botY = br.y + br.h + 10 —— 一旦玩家缩放/平移
+  // （手机上双指手势、桌面改 zoom），棋盘在屏幕上的位置就变，两条灰带跟着变高变矮，
+  // 表现是「UI 一直在跳」。
+  // HUD 是界面层，必须固定在屏幕边缘：顶带固定高度、底带贴底，中间留给棋盘的可用区
+  // 只用来「提示」不参与布局。
+  var topH2 = 108;
+  var botH2 = 116;
+  var botY = H - botH2;
+  // 棋盘可用区（供 autoCellSize / 提示文案用；布局不再依赖它）
+  var availH = botY - topH2;
   drawFrameTop(W, topH2);
   drawFrameBottom(W, botY, botH2);
   putLabel("标题 扫雷", 10, 2 + 26 / 2);
@@ -445,7 +497,8 @@ function drawInfoBar(W, topH, S) {
   // 标题栏（Win98 经典深蓝 → 浅蓝渐变，用两段纯色近似）
   box(2, 2, W - 4, titleH, TITLE_BLUE1);
   box(2, 2, W - 4, 10, "#2a4b9b");
-  text(cfg("bgTitle", "扫雷 · Minesweeper"), 10, 2 + titleH / 2, 15, cfg("silverLight", "#ffffff"), "left");
+  text(MS.modeIdx === 1 ? "扫雷 · 复雷加殊 Complexweeper" : cfg("bgTitle", "扫雷 · Minesweeper"),
+    10, 2 + titleH / 2, 15, cfg("silverLight", "#ffffff"), "left");
   // 右上角三个窗口按钮
   drawTitleButtons(W, titleH);
 
@@ -473,9 +526,18 @@ function drawInfoBar(W, topH, S) {
   }
 
   // 标题下的状态文字
-  var msg = S.over
-    ? (S.won ? "恭喜！全部安全格已翻开" : "踩到雷了，按笑脸重开")
-    : (S.started ? "进行中 · 左键翻开 / 右键插旗" : "左键翻开第一格（首击必安全）");
+  var msg;
+  if (MS.modeIdx === 1) {
+    msg = S.over
+      ? (S.won ? "复雷加殊 · 全部安全格已翻开" : "踩到雷了，按笑脸重开")
+      : (S.started
+        ? "复雷加殊 · 数字 = 周围雷之和的模长 · 点数字可连锁翻开"
+        : "左键翻开第一格（首击必安全）· 点数字可连锁翻开（数量与虚实比例都要对）");
+  } else {
+    msg = S.over
+      ? (S.won ? "恭喜！全部安全格已翻开" : "踩到雷了，按笑脸重开")
+      : (S.started ? "进行中 · 左键翻开 / 右键插旗" : "左键翻开第一格（首击必安全）");
+  }
   text(msg, 16 + cw + 14, cy + 26, 15, TEXT_DARK, "left");
 
   // 行/列/雷数 只读显示
@@ -555,7 +617,23 @@ function drawConfigBar(W, botY, botH) {
     // 凹陷数值框：组框下半部
     var fx = x + 10, fy = gy + 26, fw = gw - 48, fh = 20;
     bevelSunken(fx, fy, fw, fh);
-    text(String(it.value), fx + fw / 2, fy + fh / 2, 16, BLACK, "center");
+    syncInputField(it.id, fx, fy, fw, fh, it.value, it.min, it.max, W);
+    var shown = curFieldText(it.id, String(it.value));
+    // 输入超范围 → 红框提示（否则玩家填 1 被悄悄钳成 5，完全不知道发生了什么）
+    var bad = inputHint(it.id);
+    // 编辑态画白底，让「现在能打字」一眼可见
+    if (bwe.textinput.editing === it.id) {
+      box(fx, fy, fw, fh, bad ? "#ffe0e0" : "#ffffff");
+    }
+    text(shown, fx + fw / 2, fy + fh / 2, 16, bad ? "#c00000" : BLACK, "center");
+    if (bad) {
+      text(bad, fx + fw / 2, fy - 8, 11, "#c00000", "center");
+    }
+    // 编辑时画一条闪烁光标
+    if (bwe.textinput.editing === it.id) {
+      var tw = bwe.draw.measureText(shown, 16).w;
+      box(fx + fw / 2 + tw / 2 + 2, fy + 3, 2, fh - 6, "#1a66ff");
+    }
     // +/- 两个凸起按钮
     var bw2 = 20, bh2 = 9;
     var up = { x: fx + fw + 7, y: fy, w: bw2, h: bh2 };
@@ -582,8 +660,24 @@ function drawConfigBar(W, botY, botH) {
     wlog("新游戏（" + MS.rows + "×" + MS.cols + " · " + MS.mines + "）");
   }
 
+  // 模式切换按钮：普通 ⇄ 复雷加殊（放在「新游戏」左边）
+  var mbW = 116, mbH = 34;
+  var mb = { x: nb.x - 12 - mbW, y: gy + 9, w: mbW, h: mbH };
+  if (mb.x > gx + 3 * (gw + 10) + 4) {
+    bevelRaise(mb.x, mb.y, mb.w, mb.h);
+    // 复雷模式用浅蓝底提示当前不是普通扫雷
+    if (MS.modeIdx === 1) { box(mb.x + 2, mb.y + 2, mb.w - 4, mb.h - 4, "#cfe0ff"); }
+    if (hit(mb) && mouseDown()) { box(mb.x + 2, mb.y + 2, mb.w - 4, mb.h - 4, "#a8a8a8"); }
+    text(MS.modeIdx === 1 ? "模式：复雷" : "模式：普通",
+      mb.x + mb.w / 2, mb.y + mb.h / 2, 15, BLACK, "center");
+    if (clicked(mb)) { toggleMode(); }
+  }
+
   // 底部提示
-  text(cfg("labelRange", "行 5–30 · 列 5–30 · 雷 1–(行×列−9)"), 16, botY + botH - 12, 11, "#404040", "left");
+  var rangeTip = MS.modeIdx === 1
+    ? "复雷加殊：点数字连锁翻开需①旗数正确 ②虚实比例正确（不需标雷的属性）"
+    : cfg("labelRange", "行 5–30 · 列 5–30 · 雷 1–(行×列−9)");
+  text(rangeTip, 16, botY + botH - 12, 11, "#404040", "left");
 }
 
 function drawArrow(r, up) {
@@ -604,6 +698,70 @@ function drawArrow(r, up) {
 }
 
 /** 改行/列/雷数并重建棋盘（列改时会修正雷数上限）。 */
+// ---------------------------------------------------------------- 可编辑输入框
+//
+// 玩家反馈：手机上改「40 雷」要点 30 多次 +/-。改成点一下数值框就能直接键入。
+// 实现在引擎侧（bwe.textinput）：桌面端走物理键盘、Android 弹系统软键盘，
+// 脚本只负责「把框放在哪、值是什么、提交后怎么办」。
+
+/** 把脚本的布局同步给引擎（归一化 0~1，引擎按逻辑视口换算）。 */
+function syncInputField(id, x, y, w, h, value, min, max, viewW) {
+  // ⚠ 不要要求调用方传视口高度：drawConfigBar / drawConfigBarPortrait 的签名里
+  // 根本没有 H（只有 W/botY/botH），直接引用 H 会抛 "H is not defined"。
+  // 这里自己从 bwe.camera.size 取，调用方只需给宽度做归一化基准。
+  var ss = screenSize();
+  var viewH = ss.h > 0 ? ss.h : 1;
+  var baseW = viewW > 0 ? viewW : (ss.w > 0 ? ss.w : 1);
+  try {
+    bwe.textinput.define(id, String(value), min, max, true);
+    bwe.textinput.rect(id, x / baseW, y / viewH, w / baseW, h / viewH);
+    bwe.textinput.refreshHints();
+  } catch (e) { /* 输入框不可用时静默降级为只读显示 */ }
+}
+
+/** 编辑中的框显示用户敲的内容，否则显示业务值。 */
+function curFieldText(id, fallback) {
+  try {
+    if (bwe.textinput.editing === id) {
+      var v = bwe.textinput.value(id);
+      return v.length ? v : "_";
+    }
+  } catch (e) { /* ignore */ }
+  return fallback;
+}
+
+/** 当前输入框的校验提示（合法返回空串）。 */
+function inputHint(id) {
+  try {
+    return bwe.textinput.hint(id) || "";
+  } catch (e) { return ""; }
+}
+
+/** 提交回调：把输入的数字应用回配置。 */
+function applyInputField(id, text) {
+  // 空/非数字：直接忽略（输入框本身也会给出「只能填数字」提示）
+  var n = Number(text);
+  if (!isFinite(n) || n <= 0) { wlog("输入配置 " + id + " 非法: " + text); return; }
+  var want = Math.floor(n);
+  MS[id] = want;
+  clampConfig();
+  pushBoard();
+  // 被钳制时明确记录，方便玩家/我们看出「我填 1 为什么变成 5」
+  if (MS[id] !== want) {
+    wlog("输入配置 " + id + "=" + want + " 超出范围，已修正为 " + MS[id]);
+  } else {
+    wlog("输入配置 " + id + "=" + MS[id]);
+  }
+}
+
+/** 行/列变化后把雷数钳到合法范围。 */
+function clampConfig() {
+  MS.rows = Math.max(5, Math.min(30, MS.rows));
+  MS.cols = Math.max(5, Math.min(30, MS.cols));
+  var cap = Math.max(1, MS.rows * MS.cols - 9);
+  MS.mines = Math.max(1, Math.min(cap, MS.mines));
+}
+
 function changeValue(id, delta, max, min) {
   var v = MS[id] + delta;
   if (v < min) { v = min; }
@@ -638,7 +796,7 @@ function drawInfoBarPortrait(W, topH, S) {
   var titleH = 22;
   box(2, 2, W - 4, titleH, TITLE_BLUE1);
   box(2, 2, W - 4, 8, "#2a4b9b");
-  text(cfg("bgTitle", "扫雷"), 8, 2 + titleH / 2, 14, cfg("silverLight", "#ffffff"), "left");
+  text(MS.modeIdx === 1 ? "扫雷 · 复雷加殊" : cfg("bgTitle", "扫雷"), 8, 2 + titleH / 2, 14, cfg("silverLight", "#ffffff"), "left");
   drawTitleButtonsTiny(W, titleH);
 
   var cy = titleH + 8;
@@ -685,7 +843,20 @@ function drawConfigBarPortrait(W, botY, botH) {
     text(shortName, 10, y + 17, 14, "#202020", "left");
     var fx = 34, fw = W - 34 - 66, fh = 20;
     bevelSunken(fx, y + 2, fw, fh);
-    text(String(MS[it.id]), fx + fw / 2, y + 18, 15, BLACK, "center");
+    syncInputField(it.id, fx, y + 2, fw, fh, MS[it.id], it.min, it.max, W);
+    var shown2 = curFieldText(it.id, String(MS[it.id]));
+    var bad2 = inputHint(it.id);
+    if (bwe.textinput.editing === it.id) {
+      box(fx, y + 2, fw, fh, bad2 ? "#ffe0e0" : "#ffffff");
+    }
+    text(shown2, fx + fw / 2, y + 18, 15, bad2 ? "#c00000" : BLACK, "center");
+    if (bad2) {
+      text(bad2, fx + fw + 30, y + 18, 10, "#c00000", "left");
+    }
+    if (bwe.textinput.editing === it.id) {
+      var tw2 = bwe.draw.measureText(shown2, 15).w;
+      box(fx + fw / 2 + tw2 / 2 + 2, y + 5, 2, fh - 6, "#1a66ff");
+    }
     var up = { x: fx + fw + 6, y: y + 2, w: 22, h: 9 };
     var dn = { x: fx + fw + 6, y: y + 13, w: 22, h: 9 };
     bevelRaise(up.x, up.y, up.w, up.h);
@@ -695,9 +866,15 @@ function drawConfigBarPortrait(W, botY, botH) {
     if (clicked(up)) { changeValue(it.id, 1, it.max, it.min); }
     if (clicked(dn)) { changeValue(it.id, -1, it.max, it.min); }
   }
-  var nb = { x: W - 60, y: gy + 6, w: 52, h: 48 };
+  // 竖屏右下：上面「模式」，下面「重局」——一列两个按钮，宽 52 高 22。
+  var mb = { x: W - 60, y: gy + 4, w: 52, h: 22 };
+  bevelRaise(mb.x, mb.y, mb.w, mb.h);
+  if (MS.modeIdx === 1) { box(mb.x + 2, mb.y + 2, mb.w - 4, mb.h - 4, "#cfe0ff"); }
+  text(MS.modeIdx === 1 ? "复雷" : "普通", mb.x + mb.w / 2, mb.y + mb.h / 2, 13, BLACK, "center");
+  if (clicked(mb)) { toggleMode(); }
+
+  var nb = { x: W - 60, y: gy + 30, w: 52, h: 22 };
   bevelRaise(nb.x, nb.y, nb.w, nb.h);
-  text(cfg("labelRestart", "重"), nb.x + nb.w / 2, nb.y + 20, 15, BLACK, "center");
-  text("局", nb.x + nb.w / 2, nb.y + 38, 15, BLACK, "center");
+  text(cfg("labelRestart", "重局"), nb.x + nb.w / 2, nb.y + nb.h / 2, 13, BLACK, "center");
   if (clicked(nb)) { bwe.mine.reset(); }
 }

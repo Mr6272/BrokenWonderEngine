@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 
@@ -50,24 +51,24 @@ final class ScriptApi {
      * <p>只有<b>脚本层</b>的归属关系：父子各自仍是独立 Actor（参与物理/绘制/查找），
      * 不是真正的坐标继承场景图 —— v1 的取舍，写进文档。
      */
-    private final Map<TopDownRuntime.Actor, TopDownRuntime.Actor> parents =
-            new IdentityHashMap<TopDownRuntime.Actor, TopDownRuntime.Actor>();
+    private final Map<Actor, Actor> parents =
+            new IdentityHashMap<Actor, Actor>();
 
     /** {@code e.locked}：纯脚本侧状态（宿主 Actor 没有该字段，v1 只做「记住这个值」）。 */
-    private final Map<TopDownRuntime.Actor, Boolean> lockedActors =
-            new IdentityHashMap<TopDownRuntime.Actor, Boolean>();
+    private final Map<Actor, Boolean> lockedActors =
+            new IdentityHashMap<Actor, Boolean>();
 
     /** Actor ↔ 实体包装（同一 Actor 永远同一个 JS 对象）。 */
-    private final Map<TopDownRuntime.Actor, ScriptableObject> entities =
-            new IdentityHashMap<TopDownRuntime.Actor, ScriptableObject>();
-    private final Map<Scriptable, TopDownRuntime.Actor> wrapperActor =
-            new IdentityHashMap<Scriptable, TopDownRuntime.Actor>();
-    private final Map<TopDownRuntime.Actor, Map<String, ScriptableObject>> moduleWrappers =
-            new IdentityHashMap<TopDownRuntime.Actor, Map<String, ScriptableObject>>();
-    private final Map<TopDownRuntime.Actor, Map<String, List<Function>>> entityHandlers =
-            new IdentityHashMap<TopDownRuntime.Actor, Map<String, List<Function>>>();
-    private final Map<TopDownRuntime.Actor, Integer> frameLocks =
-            new IdentityHashMap<TopDownRuntime.Actor, Integer>();
+    private final Map<Actor, ScriptableObject> entities =
+            new IdentityHashMap<Actor, ScriptableObject>();
+    private final Map<Scriptable, Actor> wrapperActor =
+            new IdentityHashMap<Scriptable, Actor>();
+    private final Map<Actor, Map<String, ScriptableObject>> moduleWrappers =
+            new IdentityHashMap<Actor, Map<String, ScriptableObject>>();
+    private final Map<Actor, Map<String, List<Function>>> entityHandlers =
+            new IdentityHashMap<Actor, Map<String, List<Function>>>();
+    private final Map<Actor, Integer> frameLocks =
+            new IdentityHashMap<Actor, Integer>();
     private final Map<Long, ScriptEngine.Attachment> attachHandles =
             new LinkedHashMap<Long, ScriptEngine.Attachment>();
     private long nextAttachId = 1;
@@ -89,6 +90,7 @@ final class ScriptApi {
         buildPrefab();
         buildWorld();
         buildInput();
+        buildStick();
         buildCamera();
         buildTime();
         buildDraw();
@@ -96,6 +98,8 @@ final class ScriptApi {
         buildAudio();
         buildMine();
         buildGrid();
+        buildBoard();
+        buildTextInput();
         buildTilemap();
         buildNav();
         buildInteract();
@@ -269,12 +273,12 @@ final class ScriptApi {
     }
 
     /** 把 Actor 包成 JS 里的 Entity（同一 Actor 复用同一个包装对象）。 */
-    Scriptable entityOf(TopDownRuntime.Actor a) {
+    Scriptable entityOf(Actor a) {
         return entity(a);
     }
 
     /** JS 值 → Actor（不是 Entity 包装则返回 null）。 */
-    TopDownRuntime.Actor actorOf(Object jsValue) {
+    Actor actorOf(Object jsValue) {
         return unwrap(jsValue);
     }
 
@@ -287,8 +291,8 @@ final class ScriptApi {
     }
 
     /** 当前所有 Actor（只读快照，包含脚本 spawn 出来的）。 */
-    List<TopDownRuntime.Actor> actorsSnapshot() {
-        return new ArrayList<TopDownRuntime.Actor>(host.actors);
+    List<Actor> actorsSnapshot() {
+        return new ArrayList<Actor>(host.actors);
     }
 
     private static String joinArgs(Object[] args) {        StringBuilder sb = new StringBuilder();
@@ -518,7 +522,7 @@ final class ScriptApi {
      * 支持的字段：x,y,asset,name,kind,z,layer,halfW,halfH,scaleX,scaleY,rotation,visible,
      * animMode,animFps,script,tags,modules,props,parent。
      */
-    TopDownRuntime.Actor spawnActor(Object opts) {
+    Actor spawnActor(Object opts) {
         Scriptable o = opts instanceof Scriptable ? (Scriptable) opts : null;
         if (o == null) {
             return null;
@@ -554,7 +558,7 @@ final class ScriptApi {
                 }
             }
         }
-        TopDownRuntime.Actor a = engine.spawnScripted(x, y, asset, name, kind, z, halfW, halfH,
+        Actor a = engine.spawnScripted(x, y, asset, name, kind, z, halfW, halfH,
                 script, tags, modules);
         if (a == null) {
             return null;
@@ -614,7 +618,7 @@ final class ScriptApi {
     }
 
     /** {@code e.attach} 的 Java 版（预制体的 children 复用同一套子精灵数据）。 */
-    ScriptEngine.Attachment attachSprite(TopDownRuntime.Actor a, String asset, float dx, float dy,
+    ScriptEngine.Attachment attachSprite(Actor a, String asset, float dx, float dy,
                                          int z, float rotation, float alpha, float w, float h) {
         if (a == null) {
             return null;
@@ -635,16 +639,16 @@ final class ScriptApi {
     }
 
     /** 实体染色（0~1）；null = 未染色（渲染侧原样画）。状态存在宿主 Actor 上，这里只读。 */
-    float[] tintOf(TopDownRuntime.Actor a) {
+    float[] tintOf(Actor a) {
         return a == null ? null : a.tint;
     }
 
     /** 设置父子关系（{@code null} = 脱离父级）。 */
-    void setParent(TopDownRuntime.Actor child, Object parentValue) {
+    void setParent(Actor child, Object parentValue) {
         if (child == null) {
             return;
         }
-        TopDownRuntime.Actor parent = unwrap(parentValue);
+        Actor parent = unwrap(parentValue);
         if (parent == null) {
             parents.remove(child);
             return;
@@ -656,17 +660,17 @@ final class ScriptApi {
     }
 
     /** 取父级（没有返回 null）。 */
-    TopDownRuntime.Actor parentOf(TopDownRuntime.Actor child) {
+    Actor parentOf(Actor child) {
         return child == null ? null : parents.get(child);
     }
 
     /** 取所有直接子级（顺序 = 设置顺序，不保证稳定）。 */
-    List<TopDownRuntime.Actor> childrenOf(TopDownRuntime.Actor parent) {
-        List<TopDownRuntime.Actor> out = new ArrayList<TopDownRuntime.Actor>();
+    List<Actor> childrenOf(Actor parent) {
+        List<Actor> out = new ArrayList<Actor>();
         if (parent == null) {
             return out;
         }
-        for (Map.Entry<TopDownRuntime.Actor, TopDownRuntime.Actor> e : parents.entrySet()) {
+        for (Map.Entry<Actor, Actor> e : parents.entrySet()) {
             if (e.getValue() == parent && !e.getKey().dead) {
                 out.add(e.getKey());
             }
@@ -675,8 +679,8 @@ final class ScriptApi {
     }
 
     /** candidate 是否在 node 的祖先链上（防环）。 */
-    private boolean isAncestor(TopDownRuntime.Actor candidate, TopDownRuntime.Actor node) {
-        TopDownRuntime.Actor cur = parents.get(node);
+    private boolean isAncestor(Actor candidate, Actor node) {
+        Actor cur = parents.get(node);
         int guard = 0;
         while (cur != null && guard++ < 256) {
             if (cur == candidate) {
@@ -724,19 +728,19 @@ final class ScriptApi {
         worldObj.getters.put("scene", () -> sceneObj);
 
         method(worldObj, "find", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = findOne(ScriptJs.arg(args, 0));
+            Actor a = findOne(ScriptJs.arg(args, 0));
             return a == null ? null : entity(a);
         });
         method(worldObj, "findAll", (cx, thisObj, args) -> {
             List<Scriptable> list = new ArrayList<Scriptable>();
-            for (TopDownRuntime.Actor a : filtered(ScriptJs.arg(args, 0))) {
+            for (Actor a : filtered(ScriptJs.arg(args, 0))) {
                 list.add(entity(a));
             }
             return array(list);
         });
         method(worldObj, "entities", (cx, thisObj, args) -> {
             List<Scriptable> list = new ArrayList<Scriptable>();
-            for (TopDownRuntime.Actor a : host.actors) {
+            for (Actor a : host.actors) {
                 if (!a.dead) {
                     list.add(entity(a));
                 }
@@ -780,7 +784,7 @@ final class ScriptApi {
             return spawn(merged);
         });
         method(worldObj, "clone", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor src = unwrap(ScriptJs.arg(args, 0));
+            Actor src = unwrap(ScriptJs.arg(args, 0));
             if (src == null || src.dead) {
                 return null;
             }
@@ -803,12 +807,12 @@ final class ScriptApi {
                     }
                 }
             }
-            TopDownRuntime.Actor a = prefabs.spawnFromSpec(spec, merged, false);
+            Actor a = prefabs.spawnFromSpec(spec, merged, false);
             return a == null ? null : entity(a);
         });
         // ---- 批量销毁 ----
         method(worldObj, "clear", (cx, thisObj, args) -> {
-            for (TopDownRuntime.Actor a : new ArrayList<TopDownRuntime.Actor>(host.actors)) {
+            for (Actor a : new ArrayList<Actor>(host.actors)) {
                 if (!a.dead) {
                     engine.destroyEntity(a);
                 }
@@ -820,7 +824,7 @@ final class ScriptApi {
             if (tag.isEmpty()) {
                 return null;
             }
-            for (TopDownRuntime.Actor a : new ArrayList<TopDownRuntime.Actor>(host.actors)) {
+            for (Actor a : new ArrayList<Actor>(host.actors)) {
                 if (!a.dead && a.o.tags.contains(tag)) {
                     engine.destroyEntity(a);
                 }
@@ -829,11 +833,11 @@ final class ScriptApi {
         });
         method(worldObj, "destroyAll", (cx, thisObj, args) -> {
             Object q = ScriptJs.arg(args, 0);
-            List<TopDownRuntime.Actor> targets = ScriptJs.isMissing(q)
-                    ? new ArrayList<TopDownRuntime.Actor>(host.actors)
-                    : new ArrayList<TopDownRuntime.Actor>(filtered(q));
+            List<Actor> targets = ScriptJs.isMissing(q)
+                    ? new ArrayList<Actor>(host.actors)
+                    : new ArrayList<Actor>(filtered(q));
             int n = 0;
-            for (TopDownRuntime.Actor a : targets) {
+            for (Actor a : targets) {
                 if (!a.dead) {
                     engine.destroyEntity(a);
                     n++;
@@ -845,7 +849,7 @@ final class ScriptApi {
             Object q = ScriptJs.arg(args, 0);
             if (ScriptJs.isMissing(q)) {
                 int n = 0;
-                for (TopDownRuntime.Actor a : host.actors) {
+                for (Actor a : host.actors) {
                     if (!a.dead) {
                         n++;
                     }
@@ -861,10 +865,10 @@ final class ScriptApi {
                 return null;
             }
             // 先拍快照：回调里 spawn/destroy 不会破坏迭代。
-            List<TopDownRuntime.Actor> list = ScriptJs.isMissing(q)
-                    ? new ArrayList<TopDownRuntime.Actor>(host.actors)
+            List<Actor> list = ScriptJs.isMissing(q)
+                    ? new ArrayList<Actor>(host.actors)
                     : filtered(q);
-            for (TopDownRuntime.Actor a : list) {
+            for (Actor a : list) {
                 if (a.dead) {
                     continue;
                 }
@@ -875,7 +879,7 @@ final class ScriptApi {
         });
 
         method(worldObj, "destroy", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = unwrap(ScriptJs.arg(args, 0));
+            Actor a = unwrap(ScriptJs.arg(args, 0));
             if (a != null) {
                 engine.destroyEntity(a);
             }
@@ -920,14 +924,14 @@ final class ScriptApi {
         ScriptJs.put(bwe, "world", worldObj);
     }
 
-    private TopDownRuntime.Actor findOne(Object q) {
-        List<TopDownRuntime.Actor> all = filtered(q);
+    private Actor findOne(Object q) {
+        List<Actor> all = filtered(q);
         return all.isEmpty() ? null : all.get(0);
     }
 
     /** find/findAll 共用的查询：字符串（名字/标签/id）或 {name,tag,kind,id}。 */
-    private List<TopDownRuntime.Actor> filtered(Object q) {
-        List<TopDownRuntime.Actor> out = new ArrayList<TopDownRuntime.Actor>();
+    private List<Actor> filtered(Object q) {
+        List<Actor> out = new ArrayList<Actor>();
         if (ScriptJs.isMissing(q)) {
             return out;
         }
@@ -936,7 +940,7 @@ final class ScriptApi {
             if (s.isEmpty()) {
                 return out;
             }
-            for (TopDownRuntime.Actor a : host.actors) {
+            for (Actor a : host.actors) {
                 if (a.dead) {
                     continue;
                 }
@@ -951,7 +955,7 @@ final class ScriptApi {
         String tag = ScriptJs.str(ScriptJs.get(o, "tag"), null);
         String kind = ScriptJs.str(ScriptJs.get(o, "kind"), null);
         String id = ScriptJs.str(ScriptJs.get(o, "id"), null);
-        for (TopDownRuntime.Actor a : host.actors) {
+        for (Actor a : host.actors) {
             if (a.dead) {
                 continue;
             }
@@ -973,7 +977,7 @@ final class ScriptApi {
     }
 
     private Scriptable spawn(Object opts) {
-        TopDownRuntime.Actor a = spawnActor(opts);
+        Actor a = spawnActor(opts);
         return a == null ? null : entity(a);
     }
 
@@ -998,6 +1002,76 @@ final class ScriptApi {
             }
         }
         return m;
+    }
+
+    // ---------------- bwe.stick（虚拟摇杆 / 虚拟按键） ----------------
+
+    /**
+     * 虚拟摇杆与虚拟按键。
+     *
+     * <p><b>解决什么问题</b>：桌面向游戏靠 WASD/空格/回车/Tab/Esc 操作，触屏上没法按。
+     * 这个模块一行就能把常用键变成屏幕按钮，并按手机手感自动摆位
+     * （左下十字摇杆 + 右侧功能键），绘制在最上层、输入优先于场景点击。
+     *
+     * <p>用法：
+     * <pre>
+     * bwe.stick.mount()                          // 默认：WASD 十字 + 空格/回车/Tab/Esc
+     * bwe.stick.mount("WASD,space,enter,tab,esc")
+     * bwe.stick.mount("arrows,space")            // 方向键十字 + 空格
+     * bwe.stick.hide() / bwe.stick.show()
+     * bwe.stick.opacity(0.6)
+     * bwe.stick.axis()                           // {x,y} 摇杆归一化轴（-1..1）
+     * bwe.stick.down("space")                    // 该键当前是否按下
+     * </pre>
+     */
+    private void buildStick() {
+        ScriptJs.Flex stickObj = obj();
+        method(stickObj, "mount", (cx, thisObj, args) -> {
+            String spec = ScriptJs.str(ScriptJs.arg(args, 0), "");
+            if (host.stick != null) {
+                host.stick.mount(spec);
+            }
+            return null;
+        });
+        method(stickObj, "unmount", (cx, thisObj, args) -> {
+            if (host.stick != null) {
+                host.stick.releaseAll();
+            }
+            return null;
+        });
+        method(stickObj, "show", (cx, thisObj, args) -> {
+            if (host.stick != null) {
+                host.stick.setVisible(true);
+            }
+            return null;
+        });
+        method(stickObj, "hide", (cx, thisObj, args) -> {
+            if (host.stick != null) {
+                host.stick.releaseAll();
+                host.stick.setVisible(false);
+            }
+            return null;
+        });
+        method(stickObj, "opacity", (cx, thisObj, args) -> {
+            if (host.stick != null) {
+                host.stick.setOpacity(ScriptJs.fnum(ScriptJs.arg(args, 0), 0.55f));
+            }
+            return null;
+        });
+        method(stickObj, "axis", (cx, thisObj, args) -> {
+            ScriptJs.Flex o = obj();
+            float[] a = host.stick == null ? new float[]{0f, 0f} : host.stick.axis();
+            o.values.put("x", Double.valueOf(a[0]));
+            o.values.put("y", Double.valueOf(a[1]));
+            return o;
+        });
+        method(stickObj, "down", (cx, thisObj, args) -> {
+            String id = ScriptJs.str(ScriptJs.arg(args, 0), "");
+            return Boolean.valueOf(host.stick != null && host.stick.pressed(id));
+        });
+        stickObj.getters.put("mounted", () ->
+                Boolean.valueOf(host.stick != null && host.stick.isMounted()));
+        ScriptJs.put(bwe, "stick", stickObj);
     }
 
     // ---------------- bwe.input ----------------
@@ -1124,7 +1198,7 @@ final class ScriptApi {
     private void buildCamera() {
         cameraObj = obj();
         method(cameraObj, "follow", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = unwrap(ScriptJs.arg(args, 0));
+            Actor a = unwrap(ScriptJs.arg(args, 0));
             ScriptableObject opts = argObj(ScriptJs.arg(args, 1));
             float smooth = opts == null ? 0.15f : ScriptJs.fnum(ScriptJs.get(opts, "smooth"), 0.15f);
             float lookAhead = opts == null ? 0f : ScriptJs.fnum(ScriptJs.get(opts, "lookAhead"), 0f);
@@ -1332,13 +1406,16 @@ final class ScriptApi {
             int mines = opts == null ? -1 : ScriptJs.inum(ScriptJs.get(opts, "mines"), -1);
             int seed = opts == null ? -1 : ScriptJs.inum(ScriptJs.get(opts, "seed"), -1);
             int cellSize = opts == null ? -1 : ScriptJs.inum(ScriptJs.get(opts, "cellSize"), -1);
-            TopDownRuntime.Minesweeper m = host.minesweeper;
+            // 玩法模式：只认文档里的四种写法，认不出（含未传）就当「不改」
+            int modeIdx = opts == null ? -1 : mineModeIndex(ScriptJs.get(opts, "mode"));
+            Minesweeper m = host.minesweeper;
             if (rows > 0) m.rows = Math.max(3, Math.min(40, rows));
             if (cols > 0) m.cols = Math.max(3, Math.min(40, cols));
-            boolean changed = rows > 0 || cols > 0;
+            boolean changed = rows > 0 || cols > 0 || modeIdx >= 0;
             if (mines > 0) m.wantedMines = mines;
             if (seed >= 0) m.seed = seed;
             if (cellSize > 0) m.cell = Math.max(16, Math.min(64, cellSize));
+            if (modeIdx >= 0) m.complexMode = (modeIdx == 1);
             if (changed || mines > 0 || seed >= 0 || cellSize > 0) m.reset();
             return null;
         });
@@ -1347,13 +1424,15 @@ final class ScriptApi {
             return null;
         });
         method(o, "state", (cx, thisObj, args) -> {
-            TopDownRuntime.Minesweeper m = host.minesweeper;
+            Minesweeper m = host.minesweeper;
             ScriptJs.Flex out = obj();
             if (m == null) {
                 out.values.put("rows", Double.valueOf(0));
                 out.values.put("cols", Double.valueOf(0));
                 out.values.put("mines", Double.valueOf(0));
                 out.values.put("flags", Double.valueOf(0));
+                out.values.put("mode", "normal");
+                out.values.put("modeIndex", Double.valueOf(0));
                 out.values.put("over", Boolean.valueOf(false));
                 out.values.put("won", Boolean.valueOf(false));
                 out.values.put("hitMine", Boolean.valueOf(false));
@@ -1364,6 +1443,8 @@ final class ScriptApi {
             out.values.put("cols", Double.valueOf((double) m.cols));
             out.values.put("mines", Double.valueOf((double) m.mineCount));
             out.values.put("flags", Double.valueOf((double) m.flags));
+            out.values.put("mode", m.complexMode ? "complex" : "normal");
+            out.values.put("modeIndex", Double.valueOf(m.complexMode ? 1d : 0d));
             out.values.put("started", Boolean.valueOf(m.started));
             out.values.put("over", Boolean.valueOf(m.over));
             out.values.put("won", Boolean.valueOf(m.won));
@@ -1372,6 +1453,32 @@ final class ScriptApi {
             return out;
         });
         ScriptJs.put(bwe, "mine", o);
+    }
+
+    /**
+     * 解析 {@code bwe.mine.set({mode})} 的取值：{@code 1} = 复雷加殊，{@code 0} = 普通，
+     * {@code -1} = 认不出（调用方按「不改」处理）。
+     *
+     * <p>口径同编辑器 pick 参数（docs/complexweeper-rules.md §8）：值里含 {@code 复雷} 或
+     * {@code complex}（忽略大小写）即复雷；含 {@code 普通} 或 {@code normal} 即普通。
+     * 这是 {@code bwe.mine} 的既有成员载荷字段，不新增方法名。
+     */
+    private static int mineModeIndex(Object v) {
+        if (ScriptJs.isMissing(v)) {
+            return -1;
+        }
+        String s = ScriptJs.str(v, "").trim();
+        if (s.isEmpty()) {
+            return -1;
+        }
+        String low = s.toLowerCase(Locale.ROOT);
+        if (s.contains("复雷") || low.contains("complex")) {
+            return 1;
+        }
+        if (s.contains("普通") || low.contains("normal")) {
+            return 0;
+        }
+        return -1;
     }
 
     private void addDraw(ScriptRender.Cmd cmd) {
@@ -1508,6 +1615,238 @@ final class ScriptApi {
         ScriptJs.put(bwe, "grid", gridObj);
     }
 
+    // ---------------- bwe.textinput（点一下就能直接键入的输入框） ----------------
+
+    /**
+     * 文本/数字输入框。解决「手机上改不了数字参数」：点一下弹软键盘，直接敲。
+     *
+     * <pre>
+     * bwe.textinput.define("rows", 12, 5, 30)     // 数字框，范围 5~30
+     * bwe.textinput.rect("rows", x, y, w, h)      // 归一化 0~1 位置（脚本知道自己的布局）
+     * bwe.textinput.value("rows")                  // 当前文本
+     * bwe.textinput.number("rows", 12)             // 当前整数值
+     * bwe.textinput.active()                       // 是否有框在编辑
+     * bwe.textinput.onSubmit(function(id, text){}) // 回车/点外面确认
+     * </pre>
+     */
+    private void buildTextInput() {
+        ScriptJs.Flex tObj = obj();
+        method(tObj, "define", (cx, thisObj, args) -> {
+            ScriptTextInput ti = host.textInput;
+            if (ti == null) {
+                return null;
+            }
+            String id = ScriptJs.str(ScriptJs.arg(args, 0), "");
+            String val = ScriptJs.str(ScriptJs.arg(args, 1), "");
+            int min = ScriptJs.inum(ScriptJs.arg(args, 2), 0);
+            int max = ScriptJs.inum(ScriptJs.arg(args, 3), 0);
+            boolean numeric = args.length > 4 ? ScriptJs.bool(ScriptJs.arg(args, 4), true)
+                    : isAllDigitsOrEmpty(val);
+            ti.define(id, val, min, max, numeric);
+            return null;
+        });
+        method(tObj, "rect", (cx, thisObj, args) -> {
+            ScriptTextInput ti = host.textInput;
+            if (ti == null) {
+                return null;
+            }
+            ScriptTextInput.Field f = ti.find(ScriptJs.str(ScriptJs.arg(args, 0), ""));
+            if (f == null) {
+                return null;
+            }
+            f.nx = ScriptJs.fnum(ScriptJs.arg(args, 1), 0f);
+            f.ny = ScriptJs.fnum(ScriptJs.arg(args, 2), 0f);
+            f.nw = ScriptJs.fnum(ScriptJs.arg(args, 3), 0f);
+            f.nh = ScriptJs.fnum(ScriptJs.arg(args, 4), 0f);
+            return null;
+        });
+        method(tObj, "value", (cx, thisObj, args) -> {
+            ScriptTextInput ti = host.textInput;
+            return ti == null ? "" : ti.textOf(ScriptJs.str(ScriptJs.arg(args, 0), ""));
+        });
+        method(tObj, "number", (cx, thisObj, args) -> {
+            ScriptTextInput ti = host.textInput;
+            if (ti == null) {
+                return Double.valueOf(ScriptJs.fnum(ScriptJs.arg(args, 1), 0f));
+            }
+            return Double.valueOf(ti.intOf(ScriptJs.str(ScriptJs.arg(args, 0), ""),
+                    (int) ScriptJs.fnum(ScriptJs.arg(args, 1), 0f)));
+        });
+        method(tObj, "setValue", (cx, thisObj, args) -> {
+            ScriptTextInput ti = host.textInput;
+            if (ti != null) {
+                ScriptTextInput.Field f = ti.find(ScriptJs.str(ScriptJs.arg(args, 0), ""));
+                if (f != null) {
+                    f.text = ScriptJs.str(ScriptJs.arg(args, 1), "");
+                }
+            }
+            return null;
+        });
+        method(tObj, "active", (cx, thisObj, args) -> {
+            ScriptTextInput ti = host.textInput;
+            return ti == null ? "" : (ti.isActive() ? ti.activeField().id : "");
+        });
+        method(tObj, "cancel", (cx, thisObj, args) -> {
+            if (host.textInput != null) {
+                host.textInput.cancelActive();
+            }
+            return null;
+        });
+        method(tObj, "onSubmit", (cx, thisObj, args) -> {
+            ScriptTextInput ti = host.textInput;
+            if (ti == null) {
+                return null;
+            }
+            Object a0 = ScriptJs.arg(args, 0);
+            if (!(a0 instanceof Function)) {
+                return null;
+            }
+            final Function fn = (Function) a0;
+            ti.setOnSubmit(field -> {
+                // ⚠ 必须走「跨线程排队」，不能直接 invoke。
+                //
+                // 提交发生在 AWT 点击 / Android 触摸 / 软键盘回调里 —— 这些线程都没有
+                // Rhino Context，直接调 engine.invoke 会静默返回 null（回调永不执行，
+                // 表现就是「输入框按回车/点确认没反应」，且不报错）。
+                // postScriptCall 把它排到下一次 update，在脚本上下文里执行，延迟 ≤1 帧。
+                engine.postScriptCall(() -> engine.invoke(null, fn, null,
+                        new Object[]{field.id, field.text}));
+            });
+            return null;
+        });
+        // ⚠ 必须返回「正在编辑的字段 id 字符串」（没有则 false），不是布尔值。
+        // 脚本的写法是 `if (bwe.textinput.editing === it.id)` 来判断「这个框是不是在编辑」，
+        // 早先这里返回 Boolean → 与任意 id 字符串都不相等 → 条件恒为 false，
+        // 输入框的高亮底色和光标永远画不出来，看起来就是「输入框根本没有」。
+        /** 校验某字段当前值；合法返回空串，否则返回给玩家看的中文提示。 */
+        method(tObj, "validate", (cx, thisObj, args) ->
+                host.textInput == null ? ""
+                        : host.textInput.validate(ScriptJs.str(ScriptJs.arg(args, 0), "")));
+        /** 刷新所有字段的提示（返回是否有字段非法）。 */
+        method(tObj, "refreshHints", (cx, thisObj, args) ->
+                Boolean.valueOf(host.textInput != null && host.textInput.refreshHints()));
+        /** 某字段的提示文本（空 = 合法）。 */
+        method(tObj, "hint", (cx, thisObj, args) -> {
+            ScriptTextInput ti = host.textInput;
+            if (ti == null) {
+                return "";
+            }
+            ScriptTextInput.Field f = ti.find(ScriptJs.str(ScriptJs.arg(args, 0), ""));
+            return f == null ? "" : f.hint;
+        });
+        tObj.getters.put("editing", () -> {
+            ScriptTextInput ti = host.textInput;
+            if (ti == null || !ti.isActive() || ti.activeField() == null) {
+                return Boolean.FALSE;
+            }
+            return ti.activeField().id;
+        });
+        ScriptJs.put(bwe, "textinput", tObj);
+    }
+
+    private static boolean isAllDigitsOrEmpty(String v) {
+        if (v == null || v.isEmpty()) {
+            return true;
+        }
+        for (int i = 0; i < v.length(); i++) {
+            if (v.charAt(i) < '0' || v.charAt(i) > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // ---------------- bwe.board（网格棋盘：格子状态读写） ----------------
+    //
+    // 注意与 bwe.grid 的区别（很容易混）：
+    //   bwe.grid  = **瓦片地图**的坐标换算（toCell / toWorld / snap），任何工程都有；
+    //   bwe.board = **网格模块**（grid.board 等）的格子状态（翻开/标记/读格），
+    //               只有对象上挂了 grid.* / game.minesweeper 才有实际内容。
+    // 两个命名空间分开，避免「同名不同义」的混乱。
+    private void buildBoard() {
+        ScriptJs.Flex boardObj = obj();
+        method(boardObj, "size", (cx, thisObj, args) -> {
+            GridBoard b = hostBoard();
+            ScriptJs.Flex o = obj();
+            o.values.put("rows", Double.valueOf(b == null ? 0 : b.rows));
+            o.values.put("cols", Double.valueOf(b == null ? 0 : b.cols));
+            o.values.put("count", Double.valueOf(b == null ? 0 : b.size()));
+            return o;
+        });
+        method(boardObj, "opened", (cx, thisObj, args) -> {
+            GridBoard b = hostBoard();
+            if (b == null) {
+                return Boolean.FALSE;
+            }
+            return Boolean.valueOf(b.isOpened(ScriptJs.inum(ScriptJs.arg(args, 0), -1)));
+        });
+        method(boardObj, "flagged", (cx, thisObj, args) -> {
+            GridBoard b = hostBoard();
+            if (b == null) {
+                return Boolean.FALSE;
+            }
+            return Boolean.valueOf(b.isFlagged(ScriptJs.inum(ScriptJs.arg(args, 0), -1)));
+        });
+        /** 世界坐标 → 格子索引（越界 -1）。 */
+        method(boardObj, "indexAt", (cx, thisObj, args) -> {
+            GridBoard b = hostBoard();
+            Minesweeper ms = host.minesweeper;
+            if (b == null || ms == null) {
+                return Integer.valueOf(-1);
+            }
+            float wx = ScriptJs.fnum(ScriptJs.arg(args, 0), 0f);
+            float wy = ScriptJs.fnum(ScriptJs.arg(args, 1), 0f);
+            return Integer.valueOf(b.idxAtWorld(wx, wy,
+                    ms.actor.x - b.pixelWidth() / 2f, ms.actor.y - b.pixelHeight() / 2f));
+        });
+        /** 打开一格（无雷玩法用它代替「点开」）。 */
+        method(boardObj, "open", (cx, thisObj, args) -> {
+            Minesweeper ms = host.minesweeper;
+            if (ms == null) {
+                return Boolean.FALSE;
+            }
+            int idx = ScriptJs.inum(ScriptJs.arg(args, 0), -1);
+            if (idx < 0 || idx >= ms.board.size()) {
+                return Boolean.FALSE;
+            }
+            ms.reveal(idx);
+            return Boolean.TRUE;
+        });
+        /** 切换标记（无 flag 能力时不生效）。 */
+        method(boardObj, "toggle", (cx, thisObj, args) -> {
+            Minesweeper ms = host.minesweeper;
+            if (ms == null) {
+                return Boolean.FALSE;
+            }
+            int idx = ScriptJs.inum(ScriptJs.arg(args, 0), -1);
+            if (idx < 0 || idx >= ms.board.size()) {
+                return Boolean.FALSE;
+            }
+            ms.toggleFlag(idx);
+            return Boolean.TRUE;
+        });
+        /** 泛洪统计：从某格开始能连到的未翻开格数（规则脚本常用）。 */
+        method(boardObj, "floodCount", (cx, thisObj, args) -> {
+            Minesweeper ms = host.minesweeper;
+            if (ms == null) {
+                return Integer.valueOf(0);
+            }
+            int idx = ScriptJs.inum(ScriptJs.arg(args, 0), -1);
+            if (idx < 0 || idx >= ms.board.size()) {
+                return Integer.valueOf(0);
+            }
+            return Integer.valueOf(ms.board.floodOpen(idx, i -> true));
+        });
+        boardObj.getters.put("mounted", () -> Boolean.valueOf(hostBoard() != null));
+        ScriptJs.put(bwe, "board", boardObj);
+    }
+
+    /** 当前工程的网格内核（没挂网格模块时为 null）。 */
+    private GridBoard hostBoard() {
+        Minesweeper ms = host.minesweeper;
+        return ms == null ? null : ms.board;
+    }
+
     // ---------------- bwe.tilemap ----------------
 
     private void buildTilemap() {
@@ -1586,7 +1925,7 @@ final class ScriptApi {
             return Boolean.valueOf(engine.world.lineOfSight(a[0], a[1], b[0], b[1]));
         });
         method(navObj, "follow", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = unwrap(ScriptJs.arg(args, 0));
+            Actor a = unwrap(ScriptJs.arg(args, 0));
             List<float[]> path = pathOf(ScriptJs.arg(args, 1));
             if (a == null || path.isEmpty()) {
                 return null;
@@ -1599,7 +1938,7 @@ final class ScriptApi {
             return null;
         });
         method(navObj, "stop", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = unwrap(ScriptJs.arg(args, 0));
+            Actor a = unwrap(ScriptJs.arg(args, 0));
             if (a != null) {
                 engine.world.stopFollow(a);
             }
@@ -1609,7 +1948,7 @@ final class ScriptApi {
     }
 
     private float[] pointOf(Object o) {
-        TopDownRuntime.Actor a = unwrap(o);
+        Actor a = unwrap(o);
         if (a != null) {
             return new float[]{a.x, a.y};
         }
@@ -1645,7 +1984,7 @@ final class ScriptApi {
     private void buildInteract() {
         ScriptJs.Flex it = obj();
         method(it, "nearest", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor from = unwrap(ScriptJs.arg(args, 0));
+            Actor from = unwrap(ScriptJs.arg(args, 0));
             if (from == null) {
                 from = engine.findPlayerActor();
             }
@@ -1653,9 +1992,9 @@ final class ScriptApi {
             float radius = opts == null ? 48f : ScriptJs.fnum(ScriptJs.get(opts, "radius"), 48f);
             String tag = opts == null ? "" : ScriptJs.str(ScriptJs.get(opts, "tag"), "");
             Function filter = opts == null ? null : ScriptJs.fnArg(ScriptJs.get(opts, "filter"));
-            TopDownRuntime.Actor best = null;
+            Actor best = null;
             float bestDist = Float.MAX_VALUE;
-            for (TopDownRuntime.Actor a : host.actors) {
+            for (Actor a : host.actors) {
                 if (a == from || a.dead || !a.o.visible) {
                     continue;
                 }
@@ -1741,7 +2080,7 @@ final class ScriptApi {
     // ---------------- 实体包装 ----------------
 
     /** 同一 Actor 的 JS 包装对象（缓存，保证 e1 === e2）。 */
-    Scriptable entity(TopDownRuntime.Actor a) {
+    Scriptable entity(Actor a) {
         if (a == null) {
             return null;
         }
@@ -2017,13 +2356,13 @@ final class ScriptApi {
         });
         // ---- 父子关系 ----
         e.getters.put("parent", () -> {
-            TopDownRuntime.Actor p = parentOf(a);
+            Actor p = parentOf(a);
             return p == null || p.dead ? null : entity(p);
         });
         e.setters.put("parent", v -> setParent(a, v));
         method(e, "children", (c, thisObj, args) -> {
             List<Scriptable> list = new ArrayList<Scriptable>();
-            for (TopDownRuntime.Actor child : childrenOf(a)) {
+            for (Actor child : childrenOf(a)) {
                 list.add(entity(child));
             }
             return array(list);
@@ -2132,7 +2471,7 @@ final class ScriptApi {
             return null;
         });
         method(e, "distanceTo", (c, thisObj, args) -> {
-            TopDownRuntime.Actor other = unwrap(ScriptJs.arg(args, 0));
+            Actor other = unwrap(ScriptJs.arg(args, 0));
             if (other == null) {
                 return Double.valueOf(0);
             }
@@ -2141,7 +2480,7 @@ final class ScriptApi {
             return Double.valueOf(Math.sqrt(dx * dx + dy * dy));
         });
         method(e, "angleTo", (c, thisObj, args) -> {
-            TopDownRuntime.Actor other = unwrap(ScriptJs.arg(args, 0));
+            Actor other = unwrap(ScriptJs.arg(args, 0));
             if (other == null) {
                 return Double.valueOf(0);
             }
@@ -2215,7 +2554,7 @@ final class ScriptApi {
         return Context.toString(v);
     }
 
-    private Scriptable tagsOf(TopDownRuntime.Actor a) {
+    private Scriptable tagsOf(Actor a) {
         List<Object> list = new ArrayList<Object>();
         for (String t : a.o.tags) {
             list.add(t);
@@ -2232,7 +2571,7 @@ final class ScriptApi {
     }
 
     /** 模块查找：Web id / 桌面旧 id 都认（mapping-contract §7）。 */
-    private static GameData.RtModule moduleOf(TopDownRuntime.Actor a, String id) {
+    private static GameData.RtModule moduleOf(Actor a, String id) {
         if (id == null || id.isEmpty()) {
             return null;
         }
@@ -2273,7 +2612,7 @@ final class ScriptApi {
         return null;
     }
 
-    private ScriptableObject moduleWrapper(TopDownRuntime.Actor a, final GameData.RtModule m) {
+    private ScriptableObject moduleWrapper(Actor a, final GameData.RtModule m) {
         Map<String, ScriptableObject> cache = moduleWrappers.get(a);
         if (cache == null) {
             cache = new LinkedHashMap<String, ScriptableObject>();
@@ -2329,7 +2668,7 @@ final class ScriptApi {
 
     // ---------------- 实体反向解包 / 事件派发 ----------------
 
-    TopDownRuntime.Actor unwrap(Object o) {
+    Actor unwrap(Object o) {
         if (o == null || ScriptJs.isMissing(o)) {
             return null;
         }
@@ -2339,7 +2678,7 @@ final class ScriptApi {
         return wrapperActor.get(o);
     }
 
-    void dispatchEntityEvent(TopDownRuntime.Actor a, String name, Object[] args) {
+    void dispatchEntityEvent(Actor a, String name, Object[] args) {
         Map<String, List<Function>> map = entityHandlers.get(a);
         if (map == null) {
             return;
@@ -2397,7 +2736,7 @@ final class ScriptApi {
     }
 
     /** spawn/destroy 后清掉索引（包装对象按 Actor 身份缓存，Actor 换内容时不用重建）。 */
-    void invalidate(TopDownRuntime.Actor a) {
+    void invalidate(Actor a) {
         if (a == null) {
             return;
         }
@@ -2408,13 +2747,13 @@ final class ScriptApi {
             lockedActors.remove(a);
             parents.remove(a);
             // 父子：被销毁节点若还有子级，子级一并脱钩（不级联销毁，避免意外连锁）。
-            List<TopDownRuntime.Actor> orphans = new ArrayList<TopDownRuntime.Actor>();
-            for (Map.Entry<TopDownRuntime.Actor, TopDownRuntime.Actor> e : parents.entrySet()) {
+            List<Actor> orphans = new ArrayList<Actor>();
+            for (Map.Entry<Actor, Actor> e : parents.entrySet()) {
                 if (e.getValue() == a) {
                     orphans.add(e.getKey());
                 }
             }
-            for (TopDownRuntime.Actor orphan : orphans) {
+            for (Actor orphan : orphans) {
                 parents.remove(orphan);
             }
             frameLocks.remove(a);
@@ -2432,7 +2771,7 @@ final class ScriptApi {
 
     // ---------------- ctx ----------------
 
-    Scriptable context(TopDownRuntime.Actor self) {
+    Scriptable context(Actor self) {
         final ScriptJs.Flex c = obj();
         c.values.put("self", self == null ? null : entity(self));
         c.values.put("world", worldObj);
@@ -2465,8 +2804,8 @@ final class ScriptApi {
         if (frameLocks.isEmpty()) {
             return;
         }
-        for (Map.Entry<TopDownRuntime.Actor, Integer> e : frameLocks.entrySet()) {
-            TopDownRuntime.Actor a = e.getKey();
+        for (Map.Entry<Actor, Integer> e : frameLocks.entrySet()) {
+            Actor a = e.getKey();
             if (a == null || a.dead) {
                 continue;
             }

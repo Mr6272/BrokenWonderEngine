@@ -16,12 +16,12 @@
  */
 
 import type { SceneObject } from "../core/model.ts";
-import { objectFromPrefab } from "../core/model.ts";
+import { isUiScene, objectFromPrefab, scenePixelSize } from "../core/model.ts";
 import { store } from "../core/store.ts";
 import { contextMenu, type MenuItem } from "../ui/toast.ts";
 import { clamp } from "../core/dom.ts";
 import { loadFrame } from "../data/assets.ts";
-import { sizeOf, boundsOf, paintObject, paintGrid, type PaintCtx } from "./painter.ts";
+import { sizeOf, boundsOf, paintObject, paintGrid, paintUiFrame, type PaintCtx } from "./painter.ts";
 
 type Mode = "none" | "move" | "marquee" | "pan" | "zone" | "scale";
 
@@ -156,15 +156,33 @@ export class CanvasView {
   zoomToFit(): void {
     const scene = store.scene;
     if (!scene) return;
-    const tile = store.project?.tileSize ?? 32;
-    const w = scene.widthTiles * tile;
-    const h = scene.heightTiles * tile;
+    const size = this.sceneSize();
+    const w = size.w;
+    const h = size.h;
     const cw = this.canvas.clientWidth || 800;
     const ch = this.canvas.clientHeight || 600;
     this.zoom = clamp(Math.min((cw - 48) / w, (ch - 48) / h), 0.15, 2);
     this.camX = w / 2;
     this.camY = h / 2;
     this.requestPaint();
+  }
+
+  /**
+   * 当前场景的像素尺寸。
+   *
+   * 世界场景 = 格数 × tileSize；UI 场景 = 设计分辨率（1280×720 之类）。
+   * 画布内所有「地图有多大」的判断都必须走这里，否则 UI 场景会被当成
+   * 60×40 格 × 32px = 1920×1280 的地图，缩放和居中全部对不上。
+   */
+  private sceneSize(): { w: number; h: number } {
+    const scene = store.scene;
+    if (!scene) return { w: 32, h: 32 };
+    return scenePixelSize(scene, store.project?.tileSize ?? 32);
+  }
+
+  /** 当前场景是不是 UI 场景（UI 场景不画瓦片网格，改画设备画框 + 安全区）。 */
+  private isUi(): boolean {
+    return isUiScene(store.scene);
   }
 
   centerOn(x: number, y: number): void {
@@ -199,6 +217,9 @@ export class CanvasView {
   }
 
   private tileSize(): number {
+    // UI 场景没有「格」：吸附单位改成 4px。用 tileSize(32) 会把界面元素
+    // 永远摆在 32 的倍数上，做不出「离右边 16 像素」这类排版。
+    if (this.isUi()) return 4;
     return Math.max(4, store.project?.tileSize ?? 32);
   }
 
@@ -233,25 +254,46 @@ export class CanvasView {
 
   private loop = (): void => {
     this.rafId = window.requestAnimationFrame(this.loop);
-    // 序列帧预览需要持续重绘；只在动画存在或需要时重绘，避免空转吃电
+    // 序列帧预览需要持续重绘；只在动画存在或需要时重绘，避免空转吃电。
+    //
+    // 关键：`hasAnimation` 的**重算**放在 paint() 里，不放在这里。
+    // 原来是每帧都调 sceneHasAnimation()，它逐对象查素材 = O(对象数 × 素材数)：
+    // 一个 1300 对象、上百素材的工程，闲置时每秒几十万次比较 —— 这就是
+    // 「编辑器开着不动也在慢慢变卡」的一大来源。
+    //
+    // 现在空闲帧只做字段读取和一次时间比较；只要有数据变化，一定先经过 paint()
+    // （需要重绘 → 重算 → 下次空闲帧用新值），所以缓存不会过期。
     const now = performance.now();
-    const hasAnim = this.sceneHasAnimation();
-    if (!this.needsPaint && (!hasAnim || now - this.animTimer < 33)) return;
+    if (!this.needsPaint && (!this.hasAnimation || now - this.animTimer < 33)) return;
     this.animTimer = now;
     this.needsPaint = false;
     this.paint();
   };
 
-  private sceneHasAnimation(): boolean {
-    const scene = store.scene;
-    if (!scene) return false;
+  /**
+   * 场景里是否有需要持续动画的对象。
+   *
+   * 只在 paint() 里重算：真实绘制时本来就要遍历全场景，顺手更新这个标记几乎免费，
+   * 而空闲帧完全不需要知道它 —— 没有数据变化时根本不会进入 paint()。
+   * 这样闲置状态的每帧成本是 O(1)，不再是 O(对象数 × 素材数)。
+   */
+  private hasAnimation = false;
+
+  private refreshAnimationFlag(scene: import("../core/model.ts").SceneModel, project: import("../core/model.ts").Project): void {
+    // 素材索引一次建好，避免每个对象都做一次线性 find（这是原来的 N×M 主项）。
+    const assetIndex = new Map<string, import("../core/model.ts").AssetEntry>();
+    for (const a of project.assets) assetIndex.set(a.id, a);
+
     for (const o of scene.objects) {
-      const a = store.findAsset(o.assetId);
+      const a = assetIndex.get(o.assetId);
       if (!a) continue;
       const frames = a.kind === "SEQUENCE" ? a.frameCount ?? 1 : a.kind === "ATLAS" ? (a.cols ?? 1) * (a.rows ?? 1) : 1;
-      if (frames > 1 && o.animMode !== "只显示首帧") return true;
+      if (frames > 1 && o.animMode !== "只显示首帧") {
+        this.hasAnimation = true;
+        return;
+      }
     }
-    return false;
+    this.hasAnimation = false;
   }
 
   destroy(): void {
@@ -281,6 +323,10 @@ export class CanvasView {
       return;
     }
 
+    // 绘制时顺手更新「有没有动画」标记：这时本来就要遍历全场景，几乎免费。
+    // 空闲帧则完全不做这件事（见 loop 的注释），这是把空转开销压到 O(1) 的关键。
+    this.refreshAnimationFlag(scene, project);
+
     const pctx: PaintCtx = {
       zoom: this.zoom,
       tileSize: project.tileSize,
@@ -291,10 +337,18 @@ export class CanvasView {
       time: performance.now(),
       selectedIds: new Set(store.selection.map((o) => o.id)),
       overrides: this.overrides,
-      project
+      project,
+      ui: isUiScene(scene)
     };
 
-    paintGrid(g, undefined, scene, pctx, this.worldToScreen.bind(this));
+    // UI 场景画「设计分辨率画框 + 安全区」，世界场景画瓦片网格。
+    // 两者坐标系不同（前者单位是设计像素，后者是 tile × tileSize），
+    // 混用会让 UI 对象的摆位看起来对、导出后整体偏移。
+    if (isUiScene(scene)) {
+      paintUiFrame(g, scene, pctx, this.worldToScreen.bind(this));
+    } else {
+      paintGrid(g, undefined, scene, pctx, this.worldToScreen.bind(this));
+    }
 
     // 按图层顺序 + z 排序：先画的在下
     const ordered = orderObjects(scene);
@@ -449,8 +503,12 @@ export class CanvasView {
   }
 
   private hudText(): string {
-    const t = this.tileSize();
     const w = this.hoverWorld;
+    // UI 场景里「第几格」没有意义（没有瓦片），只报设计像素坐标。
+    if (this.isUi()) {
+      return `px ${Math.round(w.x)}, ${Math.round(w.y)}（设计分辨率）`;
+    }
+    const t = this.tileSize();
     return `格 ${Math.round(w.x / t)}, ${Math.round(w.y / t)}　|　px ${Math.round(w.x)}, ${Math.round(w.y)}`;
   }
 
@@ -847,11 +905,17 @@ export class CanvasView {
         // 拖出地图范围只做提示，不阻止、不弹窗
         const scene = store.scene;
         if (scene) {
-          const t = this.tileSize();
+          const size = this.sceneSize();
           const outside = store.selection.some(
-            (o) => o.x < 0 || o.y < 0 || o.x > scene.widthTiles * t || o.y > scene.heightTiles * t
+            (o) => o.x < 0 || o.y < 0 || o.x > size.w || o.y > size.h
           );
-          if (outside) this.flashHud("有对象拖出了地图范围，运行时不显示它");
+          if (outside) {
+            this.flashHud(
+              this.isUi()
+                ? "有 UI 对象超出了设计分辨率，运行时会画在画面外（看不见）"
+                : "有对象拖出了地图范围，运行时不显示它"
+            );
+          }
         }
         break;
       }
@@ -936,6 +1000,35 @@ export class CanvasView {
 
   private blankMenu(world: Point2): MenuItem[] {
     const lockedCount = store.scene?.objects.filter((o) => o.locked).length ?? 0;
+
+    // UI 场景：右键菜单只给「界面元素」，不给角色/出生点/触发区。
+    // 这是「UI 不该和场景物体混在一起」最直接的落实 —— 用户在 UI 场景里
+    // 根本看不到「放一个角色」这种选项，也就不会把角色摆进界面上。
+    if (this.isUi()) {
+      return [
+        { label: "放一段文字 Text", onClick: () => this.createUiAt("TEXT", world) },
+        { label: "放一张图 Image", onClick: () => this.createUiAt("IMAGE", world) },
+        { label: "放一个面板 Panel", onClick: () => this.createUiAt("PANEL", world) },
+        { divider: true },
+        { label: "放一个按钮 Button", onClick: () => this.createUiAt("BUTTON", world) },
+        ...(lockedCount
+          ? [{
+              label: `解锁全部对象（${lockedCount}）`,
+              onClick: () => {
+                const scene = store.scene;
+                if (!scene) return;
+                for (const o of scene.objects) o.locked = false;
+                store.markDirty();
+                this.cb.onCommit?.("解锁全部对象");
+                window.dispatchEvent(new CustomEvent("bwe:refresh"));
+                this.requestPaint();
+              }
+            }]
+          : []),
+        { label: "缩放到整张设计稿", key: "F", onClick: () => this.zoomToFit() }
+      ];
+    }
+
     return [
       {
         label: "在这里放一个物件",
@@ -968,6 +1061,102 @@ export class CanvasView {
         : []),
       { label: "缩放到整张地图", key: "F", onClick: () => this.zoomToFit() }
     ];
+  }
+
+  /**
+   * 在 UI 场景里放一个界面元素。
+   *
+   * 落点不吸附瓦片网格：UI 的坐标是设计像素，32 格吸附会把按钮永远摆在
+   * 32 的倍数上，做不出「离右边 16 像素」这种构图。改为吸附到 4px
+   * （够稳，又不会限制排版）。
+   *
+   * 四种元素的默认参数都写在这里而不是散在面板里，是为了保证
+   * 「随手放一个」立刻就有正确语义：
+   *   TEXT   —— tags=["label"] + props.text/textSize/textColor/textAlign（运行时 drawLabel 认这套）
+   *   IMAGE  —— 空素材占位，用户再从「素材」面板选图
+   *   PANEL  —— props.color 半透明底 + halfW/halfH
+   *   BUTTON —— 面板 + 居中文字（文字是它的子对象）
+   */
+  private createUiAt(kind: "TEXT" | "IMAGE" | "PANEL" | "BUTTON", world: Point2): void {
+    const scene = store.scene;
+    if (!scene) return;
+    const snap4 = (v: number) => Math.round(v / 4) * 4;
+    const layer = scene.layers[Math.max(0, scene.layers.length - 1)];
+    const base: SceneObject = {
+      id: cryptoId(),
+      name: "",
+      kind: kind === "TEXT" ? "PROP" : "PROP",
+      x: snap4(world.x),
+      y: snap4(world.y),
+      z: scene.objects.length,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      halfW: 0,
+      halfH: 0,
+      layerId: layer?.id ?? "",
+      visible: true,
+      locked: false,
+      assetId: "",
+      animMode: "默认",
+      animFps: 8,
+      modules: [],
+      props: {},
+      tags: [],
+      parentId: null
+    };
+
+    if (kind === "TEXT") {
+      base.name = "文字";
+      base.tags = ["label", "ui"];
+      base.props = { text: "文字", textSize: "24", textColor: "#e6edf7", textAlign: "left" };
+    } else if (kind === "IMAGE") {
+      base.name = "图片";
+      base.tags = ["ui"];
+      // 没有素材时给一块 128×128 的占位框，避免落下去是个「一格大小」的小方块
+      base.halfW = 64;
+      base.halfH = 64;
+    } else if (kind === "PANEL") {
+      base.name = "面板";
+      base.tags = ["ui"];
+      base.halfW = 200;
+      base.halfH = 120;
+      base.props = { color: "#1b2030" };
+    } else {
+      base.name = "按钮";
+      base.tags = ["ui"];
+      base.halfW = 90;
+      base.halfH = 26;
+      base.props = { color: "#2f6dd6" };
+      // 按钮文字作为子对象：这样移动按钮时文字跟着走（parentId 的既有语义）
+      const label: SceneObject = {
+        ...base,
+        id: cryptoId(),
+        name: "按钮文字",
+        x: base.x,
+        y: base.y,
+        z: base.z + 1,
+        halfW: 0,
+        halfH: 0,
+        tags: ["label", "ui"],
+        props: { text: "按钮", textSize: "20", textColor: "#ffffff", textAlign: "center" },
+        parentId: base.id
+      };
+      scene.objects.push(base);
+      scene.objects.push(label);
+      store.select(label);
+      store.markDirty();
+      this.cb.onCommit?.("创建 UI 按钮");
+      this.requestPaint();
+      window.dispatchEvent(new CustomEvent("bwe:refresh"));
+      return;
+    }
+
+    scene.objects.push(base);
+    store.select(base);
+    store.markDirty();
+    this.cb.onCommit?.(`创建 UI ${base.name}`);
+    this.requestPaint();
   }
 
   private createAt(kind: SceneObject["kind"], world: Point2): void {

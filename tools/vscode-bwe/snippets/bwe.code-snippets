@@ -1,0 +1,200 @@
+{
+  "BWE: onStart": {
+    "scope": "javascript",
+    "prefix": ["onStart", "bwe.onStart"],
+    "body": [
+      "function onStart(${1:ctx}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：对象生成时执行一次"
+  },
+  "BWE: onUpdate": {
+    "scope": "javascript",
+    "prefix": ["onUpdate", "bwe.onUpdate"],
+    "body": [
+      "function onUpdate(${1:ctx}, ${2:dt}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：每帧执行，dt = 本帧秒数"
+  },
+  "BWE: onClick": {
+    "scope": "javascript",
+    "prefix": ["onClick", "bwe.onClick"],
+    "body": [
+      "function onClick(${1:ctx}) {",
+      "\tvar e = ctx.self;",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：鼠标左键点中这个对象"
+  },
+  "BWE: onEnter": {
+    "scope": "javascript",
+    "prefix": ["onEnter", "bwe.onEnter"],
+    "body": [
+      "function onEnter(${1:ctx}, ${2:other}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：触发区，别的对象进来了"
+  },
+  "BWE: onLeave": {
+    "scope": "javascript",
+    "prefix": ["onLeave", "bwe.onLeave"],
+    "body": [
+      "function onLeave(${1:ctx}, ${2:other}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：触发区，别的对象离开了"
+  },
+  "BWE: onInteract": {
+    "scope": "javascript",
+    "prefix": ["onInteract", "bwe.onInteract"],
+    "body": [
+      "function onInteract(${1:ctx}, ${2:actor}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：玩家走近并按下交互键"
+  },
+  "BWE: onDamage": {
+    "scope": "javascript",
+    "prefix": ["onDamage", "bwe.onDamage"],
+    "body": [
+      "function onDamage(${1:ctx}, ${2:amount}, ${3:from}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：受到伤害，amount 是实际扣血"
+  },
+  "BWE: onDeath": {
+    "scope": "javascript",
+    "prefix": ["onDeath", "bwe.onDeath"],
+    "body": [
+      "function onDeath(${1:ctx}, ${2:by}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：生命值归零"
+  },
+  "BWE: onDestroy": {
+    "scope": "javascript",
+    "prefix": ["onDestroy", "bwe.onDestroy"],
+    "body": [
+      "function onDestroy(${1:ctx}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：销毁前最后一个回调"
+  },
+  "BWE: onKey": {
+    "scope": "javascript",
+    "prefix": ["onKey", "bwe.onKey"],
+    "body": [
+      "function onKey(${1:ctx}, ${2:key}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：任意按键按下"
+  },
+  "BWE: onSceneStart": {
+    "scope": "javascript",
+    "prefix": ["onSceneStart", "bwe.onSceneStart"],
+    "body": [
+      "function onSceneStart(${1:ctx}) {",
+      "\t// ⚠ 场景脚本里 ctx.self 恒为 null，取对象用 bwe.world.find(\"名字\")",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：场景载入完、对象 spawn 完之后执行一次（场景脚本）"
+  },
+  "BWE: onSceneEnd": {
+    "scope": "javascript",
+    "prefix": ["onSceneEnd", "bwe.onSceneEnd"],
+    "body": [
+      "function onSceneEnd(${1:ctx}) {",
+      "\t// 每局收尾：落盘用 bwe.save.flush()；这里不要调 bwe.draw.*",
+      "\t$0",
+      "}"
+    ],
+    "description": "BWE 生命周期：运行时关闭时执行一次（场景脚本）"
+  },
+  "BWE: log": {
+    "scope": "javascript",
+    "prefix": "bwe.log",
+    "body": ["bwe.log(${1:\"消息\"});"],
+    "description": "BWE 日志（不要用 console.log）"
+  },
+  "BWE: after": {
+    "scope": "javascript",
+    "prefix": "bwe.after",
+    "body": ["bwe.after(${1:0.5}, function () {", "\t$0", "});"],
+    "description": "BWE 延时执行一次（代替 setTimeout）"
+  },
+  "BWE: every": {
+    "scope": "javascript",
+    "prefix": "bwe.every",
+    "body": ["bwe.every(${1:1}, function () {", "\t$0", "});"],
+    "description": "BWE 重复执行（代替 setInterval）"
+  },
+  "BWE: world.find": {
+    "scope": "javascript",
+    "prefix": "bwe.world.find",
+    "body": ["bwe.world.find(${1:\"名字\"})"],
+    "description": "按名字 / 标签查找实体"
+  },
+  "BWE: world.spawn": {
+    "scope": "javascript",
+    "prefix": "bwe.world.spawn",
+    "body": [
+      "bwe.world.spawn({",
+      "\tx: ${1:0},",
+      "\ty: ${2:0},",
+      "\tasset: \"${3:素材名}\",",
+      "\tname: \"${4:名字}\"",
+      "});"
+    ],
+    "description": "运行时生成一个实体"
+  },
+  "BWE: draw.text": {
+    "scope": "javascript",
+    "prefix": "bwe.draw.text",
+    "body": ["bwe.draw.text(${1:16}, ${2:16}, ${3:\"文字\"}, { size: ${4:14}, color: \"${5:#fff}\" });"],
+    "description": "HUD 文字"
+  },
+  "BWE: draw.rect": {
+    "scope": "javascript",
+    "prefix": "bwe.draw.rect",
+    "body": ["bwe.draw.rect(${1:0}, ${2:0}, ${3:100}, ${4:40}, { fill: \"${5:#000000cc}\", radius: 6 });"],
+    "description": "HUD 矩形"
+  },
+  "BWE: save.set": {
+    "scope": "javascript",
+    "prefix": "bwe.save.set",
+    "body": ["bwe.save.set(\"${1:key}\", ${2:value});"],
+    "description": "写本地存档"
+  },
+  "BWE: new script skeleton": {
+    "scope": "javascript",
+    "prefix": "bwescript",
+    "body": [
+      "// ${1:脚本名}.js —— BWE 对象脚本（Rhino ES5，不要用 import / require / export）",
+      "var ${2:STATE} = { ready: false };",
+      "",
+      "function onStart(ctx) {",
+      "\t${2:STATE}.ready = true;",
+      "\tbwe.log(\"[脚本] ${1:脚本名} ready\");",
+      "}",
+      "",
+      "function onUpdate(ctx, dt) {",
+      "\tif (!${2:STATE}.ready) return;",
+      "\tvar e = ctx.self;",
+      "\t$0",
+      "}"
+    ],
+    "description": "新建一个 BWE 脚本骨架（含 onStart / onUpdate）"
+  }
+}

@@ -131,7 +131,7 @@ final class ScriptDebug {
             if (!enabled) {
                 return null;
             }
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             if (a == null || a.dead || a.o == null) {
                 return null;
             }
@@ -148,9 +148,9 @@ final class ScriptDebug {
             ScriptJs.put(o, "pendingDestroy", Double.valueOf(host.pendingDestroyCount()));
             ScriptJs.put(o, "sceneEpoch", Double.valueOf(host.sceneEpoch));
             int colliders = 0;
-            java.util.List<TopDownRuntime.Actor> snap = api.actorsSnapshot();
+            java.util.List<Actor> snap = api.actorsSnapshot();
             for (int i = 0; i < snap.size(); i++) {
-                TopDownRuntime.Actor a = snap.get(i);
+                Actor a = snap.get(i);
                 if (a.o != null && a.o.halfW > 0f && a.o.halfH > 0f) {
                     colliders++;
                 }
@@ -170,9 +170,9 @@ final class ScriptDebug {
             return;
         }
         if (drawColliders) {
-            java.util.List<TopDownRuntime.Actor> snap = api.actorsSnapshot();
+            java.util.List<Actor> snap = api.actorsSnapshot();
             for (int i = 0; i < snap.size(); i++) {
-                TopDownRuntime.Actor a = snap.get(i);
+                Actor a = snap.get(i);
                 if (a.dead || a.o == null || a.o.halfW <= 0f || a.o.halfH <= 0f) {
                     continue;
                 }

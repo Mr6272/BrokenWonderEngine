@@ -59,8 +59,8 @@ final class ScriptCollision {
     /** 全局事件订阅。 */
     private final Map<String, List<Holder>> handlers = new LinkedHashMap<String, List<Holder>>();
     /** 实体级订阅：actor → evt → handlers。 */
-    private final Map<TopDownRuntime.Actor, Map<String, List<Holder>>> entityHandlers =
-            new IdentityHashMap<TopDownRuntime.Actor, Map<String, List<Holder>>>();
+    private final Map<Actor, Map<String, List<Holder>>> entityHandlers =
+            new IdentityHashMap<Actor, Map<String, List<Holder>>>();
 
     /** 单帧最多派发多少事件（防止大量重叠把 JS 拍死）。 */
     private static final int MAX_EVENTS_PER_FRAME = 256;
@@ -79,11 +79,11 @@ final class ScriptCollision {
     }
 
     private static final class Pair {
-        final TopDownRuntime.Actor a;
-        final TopDownRuntime.Actor b;
+        final Actor a;
+        final Actor b;
         final boolean sensor;
 
-        Pair(TopDownRuntime.Actor a, TopDownRuntime.Actor b, boolean sensor) {
+        Pair(Actor a, Actor b, boolean sensor) {
             this.a = a;
             this.b = b;
             this.sensor = sensor;
@@ -124,7 +124,7 @@ final class ScriptCollision {
                 return null;
             }
             Holder h = new Holder(f, engine.def(engine.currentScriptName()));
-            TopDownRuntime.Actor a = api.actorOf(target);
+            Actor a = api.actorOf(target);
             if (a != null) {
                 Map<String, List<Holder>> m = entityHandlers.get(a);
                 if (m == null) {
@@ -178,9 +178,9 @@ final class ScriptCollision {
             w = o.w;
             h = o.h;
             List<Object> out = new ArrayList<Object>();
-            List<TopDownRuntime.Actor> snap = api.actorsSnapshot();
+            List<Actor> snap = api.actorsSnapshot();
             for (int i = 0; i < snap.size(); i++) {
-                TopDownRuntime.Actor a = snap.get(i);
+                Actor a = snap.get(i);
                 if (a.dead || a.o == null || !a.o.visible) {
                     continue;
                 }
@@ -197,10 +197,10 @@ final class ScriptCollision {
             float y = ScriptJs.fnum(ScriptJs.arg(args, 1), 0f);
             float r = ScriptJs.fnum(ScriptJs.arg(args, 2), 0f);
             List<Object> out = new ArrayList<Object>();
-            List<TopDownRuntime.Actor> snap = api.actorsSnapshot();
+            List<Actor> snap = api.actorsSnapshot();
             float r2 = r * r;
             for (int i = 0; i < snap.size(); i++) {
-                TopDownRuntime.Actor a = snap.get(i);
+                Actor a = snap.get(i);
                 if (a.dead || a.o == null || !a.o.visible) {
                     continue;
                 }
@@ -234,7 +234,7 @@ final class ScriptCollision {
 
         // setTrigger(e, on) —— 把实体的碰撞体标为传感器（触发区）
         api.addMethod(ns, "setTrigger", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             boolean on = ScriptJs.bool(ScriptJs.arg(args, 1), true);
             if (a == null) {
                 return Boolean.FALSE;
@@ -245,13 +245,13 @@ final class ScriptCollision {
 
         // isTrigger(e)
         api.addMethod(ns, "isTrigger", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             return Boolean.valueOf(a != null && a.trigger);
         });
 
         // contacts(e) → 当前与 e 接触的 Entity[]（几何重叠）
         api.addMethod(ns, "contacts", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+            Actor a = api.actorOf(ScriptJs.arg(args, 0));
             List<Object> out = new ArrayList<Object>();
             if (a == null) {
                 return toArray(out);
@@ -359,17 +359,17 @@ final class ScriptCollision {
     /** 重算本帧接触集合（复用缓冲，避免每帧分配）。只有有订阅者时才会被调到。 */
     private void rebuild() {
         nextTouching.clear();
-        List<TopDownRuntime.Actor> snap = api.actorsSnapshot();
+        List<Actor> snap = api.actorsSnapshot();
         int n = snap.size();
         for (int i = 0; i < n; i++) {
-            TopDownRuntime.Actor a = snap.get(i);
+            Actor a = snap.get(i);
             if (!collidable(a)) {
                 continue;
             }
             float aw = halfW(a);
             float ah = halfH(a);
             for (int j = i + 1; j < n; j++) {
-                TopDownRuntime.Actor b = snap.get(j);
+                Actor b = snap.get(j);
                 if (!collidable(b)) {
                     continue;
                 }
@@ -418,7 +418,7 @@ final class ScriptCollision {
         }
     }
 
-    private List<Holder> listFor(TopDownRuntime.Actor a, String evt) {
+    private List<Holder> listFor(Actor a, String evt) {
         Map<String, List<Holder>> m = entityHandlers.get(a);
         return m == null ? null : m.get(evt);
     }
@@ -438,14 +438,14 @@ final class ScriptCollision {
         }
     }
 
-    private Scriptable payload(TopDownRuntime.Actor self, TopDownRuntime.Actor other,
+    private Scriptable payload(Actor self, Actor other,
                                boolean sensor, String evt) {
         return payload(self, other, sensor, evt, self, other);
     }
 
-    private Scriptable payload(TopDownRuntime.Actor self, TopDownRuntime.Actor other,
+    private Scriptable payload(Actor self, Actor other,
                                boolean sensor, String evt,
-                               TopDownRuntime.Actor pairA, TopDownRuntime.Actor pairB) {
+                               Actor pairA, Actor pairB) {
         ScriptJs.Flex o = (ScriptJs.Flex) api.newObj();
         ScriptJs.put(o, "event", evt);
         ScriptJs.put(o, "self", self == null ? null : api.entity(self));
@@ -457,7 +457,7 @@ final class ScriptCollision {
     }
 
     /** 稳定的 pair key：按 Actor.uid 排序，保证同一对物体永远同一 key。 */
-    private static String pairKey(TopDownRuntime.Actor a, TopDownRuntime.Actor b) {
+    private static String pairKey(Actor a, Actor b) {
         if (a == null || b == null || a == b) {
             return null;
         }
@@ -470,7 +470,7 @@ final class ScriptCollision {
     private static final java.util.concurrent.atomic.AtomicLong NEXT_UID =
             new java.util.concurrent.atomic.AtomicLong(1);
 
-    private static long uid(TopDownRuntime.Actor a) {
+    private static long uid(Actor a) {
         if (a.uid == 0L) {
             a.uid = NEXT_UID.getAndIncrement();
         }
@@ -479,24 +479,24 @@ final class ScriptCollision {
 
     // ---------------- 几何 ----------------
 
-    private static boolean collidable(TopDownRuntime.Actor a) {
+    private static boolean collidable(Actor a) {
         return a != null && !a.dead && a.o != null && halfW(a) > 0f && halfH(a) > 0f;
     }
 
-    private static float halfW(TopDownRuntime.Actor a) {
+    private static float halfW(Actor a) {
         return a.o == null ? 0f : Math.abs(a.o.halfW);
     }
 
-    private static float halfH(TopDownRuntime.Actor a) {
+    private static float halfH(Actor a) {
         return a.o == null ? 0f : Math.abs(a.o.halfH);
     }
 
-    private static boolean aabbOverlap(TopDownRuntime.Actor a, TopDownRuntime.Actor b) {
+    private static boolean aabbOverlap(Actor a, Actor b) {
         return Math.abs(a.x - b.x) <= halfW(a) + halfW(b)
                 && Math.abs(a.y - b.y) <= halfH(a) + halfH(b);
     }
 
-    private static boolean overlapsRect(TopDownRuntime.Actor a, float x, float y, float w, float h) {
+    private static boolean overlapsRect(Actor a, float x, float y, float w, float h) {
         float hw = halfW(a);
         float hh = halfH(a);
         return !(a.x + hw < x || a.x - hw > x + w || a.y + hh < y || a.y - hh > y + h);
@@ -535,16 +535,16 @@ final class ScriptCollision {
         float dy = y2 - y1;
         float len = (float) Math.sqrt(dx * dx + dy * dy);
         float best = Float.MAX_VALUE;
-        TopDownRuntime.Actor hit = null;
+        Actor hit = null;
         // 用「沿射线的点采样 + AABB 判定」：简单、无数学陷阱，脚本侧只需要"打到谁"。
         int steps = Math.max(2, Math.min(256, (int) (len / 4f)));
         for (int s = 0; s <= steps; s++) {
             float t = s / (float) steps;
             float px = x1 + dx * t;
             float py = y1 + dy * t;
-            List<TopDownRuntime.Actor> snap = api.actorsSnapshot();
+            List<Actor> snap = api.actorsSnapshot();
             for (int i = 0; i < snap.size(); i++) {
-                TopDownRuntime.Actor a = snap.get(i);
+                Actor a = snap.get(i);
                 if (!collidable(a)) {
                     continue;
                 }
@@ -595,7 +595,7 @@ final class ScriptCollision {
 
     /** 事件观测器（测试用）。 */
     interface Observer {
-        void on(String evt, TopDownRuntime.Actor a, TopDownRuntime.Actor b);
+        void on(String evt, Actor a, Actor b);
     }
 
     private Observer observer;

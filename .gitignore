@@ -31,3 +31,22 @@ node_modules/
 
 # 打包/试跑的中间产物（含「VS Code 打开脚本」的镜像文件 web/.build/scripts/）
 web/.build/
+
+# 校验工具的中间产物（verify-ui-scene / UI 场景 e2e 取证）
+.tmp_ui_verify/
+.tmp_ui_rel/
+
+# VS Code 扩展的临时打包目录
+tools/vscode-bwe/.tmp/
+
+
+# 打包/试跑的中间产物（含「VS Code 打开脚本」的镜像文件 web/.build/scripts/）
+web/.build/
+/.tmp_perfprofile
+/.tmp_pr2
+/.tmp_live2
+/.tmp_pr5
+/.tmp_rel8
+/.tmp_rel8
+/.tmp_rel8
+/android

@@ -110,8 +110,8 @@ public final class ScriptAiTest {
         }
         check("确定性：同种子同输入 ⇒ 同日志序列", same, "");
         ScriptAi.AiState st2 = ScriptAi.stateFor(run2.engine);
-        TopDownRuntime.Actor ga1 = actorNamed(run1.rt, "guardA");
-        TopDownRuntime.Actor ga2 = actorNamed(run2.rt, "guardA");
+        Actor ga1 = actorNamed(run1.rt, "guardA");
+        Actor ga2 = actorNamed(run2.rt, "guardA");
         check("确定性：guardA 最终位置一致",
                 ga1 != null && ga2 != null
                         && Math.abs(ga1.x - ga2.x) < 0.001f && Math.abs(ga1.y - ga2.y) < 0.001f,
@@ -164,7 +164,7 @@ public final class ScriptAiTest {
 
         // ---- 状态机：噪音 → investigate 并朝声源移动 ----
         expectLog("guardA 进入 investigate", log, "SELFTEST guard.investigate=guardA");
-        TopDownRuntime.Actor ga = actorNamed(run.rt, "guardA");
+        Actor ga = actorNamed(run.rt, "guardA");
         check("guardA 朝声源移动（x 明显增大）", ga != null && ga.x > 330f,
                 ga == null ? "guardA 不存在" : "x=" + ga.x);
         if (st != null && ga != null) {
@@ -642,8 +642,8 @@ public final class ScriptAiTest {
         return null;
     }
 
-    private static TopDownRuntime.Actor actorNamed(TopDownRuntime rt, String name) {
-        for (TopDownRuntime.Actor a : rt.actors) {
+    private static Actor actorNamed(TopDownRuntime rt, String name) {
+        for (Actor a : rt.actors) {
             if (a.o != null && name.equals(a.o.name)) {
                 return a;
             }

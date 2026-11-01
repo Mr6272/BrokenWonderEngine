@@ -246,7 +246,7 @@ final class ScriptFields {
         private final Material[] matCache;
         private final boolean[] matFixed;
         private final float[] wet;
-        private final TopDownRuntime.Actor[] tileActor;
+        private final Actor[] tileActor;
 
         // ---- 通道 ----
         private final float[] fireV;
@@ -261,17 +261,17 @@ final class ScriptFields {
         private final float[] burnT;
         private final float[] burnLimit;
         private final String[] burnName;
-        private final TopDownRuntime.Actor[] burnActor;
+        private final Actor[] burnActor;
 
         // ---- 实体覆盖层（非 TILE 实体站在格子上时的材质） ----
         private final Material[] ovMat;
-        private final TopDownRuntime.Actor[] ovActor;
+        private final Actor[] ovActor;
         private final int[] ovTouched;
         private int ovTouchedN;
-        private final List<TopDownRuntime.Actor> props = new ArrayList<TopDownRuntime.Actor>();
+        private final List<Actor> props = new ArrayList<Actor>();
         private final List<Material> propMats = new ArrayList<Material>();
-        private final IdentityHashMap<TopDownRuntime.Actor, String> entityMats =
-                new IdentityHashMap<TopDownRuntime.Actor, String>();
+        private final IdentityHashMap<Actor, String> entityMats =
+                new IdentityHashMap<Actor, String>();
         private int lastActorCount = -1;
         /** 结构化刷新冷却（秒）：见 tick() 里的节流说明。 */
         private float refreshDelay = 0f;
@@ -336,7 +336,7 @@ final class ScriptFields {
             this.matCache = new Material[n];
             this.matFixed = new boolean[n];
             this.wet = new float[n];
-            this.tileActor = new TopDownRuntime.Actor[n];
+            this.tileActor = new Actor[n];
 
             this.fireV = new float[n];
             this.waterV = new float[n];
@@ -346,10 +346,10 @@ final class ScriptFields {
             this.burnT = new float[n];
             this.burnLimit = new float[n];
             this.burnName = new String[n];
-            this.burnActor = new TopDownRuntime.Actor[n];
+            this.burnActor = new Actor[n];
 
             this.ovMat = new Material[n];
-            this.ovActor = new TopDownRuntime.Actor[n];
+            this.ovActor = new Actor[n];
             this.ovTouched = new int[n];
 
             this.active = new int[n];
@@ -573,13 +573,13 @@ final class ScriptFields {
         // ---------------- 结构刷新（实体/瓦片变化时） ----------------
 
         private void refreshStructure() {
-            List<TopDownRuntime.Actor> actors = host.actors;
+            List<Actor> actors = host.actors;
             int n = actors.size();
             lastActorCount = n;
             props.clear();
             propMats.clear();
             for (int i = 0; i < n; i++) {
-                TopDownRuntime.Actor a = actors.get(i);
+                Actor a = actors.get(i);
                 if (a == null || a.dead || a.o == null) {
                     continue;
                 }
@@ -621,7 +621,7 @@ final class ScriptFields {
             }
             ovTouchedN = 0;
             for (int i = 0; i < props.size(); i++) {
-                TopDownRuntime.Actor a = props.get(i);
+                Actor a = props.get(i);
                 if (a == null || a.dead || a.o == null) {
                     continue;
                 }
@@ -639,7 +639,7 @@ final class ScriptFields {
             }
         }
 
-        private Material resolveActorMaterial(TopDownRuntime.Actor a) {
+        private Material resolveActorMaterial(Actor a) {
             String ov = entityMats.get(a);
             if (ov != null) {
                 return ensureMaterial(ov);
@@ -651,7 +651,7 @@ final class ScriptFields {
             return ensureMaterial(name);
         }
 
-        private String actorMaterialName(TopDownRuntime.Actor a) {
+        private String actorMaterialName(Actor a) {
             if (a == null || a.o == null) {
                 return null;
             }
@@ -1040,7 +1040,7 @@ final class ScriptFields {
                 String name = burnName[idx];
                 // 保险：startBurn 时若 tileActor 还没挂上，burnActor 会是 null，
                 // 结果材质清了但 TILE 实体还在 → 下一次 refreshStructure 又把材质恢复回来。
-                TopDownRuntime.Actor who = burnActor[idx] != null ? burnActor[idx] : tileActor[idx];
+                Actor who = burnActor[idx] != null ? burnActor[idx] : tileActor[idx];
                 boolean fromCell = matCache[idx] != null || mats[idx] != null || tileActor[idx] != null;
                 dbg("resolveBurn idx=" + idx + " name=" + name + " fromCell=" + fromCell
                         + " matCache=" + (matCache[idx] == null ? "-" : matCache[idx].name)
@@ -1081,7 +1081,7 @@ final class ScriptFields {
 
         /** 从尾向前压掉 dead 实体：逐个按尾部删除无位移，整体 O(n)。 */
         private void removeDeadActors() {
-            List<TopDownRuntime.Actor> actors = host.actors;
+            List<Actor> actors = host.actors;
             for (int i = actors.size() - 1; i >= 0; i--) {
                 if (actors.get(i).dead) {
                     actors.remove(i);
@@ -1096,7 +1096,7 @@ final class ScriptFields {
                 int cy = idx / cols;
                 switch (qType[i]) {
                     case EV_IGNITE: {
-                        TopDownRuntime.Actor a = burnActor[idx];
+                        Actor a = burnActor[idx];
                         Object entity = (a == null || a.dead) ? null : api.entityOf(a);
                         fireEvent("ignite", ignitePayload(cx, cy, burnName[idx], entity));
                         break;
@@ -1119,7 +1119,7 @@ final class ScriptFields {
         /** 火烧到实体的伤害（连续伤害 + 相邻热辐射）。 */
         private void damageProps(float dt) {
             for (int i = 0; i < props.size(); i++) {
-                TopDownRuntime.Actor a = props.get(i);
+                Actor a = props.get(i);
                 if (a == null || a.dead || a.o == null) {
                     continue;
                 }
@@ -1158,7 +1158,7 @@ final class ScriptFields {
             }
         }
 
-        private void damageActor(TopDownRuntime.Actor a, float dmg) {
+        private void damageActor(Actor a, float dmg) {
             if (a == null || a.dead) {
                 return;
             }
@@ -1410,14 +1410,14 @@ final class ScriptFields {
                 return null;
             });
             api.addMethod(mat, "ofEntity", (cx, thisObj, args) -> {
-                TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+                Actor a = api.actorOf(ScriptJs.arg(args, 0));
                 if (a == null) {
                     return null;
                 }
                 return resolveActorMaterial(a).name;
             });
             api.addMethod(mat, "setEntity", (cx, thisObj, args) -> {
-                TopDownRuntime.Actor a = api.actorOf(ScriptJs.arg(args, 0));
+                Actor a = api.actorOf(ScriptJs.arg(args, 0));
                 String name = ScriptJs.str(ScriptJs.arg(args, 1), "").trim();
                 if (a == null || name.isEmpty()) {
                     return null;

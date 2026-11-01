@@ -41,7 +41,7 @@ final class ScriptWorld {
     private final Random random = new Random();
 
     // ---------------- 交互 ----------------
-    TopDownRuntime.Actor interactActor;
+    Actor interactActor;
     private final List<Scriptable> interactHandlers = new ArrayList<Scriptable>();
 
     ScriptWorld(ScriptEngine engine) {
@@ -57,16 +57,16 @@ final class ScriptWorld {
     // ---------------- 建图 ----------------
 
     /** 从场景里的 TILE 对象自动建瓦片图（每个素材一个 tileId，默认算阻挡）。 */
-    void buildTileMap(List<TopDownRuntime.Actor> actors) {
+    void buildTileMap(List<Actor> actors) {
         if (actors == null) {
             return;
         }
-        for (TopDownRuntime.Actor a : actors) {
+        for (Actor a : actors) {
             refreshAfterSpawn(a);
         }
     }
 
-    void refreshAfterSpawn(TopDownRuntime.Actor a) {
+    void refreshAfterSpawn(Actor a) {
         if (a == null || a.o == null) {
             return;
         }
@@ -361,7 +361,7 @@ final class ScriptWorld {
     // ---------------- 路径跟随 ----------------
 
     static final class Follow {
-        TopDownRuntime.Actor actor;
+        Actor actor;
         List<float[]> path;
         int index;
         float speed = 100f;
@@ -371,7 +371,7 @@ final class ScriptWorld {
         boolean stopped;
     }
 
-    Follow follow(TopDownRuntime.Actor actor, List<float[]> path, float speed, float arrive,
+    Follow follow(Actor actor, List<float[]> path, float speed, float arrive,
                   Function onArrive, ScriptDef def) {
         stopFollow(actor);
         if (actor == null || path == null || path.isEmpty()) {
@@ -393,7 +393,7 @@ final class ScriptWorld {
         return f;
     }
 
-    void stopFollow(TopDownRuntime.Actor actor) {
+    void stopFollow(Actor actor) {
         for (int i = engine.follows.size() - 1; i >= 0; i--) {
             Follow f = engine.follows.get(i);
             if (f.actor == actor) {
@@ -531,7 +531,7 @@ final class ScriptWorld {
                     }
                     float x = s.ax + random.nextFloat() * s.aw;
                     float y = s.ay + random.nextFloat() * s.ah;
-                    TopDownRuntime.Actor a = engine.spawnScripted(x, y, s.asset, "", "PROP", 0, 0f, 0f,
+                    Actor a = engine.spawnScripted(x, y, s.asset, "", "PROP", 0, 0f, 0f,
                             s.script.isEmpty() ? null : s.script, null, null);
                     s.spawned++;
                     if (a != null && s.onSpawn != null) {
@@ -606,12 +606,12 @@ final class ScriptWorld {
         if (!engine.pressed[key]) {
             return;
         }
-        TopDownRuntime.Actor target = engine.interactActor;
+        Actor target = engine.interactActor;
         if (target.dead || !target.o.visible) {
             engine.interactActor = null;
             return;
         }
-        TopDownRuntime.Actor player = engine.findPlayerActor();
+        Actor player = engine.findPlayerActor();
         Object targetJs = engine.api.entity(target);
         Object playerJs = player == null ? null : engine.api.entity(player);
         for (ScriptEngine.InteractHandler h : new ArrayList<ScriptEngine.InteractHandler>(engine.interactHandlers)) {
@@ -627,7 +627,7 @@ final class ScriptWorld {
         if (p == null || p.text == null || p.text.isEmpty()) {
             return;
         }
-        TopDownRuntime.Actor target = engine.interactActor;
+        Actor target = engine.interactActor;
         if (target == null || target.dead) {
             return;
         }

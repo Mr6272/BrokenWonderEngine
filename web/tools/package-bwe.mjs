@@ -505,7 +505,7 @@ async function run(command, args, options = {}) {
       cwd: options.cwd,
       windowsHide: true,
       shell: false,
-      env: process.env
+      env: options.env || process.env
     });
     let out = "";
     let err = "";
@@ -537,7 +537,7 @@ async function commandExists(name) {
 async function runtimeSources() {
   const files = await readdir(runtimeSrc);
   return files
-    .filter((f) => f.endsWith(".java") && f !== "GameLauncher.java")
+    .filter((f) => f.endsWith(".java") && f !== "GameLauncher.java" && !f.endsWith("Test.java"))
     .map((f) => join(runtimeSrc, f));
 }
 
@@ -564,10 +564,16 @@ async function copyRuntimeLibraries(inputDir) {
   const libs = await readdir(libRoot);
   // rhino 是 JS 脚本运行时（ScriptEngine 内嵌 Rhino 1.7.15 执行 ES5 脚本）；
   // 少了它，打包出来的游戏一碰脚本就会 NoClassDefFoundError。
-  const wanted = libs.filter((f) => /^(gson|jogl-all|gluegen-rt|rhino)-.*\.jar$/i.test(f));
+  // jbox2d 是 2D 物理（bwe.physics）。漏掉它 → 运行时 NoClassDefFoundError:
+  // org/jbox2d/callbacks/ContactListener，脚本物理模块初始化失败。
+  // 这是真实发生过的打包事故：Android 侧补了 jbox2d，PC 侧的白名单没跟着更新。
+  const wanted = libs.filter((f) => /^(gson|jogl-all|gluegen-rt|rhino|jbox2d)-.*\.jar$/i.test(f));
   if (wanted.length === 0) throw new Error("lib/ 下找不到运行时依赖 jar");
   if (!wanted.some((f) => /^rhino-/i.test(f))) {
     throw new Error("lib/ 下找不到 rhino-*.jar：JS 脚本运行不了，请确认 lib/rhino-1.7.15.jar 存在");
+  }
+  if (!wanted.some((f) => /^jbox2d-/i.test(f))) {
+    throw new Error("lib/ 下找不到 jbox2d-*.jar：bwe.physics 会 NoClassDefFoundError，请确认 lib/jbox2d-library-2.1.2.jar 存在");
   }
   for (const f of wanted) {
     await copyFile(join(libRoot, f), join(inputDir, f));
@@ -647,10 +653,42 @@ function commonJdkRoots() {
       roots.push(join(localAppData, "Programs", "Eclipse Adoptium"));
       roots.push(join(localAppData, "Programs", "Microsoft"));
     }
+    // 工程自带的 JDK 安装点（不装在 Program Files 的也要能找到）：
+    // Android SDK 的 OpenJDK 和 android-studio 的 jbr 都在这里。
+    for (const extra of [
+      "D:\\UnityAndroid\\OpenJDK",
+      "D:\\UnityAndroid\\SDK",
+      "C:\\Program Files\\Android\\Android Studio\\jbr"
+    ]) {
+      roots.push(extra);
+    }
+    // 想用别的 JDK？用 BWE_JDK_ROOTS（分号分隔）显式指定，优先于上面所有默认值。
+    const envRoots = process.env.BWE_JDK_ROOTS;
+    if (envRoots) {
+      for (const r of envRoots.split(";").map((x) => x.trim()).filter(Boolean)) {
+        roots.unshift(r);
+      }
+    }
   } else {
     roots.push("/usr/lib/jvm", "/opt/java", "/opt/jdk");
   }
   return roots;
+}
+
+/**
+ * java.exe 所在目录是否像真正的 JDK 根目录。
+ *
+ * Windows 上 Oracle 的 javapath / java8path 是「转发器」目录：里面只有 java.exe，
+ * 没有 javac.exe、也没有 jmods。它们能跑 `java -version`，但**不能**当 JAVA_HOME 用
+ * ——gradlew 会报 "JAVA_HOME is set to an invalid directory"。
+ */
+function looksLikeJdkHome(javaExe) {
+  const binDir = dirname(javaExe);
+  if (basename(binDir).toLowerCase() !== "bin") return false;
+  const home = dirname(binDir);
+  const javac = join(binDir, process.platform === "win32" ? "javac.exe" : "javac");
+  // 只要同一 bin 目录里没有 javac，就不是 JDK（是 JRE 或转发器）。
+  return existsSync(javac) && existsSync(home);
 }
 
 async function collectJavaCandidates() {
@@ -659,6 +697,8 @@ async function collectJavaCandidates() {
     if (!exe) return;
     const abs = resolve(exe);
     if (!existsSync(abs)) return;
+    // 转发器目录（javapath/java8path）不能作 JAVA_HOME，直接排除，避免选到假 JDK。
+    if (!looksLikeJdkHome(abs)) return;
     const key = abs.toLowerCase();
     if (!found.has(key)) found.set(key, { javaExe: abs, source });
   };
@@ -679,7 +719,12 @@ async function collectJavaCandidates() {
     }
   }
 
+  const javaName = process.platform === "win32" ? "java.exe" : "java";
   for (const root of commonJdkRoots()) {
+    // 情况 A：root 本身就是 JDK 根（例如 D:/UnityAndroid/OpenJDK）——
+    // 直接试 root/bin/java。早期版本只当成容器，所以这类 JDK 永远扫描不到。
+    add(join(root, "bin", javaName), root);
+    // 情况 B：root 是容器（Program Files/Java 下挂多个 JDK）——扫下一层目录。
     let entries = [];
     try {
       entries = await readdir(root);
@@ -687,7 +732,7 @@ async function collectJavaCandidates() {
       continue;
     }
     for (const name of entries) {
-      add(join(root, name, "bin", process.platform === "win32" ? "java.exe" : "java"), join(root, name));
+      add(join(root, name, "bin", javaName), join(root, name));
     }
   }
 
@@ -968,12 +1013,25 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
   const tileSize = positiveIntField(project.tileSize, 32, "工程 tileSize", warnings);
   const gridW = positiveIntField(project.gridW, 60, "工程 gridW", warnings);
   const gridH = positiveIntField(project.gridH, 40, "工程 gridH", warnings);
+
+  /**
+   * UI 场景：与世界场景走**同一套对象导出逻辑**，但：
+   *   - 分成单独的 `uiScenes[]` 列表，不进 `scenes[]`（运行时数据模型里两者不同类型）；
+   *   - scene json 顶层写 ui/designW/designH，宽高按设计分辨率换算成「tileSize=1」的像素数，
+   *     这样 GameData 的 `width × tileSize` 老公式得到的仍然是设计分辨率；
+   *   - 不导出 buildings/navLinks/roadNetwork（UI 场景没有空间结构）。
+   * 旧工程（没有任何 ui 场景）导出的 boot.json 与改动前逐字节一致：uiScenes 只有非空时才写。
+   */
   const scenes = [];
+  const uiScenes = [];
   const sceneCount = (project.scenes ?? []).length;
   for (let i = 0; i < sceneCount; i++) {
     const scene = project.scenes[i];
-    const sceneLabel = `场景「${scene?.name ?? i + 1}」`;
-    const file = `scene_${i}.json`;
+    const isUi = scene?.ui === true;
+    const sceneLabel = `${isUi ? "UI 场景" : "场景"}「${scene?.name ?? i + 1}」`;
+    // 世界场景沿用 scene_<下标>.json（旧 Build 的路径不能变）；UI 场景用 ui_<下标>.json，
+    // 让人一眼能从文件名分出「这是地图」还是「这是界面」。
+    const file = isUi ? `ui_${i}.json` : `scene_${i}.json`;
 
     const layerList = Array.isArray(scene?.layers) ? scene.layers : [];
     const layerIndexById = new Map();
@@ -1040,15 +1098,24 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
       }
     }
 
-    const width = positiveIntField(scene?.widthTiles, gridW, `${sceneLabel} widthTiles`, warnings);
-    const height = positiveIntField(scene?.heightTiles, gridH, `${sceneLabel} heightTiles`, warnings);
+    const width = isUi
+      ? positiveIntField(scene?.designW, 1280, `${sceneLabel} designW`, warnings)
+      : positiveIntField(scene?.widthTiles, gridW, `${sceneLabel} widthTiles`, warnings);
+    const height = isUi
+      ? positiveIntField(scene?.designH, 720, `${sceneLabel} designH`, warnings)
+      : positiveIntField(scene?.heightTiles, gridH, `${sceneLabel} heightTiles`, warnings);
     // onStartScript：编辑器存 key，运行时按 name 查（ScriptEngine 读 scene_*.json 的该字段）。
     const startScriptKey = String(scene?.onStartScript ?? "");
     const startScriptName = startScriptKey ? (scriptNameByKey.get(startScriptKey) ?? startScriptKey) : "";
+    //
+    // UI 场景的几何：运行时统一用 `width × tileSize` 求地图像素尺寸（mapWidth/mapHeight），
+    // 为了不改这条老公式，UI 场景把 tileSize 写成 1、width 写设计宽 —— 结果正好是设计分辨率像素。
+    // 代价是 scene.tileSize=1，但 UI 场景里本来就不存在「格」这个概念，脚本读 scene.tileSize
+    // 也只会拿到 1（不是误导值：UI 里 1 单位 = 1 设计像素，这正是事实）。
     const sceneJson = {
       width,
       height,
-      tileSize,
+      tileSize: isUi ? 1 : tileSize,
       // origin 是 .bwproj 里的场景原点；编辑器/运行时当前都没有使用，但原样导出避免丢数据。
       originX: finiteNumber(scene?.originX, 0),
       originY: finiteNumber(scene?.originY, 0),
@@ -1063,21 +1130,28 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
       })),
       objects
     };
-    // ---- 开放世界新增段（全部可选）----
+    if (isUi) {
+      sceneJson.ui = true;
+      sceneJson.designW = width;
+      sceneJson.designH = height;
+    }
+    // ---- 开放世界新增段（全部可选；UI 场景没有空间结构，不写）----
     // 只有工程里真的带了这些字段才写出，旧 .bwproj 导出的 scene_*.json 与今天逐字节一致。
     // 运行时（GameData.loadScene）对缺失字段一律走安全缺省 = 单层平地，行为不变。
-    if (Array.isArray(scene?.buildings) && scene.buildings.length) {
-      sceneJson.buildings = scene.buildings;
-    }
-    if (Array.isArray(scene?.navLinks) && scene.navLinks.length) {
-      sceneJson.navLinks = scene.navLinks;
-    }
-    if (scene?.roadNetwork && typeof scene.roadNetwork === "object") {
-      const rn = scene.roadNetwork;
-      const nodes = Array.isArray(rn.nodes) ? rn.nodes : [];
-      const edges = Array.isArray(rn.edges) ? rn.edges : [];
-      if (nodes.length || edges.length) {
-        sceneJson.roadNetwork = { nodes, edges };
+    if (!isUi) {
+      if (Array.isArray(scene?.buildings) && scene.buildings.length) {
+        sceneJson.buildings = scene.buildings;
+      }
+      if (Array.isArray(scene?.navLinks) && scene.navLinks.length) {
+        sceneJson.navLinks = scene.navLinks;
+      }
+      if (scene?.roadNetwork && typeof scene.roadNetwork === "object") {
+        const rn = scene.roadNetwork;
+        const nodes = Array.isArray(rn.nodes) ? rn.nodes : [];
+        const edges = Array.isArray(rn.edges) ? rn.edges : [];
+        if (nodes.length || edges.length) {
+          sceneJson.roadNetwork = { nodes, edges };
+        }
       }
     }
     if (sceneJson.bgmAssetId) {
@@ -1101,15 +1175,36 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
       // startLang === "js"：运行时会执行，不告警。
     }
     await writeFile(join(buildDir, file), JSON.stringify(sceneJson, null, 2), "utf8");
-    scenes.push({
-      name: scene?.name ?? `场景 ${i + 1}`,
-      file,
-      width,
-      height
-    });
+    if (isUi) {
+      uiScenes.push({
+        name: scene?.name ?? `UI ${i + 1}`,
+        file,
+        designW: width,
+        designH: height,
+        // 图层数量给运行时一个「按层画」的上限参考；实际排序仍用对象上的 layer
+        layers: sceneJson.layers.length
+      });
+    } else {
+      scenes.push({
+        name: scene?.name ?? `场景 ${i + 1}`,
+        file,
+        width,
+        height
+      });
+    }
   }
-  if (sceneCount > 1) {
-    warnOnce(warnings, `工程有 ${sceneCount} 个场景，运行时只加载第一张「${scenes[0]?.name ?? ""}」，其余场景不会生效`);
+  if (scenes.length > 1) {
+    warnOnce(
+      warnings,
+      `工程有 ${scenes.length} 个世界场景，运行时只加载第一张「${scenes[0]?.name ?? ""}」，其余场景不会生效`
+    );
+  }
+  if (uiScenes.length) {
+    logStep(onLog, `已导出 ${uiScenes.length} 张 UI 场景（设计分辨率绘制，覆盖在世界画面之上）`);
+  }
+  if (!scenes.length) {
+    // UI 场景不进 scenes[]，但如果工程只有 UI 场景，运行时就没有世界场景可加载 → 会直接报错退出。
+    warnOnce(warnings, "工程没有任何世界场景，只有 UI 场景：运行时会以一张「空地图」兜底加载");
   }
 
   // ---------- 剧本 / 变量 ----------
@@ -1193,12 +1288,17 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
     // 预制体模板：编辑器「左栏 → 预制体」页维护，运行期用 bwe.prefab.spawn(name) 生成。
     prefabs
   };
+  // UI 场景：单独一段。**只有真的有 UI 场景时才写**，所以旧工程导出的 boot.json 逐字节不变
+  // （运行时 GameData 对缺失的 uiScenes 走空表 = 没有界面层，行为与今天一致）。
+  if (uiScenes.length) {
+    boot.uiScenes = uiScenes;
+  }
   // 可选：全局入口脚本名（有就跑 onSceneStart 前先执行）。编辑器还没提供这个字段时就不写。
   const jsMain = String(project.jsMain ?? "").trim();
   if (jsMain) boot.jsMain = jsMain;
   await writeFile(join(buildDir, "boot.json"), JSON.stringify(boot, null, 2), "utf8");
   if (runtimeAssets.size === 0) warnOnce(warnings, "工程没有任何素材：运行时会只画色块");
-  return { boot, scenes, runtimeAssets };
+  return { boot, scenes, uiScenes, runtimeAssets };
 }
 
 /**
@@ -1410,6 +1510,332 @@ export async function packageBwe(project, uploadedAssets, options = {}, onLog = 
     logStep(onLog, `完成：${zipPath}`);
     return result;
   }
+}
+
+// ---------------- Android 打包（Gradle assembleDebug → APK） ----------------
+//
+// BWE Android 移植的打包路径：和 Windows exe 共用 writeBuild 的导出契约（Build/boot.json +
+// Build/scene_0.json + Build/scripts/*.js + Build/assets/**），只是产物从 jpackage 换成
+// `./gradlew assembleDebug` 出的 APK。APK 拷到 android/app/src/main/assets/BWE/...，
+// 由 BweAndroidGameView / BweAndroidGame（Studio.android）消费。
+//
+// 资产布局约定（与桌面端「assetRoot 是 Build 的父目录」一致）：
+//   - boot：android/app/src/main/assets/BWE/boot.json
+//   - 素材：android/app/src/main/assets/BWE/Build/assets/<assetId>/<file>
+//          （boot.assets[].path 形如 "Build/assets/<id>/<file>"）
+
+const ANDROID_ROOT = resolve(projectRoot, "android");
+const ANDROID_GRADLE = process.platform === "win32" ? join(ANDROID_ROOT, "gradlew.bat") : join(ANDROID_ROOT, "gradlew");
+/** 变体名 → Gradle 任务名 / APK 相对路径。默认 release（正式包）。 */
+const ANDROID_VARIANTS = {
+  release: { task: "assembleRelease", apkRel: join("app", "build", "outputs", "apk", "release", "app-release.apk") },
+  debug: { task: "assembleDebug", apkRel: join("app", "build", "outputs", "apk", "debug", "app-debug.apk") }
+};
+
+/** APK 的资产落点：android/app/src/main/assets/BWE（运行时按 "BWE/boot.json" 打开）。 */
+const ANDROID_ASSETS = join(ANDROID_ROOT, "app", "src", "main", "assets", "BWE");
+
+async function stageAndroidAssets(buildDir) {
+  // 先清掉上一次暂存的资产，避免删掉的素材还留在 APK 里。
+  await rm(ANDROID_ASSETS, { recursive: true, force: true });
+  await mkdir(ANDROID_ASSETS, { recursive: true });
+  // 关键：保持和桌面端一样的目录契约 —— boot.json 在 Build/ 里，
+  // 并且 boot.assets[].path 形如 "Build/assets/<id>/<file>"（相对 Build 的父目录）。
+  // 所以这里把整个 Build/ 原样搬到 assets/BWE/Build/，运行时以 "BWE/" 为 assetRoot，
+  // 拼出来的 "BWE/Build/assets/..." 正好命中 APK 条目。
+  await copyDir(join(buildDir, "Build"), join(ANDROID_ASSETS, "Build"));
+  return join(ANDROID_ASSETS, "Build", "boot.json");
+}
+
+/** 递归复制目录（node 标准库无 cp，自己写，保持打包链路零依赖）。 */
+async function copyDir(src, dst) {
+  await mkdir(dst, { recursive: true });
+  const entries = await readdir(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const s = join(src, entry.name);
+    const d = join(dst, entry.name);
+    if (entry.isDirectory()) {
+      await copyDir(s, d);
+    } else if (entry.isFile()) {
+      await copyFile(s, d);
+    }
+  }
+}
+
+async function runGradleVariant(variant, onLog, onStdout, onStderr) {
+  // 没有 wrapper 就直接报清楚，不要让 cmd 吐出「'gradlew.bat' 不是内部或外部命令」。
+  if (!existsSync(ANDROID_GRADLE)) {
+    throw new Error(
+      `Android 工程缺少 Gradle wrapper：${ANDROID_GRADLE} 不存在。`
+        + `请先在 android/ 目录执行一次 \`gradle wrapper\` 生成 gradlew/gradlew.bat，`
+        + `或把已生成的 wrapper 文件签入仓库。`
+    );
+  }
+  // Gradle 构建 Android 时的 JDK 区间是 [11, 19]：
+  //   - 上界：Gradle 7.5.1 自带 Groovy 3.0.10 读不了 JDK 20+ 的 class 文件
+  //     （Unsupported class file major version 69）；
+  //   - 下界：AGP 7.4.2 声明自身 API 兼容 Java 11，用 JDK 8 会报
+  //     "No matching variant of com.android.tools.build:gradle:7.4.2"。
+  // 这台机 PATH 上的 java 是 JDK 26，直接用会把「源码问题」误报成 Gradle 启动失败。
+  const gradleJdk = await findRuntimeJdk(19, 11);
+  const env = { ...process.env };
+  if (gradleJdk.chosen) {
+    env.JAVA_HOME = dirname(dirname(gradleJdk.chosen.javaExe));
+    logStep(onLog, `Gradle 使用 JDK ${gradleJdk.chosen.major}：${env.JAVA_HOME}`);
+  } else {
+    logStep(onLog, "⚠ 没找到 JDK 8~25，Gradle 将回落到 PATH 上的 java，可能因版本过高而失败");
+  }
+  // gradlew 是 shell 脚本：Windows 走 cmd /c gradlew.bat，其它走 sh gradlew。
+  const command = process.platform === "win32" ? "cmd.exe" : "sh";
+  const task = ANDROID_VARIANTS[variant].task;
+  const args = process.platform === "win32" ? ["/c", "gradlew.bat", task] : ["gradlew", task];
+  return run(command, args, { cwd: ANDROID_ROOT, env, onStdout, onStderr });
+}
+
+/**
+ * 打包当前工程为 Android APK（debug）。复用 writeBuild，产物交给 android/ Gradle 工程。
+ *
+ * @param {object} project .bwproj JSON
+ * @param {Array} uploadedAssets 浏览器上传的素材
+ * @param {object} options { name, version, jobId }
+ */
+/** 正式签名 keystore 是否就位（打包脚本与 Gradle 用的是同一套环境变量约定）。 */
+function hasReleaseKeystore() {
+  const declared = process.env.BWE_KEYSTORE;
+  if (declared && existsSync(declared)) return true;
+  return existsSync(join(ANDROID_ROOT, "bwe-release.jks"));
+}
+
+/**
+ * 打包当前工程为 Android APK。复用 writeBuild，产物交给 android/ Gradle 工程。
+ *
+ * 默认产 release（正式包，debuggable=false）。options.variant="debug" 才打测试包。
+ * 没有正式 keystore 时会退回 debug 签名 —— 那种产物本质仍是测试包，
+ * 所以结果里的 isTestPackage / releaseSigned 会如实标出来。
+ *
+ * @param {object} project .bwproj JSON
+ * @param {Array} uploadedAssets 浏览器上传的素材
+ * @param {object} options { name, version, jobId, variant, outDir }
+ */
+/** 包名合法性：Android applicationId 要求每段以字母开头、只含字母数字下划线。 */
+function normalizeAppId(raw, fallbackName) {
+  const src = String(raw || "").trim();
+  if (src) {
+    const cleaned = src.replace(/[^A-Za-z0-9._]/g, "");
+    if (/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$/.test(cleaned)) {
+      return cleaned;
+    }
+  }
+  // 没给或非法：用工程名做一段，套默认前缀（保证可安装且不与他人撞车）。
+  const seg = String(fallbackName || "game")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/^[^a-z]+/, "");
+  const tail = seg || "game";
+  return `studio.bwe.${tail}`;
+}
+
+/** 版本号 → versionName + versionCode（Android 要求 code 是单调递增整数）。 */
+function androidVersion(version) {
+  const parts = String(version || "1.0").split(".").map((x) => parseInt(x, 10) || 0);
+  while (parts.length < 3) parts.push(0);
+  const [maj, min, pat] = parts;
+  const code = Math.max(1, maj * 10000 + min * 100 + pat);
+  return { versionName: `${maj}.${min}.${pat}`, versionCode: code };
+}
+
+/**
+ * 准备图标：把工程里的 icon（PNG）转成各密度 mipmap。
+ *
+ * 原图交给 Android 自己缩放并不可靠（BitmapFactory 只能解码，不能按密度切图），
+ * 所以直接按 5 个密度生成同一张图（尺寸不同即可，视觉上够用）。
+ * 没有 icon 或解码失败 → 保留内置默认图标（res 下的 mipmap-* 目录）。
+ */
+async function stageAndroidIcon(jobDir, iconDataUrl, onLog) {
+  const iconDir = join(ANDROID_ROOT, "app", "src", "bweIcon", "res");
+  // 每次先清掉上一次工程的图标，避免「换了工程还是旧图标」。
+  await rm(join(ANDROID_ROOT, "app", "src", "bweIcon"), { recursive: true, force: true });
+  if (!iconDataUrl) {
+    return { staged: false, reason: "工程没有设置 icon" };
+  }
+  const m = /^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i.exec(String(iconDataUrl).trim());
+  if (!m) {
+    return { staged: false, reason: "icon 不是 data URL（PNG/JPEG）" };
+  }
+  const buf = Buffer.from(m[2], "base64");
+  if (buf.length === 0) {
+    return { staged: false, reason: "icon 解码为空" };
+  }
+  // 校验真的是完整 PNG：aapt2 遇到坏图会整个资源编译失败（Duplicate resources 之后
+  // 的下一个坑就是它）。只检查签名 + IEND，够了——不引入图像库依赖。
+  const pngOk = buf.length > 1000
+    && buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    && buf.includes(Buffer.from("IEND"));
+  if (!pngOk) {
+    return { staged: false, reason: "icon 不是完整 PNG（aapt2 会编译失败）" };
+  }
+  const densities = { mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 };
+  for (const [d, size] of Object.entries(densities)) {
+    const dir = join(iconDir, `mipmap-${d}`);
+    await mkdir(dir, { recursive: true });
+    // Android 会把任意分辨率的图按 density 缩放，所以这里直接写原图，
+    // 由 aapt 归到各 density 桶里即可（不引入图像库依赖）。
+    // 用独立资源名 app_icon：内置默认图标叫 ic_launcher，
+    // 两者同名会在 mergeReleaseResources 阶段报 Duplicate resources。
+    await writeFile(join(dir, "app_icon.png"), buf);
+  }
+  onLog?.(`图标已就绪（${densities.xhdpi}px 基准，5 个密度）`);
+  return { staged: true, bytes: buf.length };
+}
+
+/**
+ * 决定屏幕方向。
+ *
+ * <p>优先级：显式参数 > 工程字段 > 按场景宽高比推断。
+ * 工程里目前没有 orientation 字段（扫雷工程的 HUD 是脚本按 isPortrait 自适应的），
+ * 所以默认用场景比例判断：宽 > 高 = 横屏，否则竖屏。
+ */
+function decideOrientation(project, explicit) {
+  const raw = String(explicit || project.orientation || project.screenOrientation || "").trim().toLowerCase();
+  if (raw === "portrait" || raw === "竖屏") return "portrait";
+  if (raw === "landscape" || raw === "横屏") return "landscape";
+  // 用第一个场景的格数比例推断。
+  // ⚠ .bwproj 里场景尺寸的实际字段是 widthTiles / heightTiles（不是 width/height），
+  // 早期只读 width/height 会永远拿不到值 → 所有工程都被判成横屏，
+  // 「扫雷-竖屏」打出来也是横的。这里两种字段都认，并按 gridW/gridH 兜底。
+  const sc = (project.scenes || [])[0] || {};
+  const sw = Number(sc.widthTiles ?? sc.width ?? project.gridW ?? 0);
+  const sh = Number(sc.heightTiles ?? sc.height ?? project.gridH ?? 0);
+  if (sw > 0 && sh > 0) {
+    return sw >= sh ? "landscape" : "portrait";
+  }
+  return "landscape";
+}
+
+/** 把应用元数据写进 android/app/bwe-meta.properties（Gradle 从这读，避免命令行中文编码问题）。 */
+async function writeAndroidMeta(meta) {
+  const lines = [
+    `applicationId=${meta.applicationId}`,
+    `label=${meta.label}`,
+    `versionName=${meta.versionName}`,
+    `versionCode=${meta.versionCode}`,
+    `orientation=${meta.orientation || "landscape"}`,
+    `splashColor=${meta.splashColor || "#0A0B10"}`
+  ];
+  await writeFile(join(ANDROID_ROOT, "app", "bwe-meta.properties"), lines.join("\n") + "\n", "utf8");
+}
+
+/**
+ * 打包当前工程为 Android APK。复用 writeBuild，产物交给 android/ Gradle 工程。
+ *
+ * 默认产 release（正式包，debuggable=false）。options.variant="debug" 才打测试包。
+ * 没有正式 keystore 时退回 debug 签名 —— 那种产物本质仍是测试包，
+ * 所以结果里的 isTestPackage / releaseSigned 会如实标出来。
+ *
+ * @param {object} project .bwproj JSON
+ * @param {Array} uploadedAssets 浏览器上传的素材
+ * @param {object} options { name, version, jobId, variant, outDir, applicationId, icon, splashColor }
+ */
+export async function packageAndroid(project, uploadedAssets, options = {}, onLog = console.log) {
+  if (!project || !Array.isArray(project.scenes)) {
+    throw new Error("工程数据不完整：缺少 scenes");
+  }
+  const variant = options.variant === "debug" ? "debug" : "release";
+  const jobId = safeId(options.jobId || `build_android_${Date.now()}`);
+  const outRoot = resolve(options.outDir || join(packageRoot, jobId));
+  const buildDir = join(outRoot, "work");
+  const outDir = join(outRoot, "out");
+  await rm(outRoot, { recursive: true, force: true });
+  await mkdir(buildDir, { recursive: true });
+  await mkdir(outDir, { recursive: true });
+
+  const appName = safeSegment(options.name || project.name || "BWE-Android", "BWE-Android");
+  const rawVersion = safeVersion(options.version || project.version);
+  const { versionName, versionCode } = androidVersion(rawVersion);
+  const warnings = [];
+
+  // ---------- 包名 / 显示名 / 图标（正式包必需） ----------
+  const applicationId = normalizeAppId(
+    options.applicationId || project.applicationId || project.packageName,
+    appName
+  );
+  const label = String(options.label || appName);
+  const iconResult = await stageAndroidIcon(jobId, options.icon || project.icon, onLog);
+  if (!iconResult.staged && iconResult.reason) {
+    logStep(onLog, `图标未使用工程 icon（${iconResult.reason}），沿用内置默认图标`);
+  }
+  const orientation = decideOrientation(project, options.orientation || options.screenOrientation);
+  await writeAndroidMeta({
+    applicationId,
+    label,
+    versionName,
+    versionCode,
+    orientation,
+    splashColor: options.splashColor || project.splashColor
+  });
+  logStep(onLog, `包名 ${applicationId} · 显示名「${label}」· 版本 ${versionName}(${versionCode}) · ${orientation}`);
+
+  // 正式包的前提是有正式签名密钥。没有就必须说明这是一次「测试包」的构建，
+  // 而不是悄悄产出一个 debuggable 的包还叫它正式版。
+  const releaseSigned = variant === "release" && hasReleaseKeystore();
+  const isTestPackage = variant === "debug" || (variant === "release" && !releaseSigned);
+  if (variant === "release" && !releaseSigned) {
+    warnOnce(
+      warnings,
+      "未找到正式签名 keystore（android/bwe-release.jks 或环境变量 BWE_KEYSTORE），"
+        + "release 变体会退回 debug 签名：这个包是测试包，debuggable=true，不能上架。"
+        + "要出正式包：设置 BWE_KEYSTORE / BWE_KEYSTORE_PASS / BWE_KEY_ALIAS / BWE_KEY_PASS 后重新打包。"
+    );
+  }
+
+  logStep(onLog, `开始打包 Android「${appName}」v${versionName}（${variant} 变体）`);
+  logStep(onLog, "1/2 转换工程数据与素材…");
+  const uploaded = uploadedAssets ? normalizeUploadedAssets(uploadedAssets) : await collectDataUrlAssets(project, onLog);
+  const build = await writeBuild(project, buildDir, uploaded.files, onLog, warnings, uploaded.problems);
+  for (const w of warnings) logStep(onLog, `⚠ ${w}`);
+
+  logStep(onLog, `2/2 运行 Gradle ${ANDROID_VARIANTS[variant].task}…`);
+  await stageAndroidAssets(buildDir);
+  const gradle = await runGradleVariant(variant,
+    (s) => s.trim() && logStep(onLog, s.trim()),
+    (s) => s.trim() && logStep(onLog, s.trim()),
+    (s) => s.trim() && logStep(onLog, s.trim())
+  );
+  const apkSrc = join(ANDROID_ROOT, ANDROID_VARIANTS[variant].apkRel);
+  if (!existsSync(apkSrc)) {
+    throw new Error(`Gradle 已结束但没有产出 APK：${apkSrc} 不存在。gradle 输出：${(gradle.out || "").slice(-800)}`);
+  }
+  // 把 APK 复制到本次任务自己的 out 目录：android/app/build 会被下次构建覆盖，
+  // 而下载接口拿的是 job.result.apkPath，必须指向本任务独占的文件。
+  // 文件名如实反映包的性质：只有真正正式签名的才叫 -release，否则一律带 -debug 后缀。
+  const suffix = isTestPackage ? "debug" : "release";
+  const apkPath = join(outDir, `${appName}-${suffix}.apk`);
+  await copyFile(apkSrc, apkPath);
+  const s = await stat(apkPath);
+  if (isTestPackage) {
+    logStep(onLog, `⚠ 产物是测试包（${variant}${releaseSigned ? "" : " / 无正式签名"}）：可安装调试，不能上架`);
+  }
+  return {
+    platform: "android",
+    variant,
+    releaseSigned,
+    isTestPackage,
+    applicationId,
+    label,
+    versionName,
+    versionCode,
+    orientation,
+    iconStaged: iconResult.staged,
+    appName,
+    version: versionName,
+    outDir,
+    buildDir,
+    apkPath,
+    apkName: basename(apkPath),
+    sizeBytes: s.size,
+    warnings,
+    boot: build.boot
+  };
 }
 
 // ---------------- CLI ----------------

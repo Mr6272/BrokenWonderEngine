@@ -106,11 +106,177 @@ function configureButton(ctx: RunCtx): HTMLElement | null {
   return button("调整参数", () => ctx.onConfigure?.(), { size: "sm", variant: "outline" });
 }
 
+// ---------------- 复雷加殊（Complexweeper）规则 ----------------
+//
+// 唯一事实来源：docs/complexweeper-rules.md。
+// 这里的函数刻意**不碰 DOM、不碰 TS 运行时状态**，因为 `web/tools/verify-complexweeper.mjs`
+// 会把本模块用 esbuild 打进一个临时 bundle 再直接 import 它们，跟 Java 侧的
+// `ComplexMineRulesTest` 读同一份 `test/fixtures/complexweeper.json` 做三方交叉验证。
+// 所以规则只能写在这里一份，`renderMinesweeper` 内部必须调用它们，不许另抄一遍。
+
+/** 雷值编码：0 无雷，1 = +1，2 = −1，3 = +i，4 = −i（与 Java 侧 `ComplexRules` 一致）。 */
+export function complexKindValue(kind: number): { re: number; im: number } {
+  if (kind === 1) return { re: 1, im: 0 };
+  if (kind === 2) return { re: -1, im: 0 };
+  if (kind === 3) return { re: 0, im: 1 };
+  if (kind === 4) return { re: 0, im: -1 };
+  return { re: 0, im: 0 };
+}
+
+/** 一组雷值之和（8 邻域的累加规则，规则文档第 2 节）。 */
+export function complexSum(kinds: readonly number[]): { re: number; im: number } {
+  let re = 0;
+  let im = 0;
+  for (const kind of kinds) {
+    const v = complexKindValue(kind);
+    re += v.re;
+    im += v.im;
+  }
+  return { re, im };
+}
+
+/**
+ * 棋盘几何：第 i 格的 8 邻格下标（越界即跳过，不 wrap）。
+ * 浏览器试玩的 `neighbors()` 与 `complexBoardSums()` 都走这一份，避免两套几何。
+ */
+export function complexNeighborIndices(i: number, cols: number, rows: number): number[] {
+  const r = Math.floor(i / cols);
+  const c = i % cols;
+  const out: number[] = [];
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (!dr && !dc) continue;
+      const rr = r + dr;
+      const cc = c + dc;
+      if (rr < 0 || rr >= rows || cc < 0 || cc >= cols) continue;
+      out.push(rr * cols + cc);
+    }
+  }
+  return out;
+}
+
+/**
+ * 全盘邻域统计（规则文档第 2 节）：counts = 邻雷数，sumRe/sumIm = 邻雷值之和。
+ * 普通模式下 kinds 全是 1 或 0，因此 sumRe 恒等于 counts、sumIm 恒为 0 —— 数字与今天完全一致。
+ * 这是浏览器渲染数字与自动展开的唯一数据来源，Node 验证脚本会直接调用它。
+ */
+export function complexBoardSums(
+  cols: number,
+  rows: number,
+  kinds: readonly number[]
+): { counts: number[]; sumRe: number[]; sumIm: number[] } {
+  const total = cols * rows;
+  const counts = new Array<number>(total).fill(0);
+  const sumRe = new Array<number>(total).fill(0);
+  const sumIm = new Array<number>(total).fill(0);
+  for (let i = 0; i < total; i++) {
+    if (!kinds[i]) continue;
+    const v = complexKindValue(kinds[i]);
+    for (const n of complexNeighborIndices(i, cols, rows)) {
+      counts[n]++;
+      sumRe[n] += v.re;
+      sumIm[n] += v.im;
+    }
+  }
+  return { counts, sumRe, sumIm };
+}
+
+/** 模长显示：n = re²+im² 是完全平方数 → 十进制整数；否则 `√n`。 */
+export function complexLabel(re: number, im: number): string {
+  const n = re * re + im * im;
+  // 整数判定：由 Math.round 得到 r 后自乘回比，避免 Number.isInteger(Math.sqrt(n)) 的浮点误差。
+  const r = Math.round(Math.sqrt(n));
+  if (r * r === n) return String(r);
+  return "\u221a" + n;
+}
+
+/** chord 的「虚实比例」判定（规则文档第 4 节 ②）：交叉相乘，任一成立即可，不做除法。 */
+export function complexRatioOk(fR: number, fI: number, aR: number, aI: number): boolean {
+  return fR * aI === fI * aR || fR * aR === fI * aI;
+}
+
+/** 复雷模式的自动展开：只有周围真实雷为 0（sumRe 与 sumIm 都为 0）才展开，规则文档第 5 节。 */
+export function complexAutoOpen(sumRe: number, sumIm: number): boolean {
+  return sumRe === 0 && sumIm === 0;
+}
+
+/** 一个邻格在 chord 时的状态：雷值种类 + 是否已插旗。 */
+export interface ComplexNeighbor {
+  kind: number;
+  flagged: boolean;
+}
+
+export interface ComplexChordVerdict {
+  ok: boolean;
+  flagged: number;
+  fR: number;
+  fI: number;
+  aR: number;
+  aI: number;
+}
+
+/** chord 判定（规则文档第 4 节 ①②）：旗数必须等于真实雷数，且虚实比例必须对上。 */
+export function complexChordOk(neighbors: readonly ComplexNeighbor[]): ComplexChordVerdict {
+  let flagged = 0;
+  let fR = 0;
+  let fI = 0;
+  let aR = 0;
+  let aI = 0;
+  for (const n of neighbors) {
+    const isReal = n.kind === 1 || n.kind === 2;
+    const isImag = n.kind === 3 || n.kind === 4;
+    if (isReal) aR++;
+    else if (isImag) aI++;
+    if (n.flagged) {
+      flagged++;
+      if (isReal) fR++;
+      else if (isImag) fI++;
+    }
+  }
+  return {
+    ok: flagged === aR + aI && complexRatioOk(fR, fI, aR, aI),
+    flagged,
+    fR,
+    fI,
+    aR,
+    aI
+  };
+}
+
+/** 雷种类小标注的文案（规则文档第 1 节 + 第 9 节）。 */
+export function complexKindName(kind: number): string {
+  if (kind === 1) return "+1";
+  if (kind === 2) return "−1";
+  if (kind === 3) return "+i";
+  if (kind === 4) return "−i";
+  return "";
+}
+
+/** 雷种类小标注的颜色：实雷红/蓝，虚雷紫/青（与视频配色一致）。 */
+export function complexKindColor(kind: number): string {
+  if (kind === 1) return "#e5484d";
+  if (kind === 2) return "#2f64d8";
+  if (kind === 3) return "#8a4fa8";
+  if (kind === 4) return "#2aa198";
+  return "#5a6478";
+}
+
+/** 带根号数字的配色：√2 青、√5 深绿、√8 蓝、√10 紫、其它灰蓝（规则文档第 9 节）。 */
+export function complexRootColor(n: number): string {
+  if (n === 2) return "#2aa198";
+  if (n === 5) return "#1f8a4c";
+  if (n === 8) return "#2f64d8";
+  if (n === 10) return "#8a4fa8";
+  return "#5a6478";
+}
+
 // ---------------- 扫雷 ----------------
 
 interface MineCell {
   root: HTMLDivElement;
   ico: HTMLSpanElement;
+  /** 复雷模式下判负/通关亮雷时的种类小标注（+1/−1/+i/−i）；普通模式永不创建。 */
+  kind: HTMLSpanElement | null;
 }
 
 export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
@@ -129,8 +295,16 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
   const total = rows * cols;
   const mineCap = Math.max(1, total - 1);
 
+  // 玩法模式：模块参数可能还没声明（`textOf` 会退到 ""），按「字段不存在 = 普通模式」处理。
+  // 解析口径与 docs/complexweeper-rules.md 第 8 节、Java 侧 `m.str("mode", ...)` 完全一致。
+  let complex = /复雷|complex/i.test(textOf(mod, "mode", ""));
+
   let mines: boolean[] = new Array(total).fill(false);
   let counts: number[] = new Array(total).fill(0);
+  // 复雷模式的附加模型（普通模式：mineKind 恒 0/1，sumRe 恒等于 counts，sumIm 恒 0）。
+  let mineKind: number[] = new Array(total).fill(0);
+  let sumRe: number[] = new Array(total).fill(0);
+  let sumIm: number[] = new Array(total).fill(0);
   let revealed: boolean[] = new Array(total).fill(false);
   let flagged: boolean[] = new Array(total).fill(false);
   let mineCount = Math.min(wantMines, mineCap);
@@ -147,7 +321,8 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
   const head = el("div", { class: "mg-head" });
   const titleBox = el("div", { class: "mg-titlebox" });
   titleBox.appendChild(el("div", { class: "mg-title" }, "扫雷 · Minesweeper"));
-  titleBox.appendChild(el("div", { class: "mg-sub" }, `${cols} 列 × ${rows} 行 · ${mineCount} 颗地雷`));
+  const subLine = el("div", { class: "mg-sub" }, "");
+  titleBox.appendChild(subLine);
   head.appendChild(titleBox);
   head.appendChild(el("div", { class: "spacer" }));
 
@@ -161,7 +336,13 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
     flagBtn.textContent = `🚩 标记模式：${flagMode ? "开" : "关"}`;
     flagBtn.classList.toggle("primary", flagMode);
   }, { size: "sm", variant: "outline" });
+  // 模式按钮：只在浏览器试玩里切换玩法，不改工程数据（关掉预览即还原）。
+  const modeBtn = button("", () => {
+    complex = !complex;
+    reset();
+  }, { size: "sm", variant: "outline" });
   const restartBtn = button("重新开始", () => reset(), { size: "sm", variant: "primary" });
+  head.appendChild(modeBtn);
   head.appendChild(flagBtn);
   head.appendChild(restartBtn);
   const cfg = configureButton(ctx);
@@ -182,9 +363,12 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
     root.dataset.index = String(i);
     const ico = el("span", { class: "mg-ico" });
     root.appendChild(ico);
+    // 复雷模式的雷种类标注：默认不建、不占位，只有真的需要时才 createElement，
+    // 这样普通模式的 DOM 结构与今天逐节点一致（零回归）。
     const activate = (wantFlag: boolean) => {
       if (over) return;
       if (wantFlag) toggleFlag(i);
+      else if (complex && revealed[i]) chord(i);
       else reveal(i);
     };
     root.addEventListener("click", () => activate(flagMode));
@@ -199,13 +383,14 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
       }
     });
     board.appendChild(root);
-    cells.push({ root, ico });
+    cells.push({ root, ico, kind: null });
   }
   boardWrap.appendChild(board);
   wrap.appendChild(boardWrap);
 
   const foot = el("div", { class: "mg-foot" });
-  foot.appendChild(el("span", { class: "hint" }, "左键翻开 · 右键插旗 · 触屏可开「标记模式」"));
+  const footHint = el("span", { class: "hint" }, "");
+  foot.appendChild(footHint);
   wrap.appendChild(foot);
   host.appendChild(wrap);
 
@@ -221,20 +406,35 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
     };
   }
 
-  function neighbors(i: number): number[] {
-    const r = Math.floor(i / cols);
-    const c = i % cols;
-    const out: number[] = [];
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        if (!dr && !dc) continue;
-        const rr = r + dr;
-        const cc = c + dc;
-        if (rr < 0 || rr >= rows || cc < 0 || cc >= cols) continue;
-        out.push(rr * cols + cc);
-      }
+  /** 复雷模式的雷种类小标注：按需创建，普通模式永不创建。 */
+  function ensureKindTag(cell: MineCell): HTMLSpanElement {
+    if (!cell.kind) {
+      const tag = el("span", { class: "mg-kind" });
+      // 行内定位：样式表里没有 .mg-kind（本任务允许改的只有本文件），
+      // 所以小标注的定位/字号全部走行内，避免依赖尚不存在的 CSS 规则。
+      tag.style.position = "absolute";
+      tag.style.right = "2px";
+      tag.style.bottom = "0";
+      tag.style.fontSize = `${Math.max(9, Math.round(cellSize * 0.3))}px`;
+      tag.style.fontWeight = "800";
+      tag.style.lineHeight = "1";
+      tag.style.pointerEvents = "none";
+      cell.root.appendChild(tag);
+      cell.kind = tag;
     }
-    return out;
+    cell.kind.style.display = "";
+    return cell.kind;
+  }
+
+  function hideKindTag(cell: MineCell): void {
+    if (cell.kind) {
+      cell.kind.style.display = "none";
+      cell.kind.textContent = "";
+    }
+  }
+
+  function neighbors(i: number): number[] {
+    return complexNeighborIndices(i, cols, rows);
   }
 
   function placeMines(safeIndex: number): void {
@@ -257,12 +457,20 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
     }
     mineCount = Math.min(mineCount, candidates.length);
     mines = new Array(total).fill(false);
-    for (let k = 0; k < mineCount; k++) mines[candidates[k]] = true;
-    counts = new Array(total).fill(0);
-    for (let i = 0; i < total; i++) {
-      if (!mines[i]) continue;
-      for (const n of neighbors(i)) counts[n]++;
+    mineKind = new Array(total).fill(0);
+    for (let k = 0; k < mineCount; k++) {
+      const idx = candidates[k];
+      mines[idx] = true;
+      // 普通模式雷值恒为 +1；复雷模式每颗雷独立取 4 种之一（同一个 rand，seed 一致时同盘可复现）。
+      mineKind[idx] = complex ? 1 + Math.floor(rand() * 4) : 1;
     }
+    counts = new Array(total).fill(0);
+    sumRe = new Array(total).fill(0);
+    sumIm = new Array(total).fill(0);
+    const sums = complexBoardSums(cols, rows, mineKind);
+    counts = sums.counts;
+    sumRe = sums.sumRe;
+    sumIm = sums.sumIm;
   }
 
   function startTimer(): void {
@@ -281,30 +489,47 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
   }
 
   function updateStatus(): void {
+    subLine.textContent = `${cols} 列 × ${rows} 行 · ${mineCount} 颗地雷${complex ? " · 复雷加殊" : ""}`;
+    modeBtn.textContent = `模式：${complex ? "复雷加殊" : "普通"}`;
+    modeBtn.classList.toggle("primary", complex);
+    modeBtn.title = complex ? "当前：复雷加殊（点击切回普通）" : "当前：普通（点击切到复雷加殊）";
+    wrap.classList.toggle("mg-complex", complex);
+    footHint.textContent = complex
+      ? "左键翻开 · 点数字连锁翻开 · 右键插旗（旗不带属性）"
+      : "左键翻开 · 右键插旗 · 触屏可开「标记模式」";
     mineLeft.textContent = `💣 ${Math.max(0, mineCount - flags)}`;
     timeChip.textContent = showTimer ? `⏱ ${elapsed}s` : "⏱ —";
     mineLeft.title = "剩余地雷 = 总雷数 - 已插旗";
     timeChip.title = showTimer ? "从第一次翻开开始计时" : "计时器已关闭";
     if (won) status.textContent = `🎉 通关！用时 ${elapsed} 秒`;
     else if (over) status.textContent = "💥 踩到地雷了，点「重新开始」再来一局";
-    else if (!started) status.textContent = firstClickSafe
-      ? "点任意格子开始；第一次点开的区域一定安全"
-      : "点任意格子开始；首击保护已关闭，第一下也可能踩雷";
-    else status.textContent = flagMode ? "标记模式：点击格子插旗 / 取消旗" : "继续翻开安全格";
+    else if (!started) {
+      status.textContent = complex
+        ? "雷有 +1/−1/+i/−i 四种；数字 = 周围雷之和的模长。点任意格子开始"
+        : firstClickSafe
+          ? "点任意格子开始；第一次点开的区域一定安全"
+          : "点任意格子开始；首击保护已关闭，第一下也可能踩雷";
+    } else {
+      status.textContent = complex
+        ? "点数字可连锁翻开（需旗数与真实雷数相同、且虚实比例对上）"
+        : flagMode ? "标记模式：点击格子插旗 / 取消旗" : "继续翻开安全格";
+    }
     status.className = "mg-status" + (won ? " win" : over ? " lose" : "");
   }
 
   function draw(): void {
     for (let i = 0; i < total; i++) {
       const { root, ico } = cells[i];
-      const isHidden = !revealed[i];
       root.className = "mg-cell";
       ico.className = "mg-ico";
       ico.textContent = "";
       ico.style.backgroundImage = "";
+      ico.style.color = "";
+      ico.style.fontSize = "";
       root.style.backgroundImage = "";
       root.dataset.n = "";
       root.removeAttribute("aria-label");
+      hideKindTag(cells[i]);
       if (over && revealAllOnLose && mines[i]) {
         revealed[i] = true;
       }
@@ -323,10 +548,35 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
         root.classList.add("open", "mine");
         if (assetUrls.mine) ico.style.backgroundImage = `url("${assetUrls.mine}")`;
         else ico.textContent = "💣";
-        root.setAttribute("aria-label", `第 ${i + 1} 格，地雷`);
+        if (complex) {
+          // 复雷模式额外标出这颗雷的种类；普通模式不建这个节点，DOM 与今天一致。
+          const tag = ensureKindTag(cells[i]);
+          tag.textContent = complexKindName(mineKind[i]);
+          tag.style.color = complexKindColor(mineKind[i]);
+          root.setAttribute("aria-label", `第 ${i + 1} 格，地雷 ${complexKindName(mineKind[i])}`);
+        } else {
+          root.setAttribute("aria-label", `第 ${i + 1} 格，地雷`);
+        }
       } else {
         root.classList.add("open");
-        if (counts[i] > 0) {
+        if (complex) {
+          const re = sumRe[i];
+          const im = sumIm[i];
+          const label = complexLabel(re, im);
+          const n = re * re + im * im;
+          const isInt = label.charCodeAt(0) !== 0x221a;
+          if (isInt) {
+            // 整数沿用现有 data-n 配色（与普通模式同一条 CSS 通道）。
+            root.dataset.n = label;
+            ico.textContent = label;
+          } else {
+            // 带根号：data-n 清空，改走行内 color（CSS 里没有 √k 的配色）。
+            ico.textContent = label;
+            ico.style.color = complexRootColor(n);
+            ico.style.fontSize = `${Math.max(9, Math.round(cellSize * 0.32))}px`;
+          }
+          root.setAttribute("aria-label", `第 ${i + 1} 格，周围雷之和 ${label}`);
+        } else if (counts[i] > 0) {
           root.dataset.n = String(counts[i]);
           ico.textContent = String(counts[i]);
           root.setAttribute("aria-label", `第 ${i + 1} 格，周围 ${counts[i]} 颗雷`);
@@ -336,6 +586,11 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
       }
     }
     updateStatus();
+  }
+
+  /** 自动展开判定：普通模式看 counts，复雷模式只有在周围真实雷为 0 时才展开。 */
+  function isEmptyCell(i: number): boolean {
+    return complex ? complexAutoOpen(sumRe[i], sumIm[i]) : counts[i] === 0;
   }
 
   function reveal(start: number): void {
@@ -354,11 +609,29 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
         lose();
         return;
       }
-      if (counts[i] === 0 && autoOpenZeros) {
+      if (isEmptyCell(i) && autoOpenZeros) {
         for (const n of neighbors(i)) {
           if (!revealed[n] && !flagged[n]) stack.push(n);
         }
       }
+    }
+    draw();
+    checkWin();
+  }
+
+  /**
+   * 复雷模式的 chord（规则文档第 4 节）：点已翻开的数字格，若旗数与真实雷数相同、
+   * 且虚实比例对上，就把它周围所有未插旗未翻开的格子挨个走同一条 reveal 路径。
+   * 判定不通过时什么都不做 —— 绝不为了「帮玩家」而提前踩雷判负。
+   */
+  function chord(idx: number): void {
+    if (!complex || over || !revealed[idx]) return;
+    const around = neighbors(idx);
+    const verdict = complexChordOk(around.map((n) => ({ kind: mineKind[n], flagged: flagged[n] })));
+    if (!verdict.ok) return;
+    for (const n of around) {
+      if (flagged[n] || revealed[n]) continue;
+      reveal(n);
     }
     draw();
     checkWin();
@@ -405,6 +678,9 @@ export function renderMinesweeper(host: HTMLElement, ctx: RunCtx): MinigameRun {
     stopTimer();
     mines = new Array(total).fill(false);
     counts = new Array(total).fill(0);
+    mineKind = new Array(total).fill(0);
+    sumRe = new Array(total).fill(0);
+    sumIm = new Array(total).fill(0);
     revealed = new Array(total).fill(false);
     flagged = new Array(total).fill(false);
     flags = 0;

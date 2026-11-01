@@ -267,7 +267,10 @@ function usage() {
 function compileRuntime() {
   const files = fs
     .readdirSync(RUNTIME_SRC_DIR)
-    .filter((f) => f.endsWith(".java") && f !== "GameLauncher.java")
+    // ⚠ 必须排除 `*Test.java`（踩过的真实故障，与 serve.mjs 里同一条）：
+    // 这些测试会 import Core.* / Framework.*，而本工具只编译 runtime 目录 →
+    // 「程序包 Core 不存在」→ 整条几何校验跑不起来（报错看着像引擎坏了）。
+    .filter((f) => f.endsWith(".java") && f !== "GameLauncher.java" && !f.endsWith("Test.java"))
     .sort();
   if (!files.length) throw new Error(`找不到运行时源码: ${RUNTIME_SRC_DIR}`);
 
@@ -282,6 +285,9 @@ function compileRuntime() {
     "UTF-8",
     "-cp",
     libCp,
+    // 兜底：运行时源码万一引用了同仓其它包（Core / Framework），也能解析。
+    "-sourcepath",
+    path.join(REPO_ROOT, "src"),
     "-d",
     CLASSES_DIR,
     ...files.map((f) => path.join(RUNTIME_SRC_DIR, f))

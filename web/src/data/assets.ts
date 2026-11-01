@@ -93,11 +93,60 @@ export function frameKey(assetId: string, frame: number): string {
   return `${assetId}#${frame}`;
 }
 
+/**
+ * 解码位图的缓存上限（按条目数）。
+ *
+ * 为什么要上限：ImageBitmap 是**显存/系统位图内存**，浏览器不会因为 Map 里删了键就回收，
+ * 必须显式 close()。编辑器里「改图集行列数」「换素材」「反复预览序列帧」都会产生新的键，
+ * 旧实现只 delete 键、从不 close，于是开久了位图只增不减 —— 这是「越用越卡」的第二个来源。
+ * 这里同时做两件事：超过上限按最久未用淘汰，淘汰时一定 close。
+ */
+const MAX_IMAGE_CACHE = 400;
+const MAX_WHOLE_CACHE = 160;
+
+/** LRU：把刚用到的键挪到末尾（Map 保证插入顺序），淘汰时从头部拿。 */
+function touch<K, V>(map: Map<K, V>, key: K, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+}
+
+/** 释放一张位图。只有 ImageBitmap 才有 close()，HTMLImageElement/Canvas 靠 GC。 */
+function releaseImage(img: LoadedImage | undefined): void {
+  if (!img) return;
+  const b = img.bitmap as ImageBitmap;
+  if (typeof b.close === "function") {
+    try {
+      b.close();
+    } catch {
+      /* 已经关过或已被转移控制权；重复关闭不该中断调用方 */
+    }
+  }
+}
+
+/**
+ * 从缓存里摘掉某个键并释放它。
+ *
+ * `keep` 用来避开「同一个位图被两张缓存表共享」的情况：
+ * `loadWhole` 的结果会被 `loadRaw` 读去做图集切片，两条缓存可能指着同一个 ImageBitmap。
+ * 只 close 一次是安全的，但 close 之后另一张表里就是死引用 ——
+ * 所以摘除时一并把引用同一对象的兄弟条目也摘掉。
+ */
+function dropEntry(map: Map<string, LoadedImage>, key: string): void {
+  const hit = map.get(key);
+  if (!hit) return;
+  map.delete(key);
+  for (const [k, v] of Array.from(map.entries())) if (v.bitmap === hit.bitmap) map.delete(k);
+  releaseImage(hit);
+}
+
 export async function loadFrame(asset: AssetEntry | undefined, frame: number): Promise<LoadedImage | null> {
   if (!asset) return null;
   const key = frameKey(asset.id, frame);
   const hit = imageCache.get(key);
-  if (hit) return hit;
+  if (hit) {
+    touch(imageCache, key, hit);
+    return hit;
+  }
   if (missing.has(key)) return null;
 
   try {
@@ -107,6 +156,11 @@ export async function loadFrame(asset: AssetEntry | undefined, frame: number): P
       return null;
     }
     imageCache.set(key, img);
+    while (imageCache.size > MAX_IMAGE_CACHE) {
+      const oldest = imageCache.keys().next();
+      if (oldest.done) break;
+      dropEntry(imageCache, oldest.value);
+    }
     return img;
   } catch {
     missing.add(key);
@@ -164,7 +218,10 @@ export async function assetRawBlob(asset: AssetEntry, frame = 0): Promise<Blob |
 async function loadWhole(asset: AssetEntry, frame = 0): Promise<LoadedImage | null> {
   const key = asset.kind === "SEQUENCE" ? `${asset.id}#raw#${frame}` : `${asset.id}#raw`;
   const hit = wholeCache.get(key);
-  if (hit) return hit;
+  if (hit) {
+    touch(wholeCache, key, hit);
+    return hit;
+  }
 
   const blob = await assetRawBlob(asset, frame);
   if (!blob) return null;
@@ -172,6 +229,11 @@ async function loadWhole(asset: AssetEntry, frame = 0): Promise<LoadedImage | nu
   if (!img) return null;
   const out: LoadedImage = { bitmap: img.bitmap, width: img.width, height: img.height };
   wholeCache.set(key, out);
+  while (wholeCache.size > MAX_WHOLE_CACHE) {
+    const oldest = wholeCache.keys().next();
+    if (oldest.done) break;
+    dropEntry(wholeCache, oldest.value);
+  }
   return out;
 }
 
@@ -217,8 +279,9 @@ async function decodeBlob(blob: Blob): Promise<LoadedImage | null> {
 }
 
 export function invalidateAsset(assetId: string): void {
-  for (const k of Array.from(imageCache.keys())) if (k.startsWith(assetId + "#")) imageCache.delete(k);
-  for (const k of Array.from(wholeCache.keys())) if (k.startsWith(assetId + "#")) wholeCache.delete(k);
+  // 必须先走 dropEntry（它会 close 位图），只 delete 键等于把位图内存留给浏览器慢慢收 —— 实测收不回来。
+  for (const k of Array.from(imageCache.keys())) if (k.startsWith(assetId + "#")) dropEntry(imageCache, k);
+  for (const k of Array.from(wholeCache.keys())) if (k.startsWith(assetId + "#")) dropEntry(wholeCache, k);
   for (const k of Array.from(missing)) if (k.startsWith(assetId + "#")) missing.delete(k);
 }
 

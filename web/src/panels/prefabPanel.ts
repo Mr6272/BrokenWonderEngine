@@ -27,7 +27,9 @@ import {
   uniquePrefabName,
   cloneModules,
   scriptLang,
-  scriptNamesOfLang
+  scriptNamesOfLang,
+  isUiScene,
+  scenePixelSize
 } from "../core/model.ts";
 import { store } from "../core/store.ts";
 import {
@@ -689,6 +691,12 @@ function viewCenter(): { x: number; y: number } {
   if (detail.has) return { x: detail.x, y: detail.y };
   const scene = store.scene;
   const t = store.project?.tileSize ?? 32;
+  // UI 场景的「地图」是设计分辨率，不是格数；沿用旧的 widthTiles * tileSize
+  // 会把预制体放到 1920×1280 的中点（设计稿只有 1280×720），落点直接跑到框外。
+  if (scene && isUiScene(scene)) {
+    const size = scenePixelSize(scene, t);
+    return { x: size.w / 2, y: size.h / 2 };
+  }
   return {
     x: ((scene?.widthTiles ?? 20) * t) / 2,
     y: ((scene?.heightTiles ?? 15) * t) / 2

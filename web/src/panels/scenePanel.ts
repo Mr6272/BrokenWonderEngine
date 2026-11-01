@@ -6,7 +6,7 @@
  */
 
 import type { SceneModel } from "../core/model.ts";
-import { createLayer, createScene } from "../core/model.ts";
+import { createLayer, createScene, createUiScene, isUiScene, scenePixelSize, UI_DESIGN_H, UI_DESIGN_W } from "../core/model.ts";
 import { store } from "../core/store.ts";
 import { el, input, button, fieldRow, numText } from "../core/dom.ts";
 import { I } from "../ui/icons.ts";
@@ -23,18 +23,55 @@ export function renderScenePanel(host: HTMLElement): void {
     return;
   }
 
-  // ---- 场景列表 ----
+  const worldScenes = store.project.scenes.filter((s) => !isUiScene(s));
+  const uiScenes = store.project.scenes.filter((s) => isUiScene(s));
+
+  // ---- 世界场景 ----
   const head = el("div", { class: "row" });
-  head.appendChild(el("div", { class: "group-label" }, "场景 Scenes"));
+  head.appendChild(el("div", { class: "group-label" }, "世界场景 World Scenes"));
   head.appendChild(el("div", { class: "spacer" }));
   head.appendChild(button("新建", () => newScene(), { size: "sm", variant: "primary", iconPath: I.plus }));
   wrap.appendChild(head);
 
   const list = el("div", { class: "item-list" });
-  for (const s of store.project.scenes) {
+  for (const s of worldScenes) {
     list.appendChild(sceneItem(s));
   }
+  if (!worldScenes.length) {
+    list.appendChild(el("div", { class: "hint" }, "还没有世界场景。世界场景是角色/地块/触发区所在的地图。"));
+  }
   wrap.appendChild(list);
+
+  // ---- UI 场景 ----
+  // UI 场景与世界场景分开列，是为了让用户一眼看到「界面在这里编辑」，
+  // 而不是在一长串地图里找那张「其实是 HUD 的」。
+  const uiHead = el("div", { class: "row" });
+  uiHead.style.marginTop = "14px";
+  uiHead.appendChild(el("div", { class: "group-label" }, "UI 场景 UI Scenes"));
+  uiHead.appendChild(el("div", { class: "spacer" }));
+  uiHead.appendChild(
+    button("新建 UI", () => newUiScene(), {
+      size: "sm",
+      variant: "primary",
+      iconPath: I.plus,
+      title: "新建一张按设计分辨率（默认 1280×720）排版的界面画布"
+    })
+  );
+  wrap.appendChild(uiHead);
+
+  const uiList = el("div", { class: "item-list" });
+  for (const s of uiScenes) uiList.appendChild(sceneItem(s));
+  if (!uiScenes.length) {
+    uiList.appendChild(
+      el(
+        "div",
+        { class: "hint" },
+        "还没有 UI 场景。点「新建 UI」建一张界面画布：这里的文字/图片/面板按设计分辨率排版，" +
+          "不会和地图上的角色、地块混在同一个图层里。"
+      )
+    );
+  }
+  wrap.appendChild(uiList);
 
   // ---- 当前场景设置 ----
   const scene = store.scene;
@@ -56,35 +93,103 @@ export function renderScenePanel(host: HTMLElement): void {
     });
     wrap.appendChild(fieldRow("名称 Name", nameI));
 
-    const wI = input(String(scene.widthTiles), {
-      numeric: true,
-      onChange: (v) => {
-        const n = Math.max(4, Math.min(500, Number(v) || scene.widthTiles));
-        scene.widthTiles = n;
-        store.markDirty();
-        window.dispatchEvent(new CustomEvent("bwe:repaint"));
-      }
-    });
-    wrap.appendChild(fieldRow("宽 Width（格）", wI));
+    if (isUiScene(scene)) {
+      // ---- UI 场景：设计分辨率 ----
+      // 世界场景的「格数」对 UI 没有意义（UI 按像素排版），所以这里换成设计分辨率。
+      wrap.appendChild(
+        el(
+          "div",
+          { class: "hint", style: { marginBottom: "6px" } },
+          "UI 场景按设计分辨率排版：运行时会等比 contain 居中铺进真实窗口，所以窗口多大都不会裁掉内容。"
+        )
+      );
+      const dwI = input(String(scene.designW ?? UI_DESIGN_W), {
+        numeric: true,
+        hint: "设计稿宽（像素）。常见值：1280（16:9 横屏）/ 750（竖屏手机）",
+        onChange: (v) => {
+          const n = Math.max(160, Math.min(4096, Number(v) || (scene.designW ?? UI_DESIGN_W)));
+          scene.designW = n;
+          scene.widthTiles = Math.max(1, Math.round(n / (store.project!.tileSize || 32)));
+          store.markDirty();
+          window.dispatchEvent(new CustomEvent("bwe:repaint"));
+          window.dispatchEvent(new CustomEvent("bwe:refresh"));
+        }
+      });
+      wrap.appendChild(fieldRow("设计宽 Design W（px）", dwI));
 
-    const hI = input(String(scene.heightTiles), {
-      numeric: true,
-      onChange: (v) => {
-        const n = Math.max(4, Math.min(500, Number(v) || scene.heightTiles));
-        scene.heightTiles = n;
-        store.markDirty();
-        window.dispatchEvent(new CustomEvent("bwe:repaint"));
-      }
-    });
-    wrap.appendChild(fieldRow("高 Height（格）", hI));
+      const dhI = input(String(scene.designH ?? UI_DESIGN_H), {
+        numeric: true,
+        hint: "设计稿高（像素）。常见值：720（16:9 横屏）/ 1334（竖屏手机）",
+        onChange: (v) => {
+          const n = Math.max(160, Math.min(4096, Number(v) || (scene.designH ?? UI_DESIGN_H)));
+          scene.designH = n;
+          scene.heightTiles = Math.max(1, Math.round(n / (store.project!.tileSize || 32)));
+          store.markDirty();
+          window.dispatchEvent(new CustomEvent("bwe:repaint"));
+          window.dispatchEvent(new CustomEvent("bwe:refresh"));
+        }
+      });
+      wrap.appendChild(fieldRow("设计高 Design H（px）", dhI));
 
-    wrap.appendChild(
-      el(
-        "div",
-        { class: "hint" },
-        `实际尺寸 ${scene.widthTiles * (store.project.tileSize || 32)} × ${scene.heightTiles * (store.project.tileSize || 32)} px，格子 ${store.project.tileSize}px`
-      )
-    );
+      // 常用预设：手输两个数字很容易写错比例，点一下最省事
+      const presetRow = el("div", { class: "row tight" });
+      const preset = (label: string, w: number, h: number) =>
+        button(label, () => {
+          scene.designW = w;
+          scene.designH = h;
+          const ts = store.project?.tileSize || 32;
+          scene.widthTiles = Math.max(1, Math.round(w / ts));
+          scene.heightTiles = Math.max(1, Math.round(h / ts));
+          store.markDirty();
+          ok(`设计分辨率改为 ${w} × ${h}`);
+          window.dispatchEvent(new CustomEvent("bwe:repaint"));
+          window.dispatchEvent(new CustomEvent("bwe:refresh"));
+        }, { size: "sm" });
+      presetRow.appendChild(preset("1280×720", 1280, 720));
+      presetRow.appendChild(preset("1920×1080", 1920, 1080));
+      presetRow.appendChild(preset("750×1334", 750, 1334));
+      presetRow.appendChild(preset("1080×1920", 1080, 1920));
+      wrap.appendChild(presetRow);
+
+      wrap.appendChild(
+        el(
+          "div",
+          { class: "hint" },
+          `当前设计稿 ${scene.designW ?? UI_DESIGN_W} × ${scene.designH ?? UI_DESIGN_H} px，` +
+            "超出这个框的对象运行时会被画到画面外。"
+        )
+      );
+    } else {
+      const wI = input(String(scene.widthTiles), {
+        numeric: true,
+        onChange: (v) => {
+          const n = Math.max(4, Math.min(500, Number(v) || scene.widthTiles));
+          scene.widthTiles = n;
+          store.markDirty();
+          window.dispatchEvent(new CustomEvent("bwe:repaint"));
+        }
+      });
+      wrap.appendChild(fieldRow("宽 Width（格）", wI));
+
+      const hI = input(String(scene.heightTiles), {
+        numeric: true,
+        onChange: (v) => {
+          const n = Math.max(4, Math.min(500, Number(v) || scene.heightTiles));
+          scene.heightTiles = n;
+          store.markDirty();
+          window.dispatchEvent(new CustomEvent("bwe:repaint"));
+        }
+      });
+      wrap.appendChild(fieldRow("高 Height（格）", hI));
+
+      wrap.appendChild(
+        el(
+          "div",
+          { class: "hint" },
+          `实际尺寸 ${scene.widthTiles * (store.project.tileSize || 32)} × ${scene.heightTiles * (store.project.tileSize || 32)} px，格子 ${store.project.tileSize}px`
+        )
+      );
+    }
 
     // ---- 图层 ----
     const layerHead = el("div", { class: "group-label" }, "图层 Layers");
@@ -196,11 +301,28 @@ export function renderScenePanel(host: HTMLElement): void {
 
 function newScene(): void {
   if (!store.project) return;
-  const s = createScene(`场景 ${store.project.scenes.length + 1}`, store.project.gridW, store.project.gridH);
+  const worldCount = store.project.scenes.filter((s) => !isUiScene(s)).length;
+  const s = createScene(`场景 ${worldCount + 1}`, store.project.gridW, store.project.gridH);
   store.project.scenes.push(s);
   store.setScene(s);
   store.markDirty();
   ok(`已新建「${s.name}」`);
+  window.dispatchEvent(new CustomEvent("bwe:refresh"));
+}
+
+function newUiScene(): void {
+  if (!store.project) return;
+  const uiCount = store.project.scenes.filter((s) => isUiScene(s)).length;
+  const s = createUiScene(
+    uiCount === 0 ? "界面 1" : `界面 ${uiCount + 1}`,
+    UI_DESIGN_W,
+    UI_DESIGN_H,
+    store.project.tileSize || 32
+  );
+  store.project.scenes.push(s);
+  store.setScene(s);
+  store.markDirty();
+  ok(`已新建 UI 场景「${s.name}」：右键画布可以放文字 / 图片 / 面板`);
   window.dispatchEvent(new CustomEvent("bwe:refresh"));
 }
 
@@ -210,23 +332,37 @@ function sceneItem(s: SceneModel): HTMLElement {
   dot.style.background = store.scene === s ? "var(--accent)" : "var(--line)";
   item.appendChild(dot);
   const grow = el("div", { class: "grow" });
-  grow.appendChild(el("div", { class: "name" }, s.name));
+  const title = el("div", { class: "name" }, s.name);
+  if (isUiScene(s)) {
+    // UI 场景给一个显眼的小标记，免得在一列地图里认错
+    const badge = el("span", { class: "hint" }, "UI");
+    badge.style.cssText = "margin-left:6px;padding:0 5px;border-radius:3px;background:rgba(162,116,255,.22);color:#b79bff";
+    title.appendChild(badge);
+  }
+  grow.appendChild(title);
+  const size = scenePixelSize(s, store.project?.tileSize ?? 32);
   grow.appendChild(
-    el("div", { class: "sub" }, `${s.objects.length} 个对象 · ${s.widthTiles}×${s.heightTiles} 格`)
+    el(
+      "div",
+      { class: "sub" },
+      isUiScene(s)
+        ? `${s.objects.length} 个界面元素 · ${size.w}×${size.h} 设计分辨率`
+        : `${s.objects.length} 个对象 · ${s.widthTiles}×${s.heightTiles} 格`
+    )
   );
   item.appendChild(grow);
   item.addEventListener("click", () => {
     if (store.scene === s) return;
     store.setScene(s);
-    info(`已切换到「${s.name}」`);
+    info(isUiScene(s) ? `已切换到 UI 场景「${s.name}」` : `已切换到「${s.name}」`);
     window.dispatchEvent(new CustomEvent("bwe:repaint"));
   });
   item.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     contextMenu(e.clientX, e.clientY, [
-      { label: "复制这张地图", onClick: () => duplicateScene(s) },
+      { label: isUiScene(s) ? "复制这张设计稿" : "复制这张地图", onClick: () => duplicateScene(s) },
       {
-        label: "删除这张地图",
+        label: isUiScene(s) ? "删除这张设计稿" : "删除这张地图",
         disabled: (store.project?.scenes.length ?? 0) <= 1,
         onClick: () => void deleteScene(s)
       }

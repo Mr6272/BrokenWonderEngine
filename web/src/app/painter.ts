@@ -9,7 +9,7 @@
  */
 
 import type { AssetEntry, Project, SceneObject, SceneModel } from "../core/model.ts";
-import { totalFrames, visibleFrames } from "../core/model.ts";
+import { scenePixelSize, totalFrames, uiSafeArea, visibleFrames } from "../core/model.ts";
 import { loadFrame } from "../data/assets.ts";
 
 export interface PaintCtx {
@@ -23,6 +23,56 @@ export interface PaintCtx {
   time: number;
   selectedIds: Set<string>;
   overrides: Map<string, { x: number; y: number }>;
+  /**
+   * true = 当前场景是 UI 场景。
+   *
+   * 差别只有一处：UI 对象里的「文字（label）」要按字号/对齐真正渲染成文字，
+   * 而不是画成灰块占位 —— 否则用户在 UI 场景里摆文字等于盲摆。
+   */
+  ui?: boolean;
+}
+
+/** 文字对象的判定：tags 含 `label`（与运行时 TopDownRuntime.drawActor 同一判据）。 */
+export function isLabelObject(o: { tags: string[] }): boolean {
+  return Array.isArray(o.tags) && o.tags.indexOf("label") >= 0;
+}
+
+function propOf(o: SceneObject, key: string): string {
+  const v = o.props?.[key];
+  return v == null ? "" : String(v).trim();
+}
+
+function numPropOf(o: SceneObject, key: string, def: number): number {
+  const v = Number(propOf(o, key));
+  return Number.isFinite(v) && v > 0 ? v : def;
+}
+
+/**
+ * 文字对象在**设计分辨率**里的近似绘制尺寸。
+ *
+ * 用一块离屏 canvas 实测（委托给浏览器自己的字体度量），而不是按字符数估算 ——
+ * 中英文混排、字重都会让估算偏得很远，选择框和行内对齐就会跟着错。
+ * 编辑器与运行时各自的度量略有差异是可以接受的：运行时按真实字体渲染，
+ * 这里只用于**选中框 / 命中测试 / 框选**，不参与导出数据。
+ */
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+function labelSize(o: SceneObject): { w: number; h: number } {
+  const text = propOf(o, "text") || "文字";
+  const size = numPropOf(o, "textSize", 24);
+  if (!measureCtx) {
+    const c = document.createElement("canvas");
+    measureCtx = c.getContext("2d");
+  }
+  let w = text.length * size * 0.62;
+  let h = size * 1.35;
+  if (measureCtx) {
+    measureCtx.font = `${size}px "Microsoft YaHei UI", "Microsoft YaHei", sans-serif`;
+    const m = measureCtx.measureText(text);
+    w = Math.max(4, m.width);
+    h = Math.max(4, size * 1.35);
+  }
+  return { w, h };
 }
 
 export type ToScreen = (x: number, y: number) => { x: number; y: number };
@@ -54,6 +104,7 @@ function pictureOf(asset: AssetEntry, frame: number): Picture | null {
       pending.delete(key);
       if (img) {
         pictures.set(key, { image: img.bitmap, w: img.width, h: img.height });
+        trimPictures();
         onPictureReady?.();
       }
     });
@@ -61,8 +112,27 @@ function pictureOf(asset: AssetEntry, frame: number): Picture | null {
   return null;
 }
 
+/**
+ * 绘制用的位图引用表。
+ *
+ * 这里**只持引用、不持所有权**：真正的 ImageBitmap 由 data/assets.ts 的 loadFrame 缓存负责，
+ * 也由它负责 close。所以这里淘汰时只能删键，绝不能 close —— 关掉别人还在用的位图，
+ * 画布就会在 drawImage 上抛 InvalidStateError。
+ * 加容量上限只是防止「滑过很多素材的很多帧」时这张表无限涨（每个键很小，但条目多了也占内存）。
+ */
+const MAX_PICTURES = 600;
+
 export function forgetPicture(assetId: string): void {
   for (const k of Array.from(pictures.keys())) if (k.startsWith(assetId + "#")) pictures.delete(k);
+}
+
+/** 超上限按最久未用淘汰（Map 插入顺序即访问顺序）。 */
+function trimPictures(): void {
+  while (pictures.size > MAX_PICTURES) {
+    const oldest = pictures.keys().next();
+    if (oldest.done) break;
+    pictures.delete(oldest.value);
+  }
 }
 
 /** 素材的像素尺寸；没有图片信息时返回 null，由调用方决定兜底值。 */
@@ -81,6 +151,12 @@ export function assetPixelSize(asset: AssetEntry | undefined): { w: number; h: n
 
 /** 对象在世界坐标中的绘制尺寸。 */
 export function sizeOf(o: SceneObject, project: Project): { w: number; h: number } {
+  // ★ 文字对象优先按真实字形度量：它没有素材、通常也不设 halfW，
+  //   落到兜底分支会变成「一格大小」的方块，用户摆好的文字一选中框就对不上。
+  if (isLabelObject(o)) {
+    const s = labelSize(o);
+    return { w: s.w * o.scaleX, h: s.h * o.scaleY };
+  }
   if (o.halfW > 0 || o.halfH > 0) {
     const w = o.halfW > 0 ? o.halfW * 2 : 16;
     const h = o.halfH > 0 ? o.halfH * 2 : 16;
@@ -104,6 +180,75 @@ export function boundsOf(o: SceneObject, project: Project): { x: number; y: numb
 }
 
 // ---------------- 网格 ----------------
+
+/**
+ * UI 场景底板：设备画框 + 安全区 + 可选 8px 参考网格。
+ *
+ * 为什么不复用 paintGrid：UI 的坐标系不是「格 × tileSize」，
+ * 它的「地图」就是设计分辨率本身（1280×720 这种）。用瓦片网格画 UI
+ * 会让用户以为「一格 32 像素」仍然生效，摆位时按格吸附就会和运行时的
+ * 等比 contain 变换对不上。这里改成：外框 = 设计分辨率的 100%，
+ * 内框 = 5% 安全区，网格线斜率不变但间距按 8 像素（对齐常用倍数）。
+ */
+export function paintUiFrame(
+  g: CanvasRenderingContext2D,
+  scene: SceneModel,
+  pctx: PaintCtx,
+  toScreen: ToScreen
+): void {
+  const size = scenePixelSize(scene, pctx.tileSize);
+  const a = toScreen(0, 0);
+  const b = toScreen(size.w, size.h);
+  const zoom = pctx.zoom;
+
+  g.save();
+  // 设计分辨率底板：比编辑器背景亮一点，明确「这是画面区域」
+  g.fillStyle = "#11131a";
+  g.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
+
+  if (pctx.showGrid && zoom > 0.15) {
+    // 8px 参考网格：UI 里 8 的倍数是通用节奏（间距 8/16/24），比 32 更有用。
+    const step = 8;
+    g.lineWidth = 1;
+    g.strokeStyle = "rgba(255,255,255,0.05)";
+    g.beginPath();
+    for (let x = 0; x <= size.w; x += step * (zoom < 0.5 ? 8 : 2)) {
+      const p0 = toScreen(x, 0);
+      const p1 = toScreen(x, size.h);
+      g.moveTo(Math.round(p0.x) + 0.5, p0.y);
+      g.lineTo(Math.round(p1.x) + 0.5, p1.y);
+    }
+    for (let y = 0; y <= size.h; y += step * (zoom < 0.5 ? 8 : 2)) {
+      const p0 = toScreen(0, y);
+      const p1 = toScreen(size.w, y);
+      g.moveTo(p0.x, Math.round(p0.y) + 0.5);
+      g.lineTo(p1.x, Math.round(p1.y) + 0.5);
+    }
+    g.stroke();
+  }
+
+  // 安全区（四周 5%）：手机刘海 / 圆角 / 系统手势区常在这里，摆关键 UI 别越线
+  const safe = uiSafeArea(scene);
+  const sa = toScreen(safe.x, safe.y);
+  const sb = toScreen(safe.x + safe.w, safe.y + safe.h);
+  g.strokeStyle = "rgba(46,204,143,0.55)";
+  g.lineWidth = 1.2;
+  g.setLineDash([5, 4]);
+  g.strokeRect(sa.x, sa.y, sb.x - sa.x, sb.y - sa.y);
+  g.setLineDash([]);
+  g.fillStyle = "rgba(46,204,143,0.85)";
+  g.font = '11px "Microsoft YaHei UI", sans-serif';
+  g.fillText("安全区 Safe Area", sa.x + 4, sa.y + 13);
+
+  // 设计分辨率外框：这是运行时等比 contain 的真实边界，越界的内容会被裁掉
+  g.strokeStyle = "rgba(76,141,255,0.8)";
+  g.lineWidth = 1.5;
+  g.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+  g.fillStyle = "rgba(76,141,255,0.9)";
+  g.font = '11px "Microsoft YaHei UI", sans-serif';
+  g.fillText(`${size.w} × ${size.h}（设计分辨率）`, a.x + 4, a.y - 5);
+  g.restore();
+}
 
 export function paintGrid(
   g: CanvasRenderingContext2D,
@@ -196,6 +341,43 @@ export function paintObject(
   const asset = pctx.project.assets.find((a) => a.id === o.assetId);
 
   g.save();
+
+  // ★ 文字对象（tags 含 label）：按 props 真正渲染成文字。
+  //
+  // 与运行时 TopDownRuntime.drawLabel 保持同一套字段与对齐语义：
+  //   props.text / textSize / textColor / textAlign（left | center | right）
+  // 位置 (x, y) 是**文字块的垂直中心**，这样在编辑器里拖起来最直观。
+  // 唯一的差异：这里按屏幕缩放（zoom）换算字号，运行时按设计分辨率换算。
+  if (isLabelObject(o)) {
+    const text = propOf(o, "text") || "（空文字）";
+    const sizePx = numPropOf(o, "textSize", 24);
+    const color = propOf(o, "textColor") || "#e6edf7";
+    const align = (propOf(o, "textAlign") || "left").toLowerCase();
+    const fontPx = Math.max(4, sizePx * zoom * o.scaleX);
+    g.font = `${fontPx}px "Microsoft YaHei UI", "Microsoft YaHei", sans-serif`;
+    g.textBaseline = "middle";
+    g.textAlign = align === "center" || align === "middle" ? "center" : align === "right" || align === "end" ? "right" : "left";
+    const anchorX = align === "center" || align === "middle"
+      ? centered.x
+      : align === "right" || align === "end"
+        ? centered.x + w / 2
+        : centered.x - w / 2;
+    g.fillStyle = color;
+    g.fillText(text, Math.round(anchorX), Math.round(centered.y));
+    g.textAlign = "left";
+    g.textBaseline = "alphabetic";
+
+    // 选中：只在四角画 6px 的小标记，不画整框 —— 文字框会遮住字，反而看不清
+    if (selected) {
+      g.strokeStyle = "#4c8dff";
+      g.lineWidth = 1.5;
+      g.strokeRect(Math.round(left) + 0.5, Math.round(top) + 0.5, Math.round(w), Math.round(h));
+      g.fillStyle = "rgba(76,141,255,0.10)";
+      g.fillRect(left, top, w, h);
+    }
+    g.restore();
+    return;
+  }
 
   // 触发区 / 碰撞体：半透明底 + 虚线框
   if (isZone || (o.halfW > 0 && o.halfH > 0 && pctx.showZones)) {
@@ -297,7 +479,10 @@ function paintPlaceholder(
   h: number,
   zoom: number
 ): void {
-  const color = kindColor(o.kind);
+  // props.color 优先：UI 面板 / 色块对象靠它表达视觉语义（与运行时 drawFallback 同一条规则）。
+  // 没有这个键时仍按 kind 取色，世界场景的表现完全不变。
+  const custom = propOf(o, "color");
+  const color = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(custom) ? custom.slice(0, 7) : kindColor(o.kind);
   g.fillStyle = hexA(color, 0.88);
   roundRect(g, left, top, w, h, Math.min(8, Math.min(w, h) * 0.22));
   g.fill();

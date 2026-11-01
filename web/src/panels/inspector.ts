@@ -10,10 +10,10 @@
  */
 
 import type { SceneObject } from "../core/model.ts";
-import { scriptLang, scriptNamesOfLang, findPrefabOf, resetObjectToPrefab } from "../core/model.ts";
+import { isUiScene, scriptLang, scriptNamesOfLang, findPrefabOf, resetObjectToPrefab, scenePixelSize } from "../core/model.ts";
 import { moduleDef, categoryOf, moduleSummary, makeInstance } from "../data/modules.ts";
 import { store } from "../core/store.ts";
-import { el, input, button, select, switchToggle, fieldRow, numText } from "../core/dom.ts";
+import { el, input, button, select, switchToggle, fieldRow, numText, textarea } from "../core/dom.ts";
 import { I, iconForKind } from "../ui/icons.ts";
 import { KINDS } from "../ui/terms.ts";
 import { ok, info, warn, confirmDialog, contextMenu } from "../ui/toast.ts";
@@ -48,8 +48,19 @@ export function renderInspector(host: HTMLElement): void {
   const linkCard = prefabLinkCard(obj);
   if (linkCard) wrap.appendChild(linkCard);
   wrap.appendChild(placeCard(obj));
+  // ★ UI 场景：先给「文字 / 底色」这类界面专用控件，再给 Props 表。
+  //   顺序有意义 —— 用户摆一个文字，第一件想改的就是字与颜色，
+  //   把它压在 Props 表下面等于让人先滚一屏才看到。
+  if (isUiScene(store.scene)) {
+    wrap.appendChild(uiElementCard(obj));
+  }
   wrap.appendChild(customPropsCard(obj));
-  wrap.appendChild(modulesCard(obj));
+  // UI 元素不该挂世界行为模块（走路 / 巡逻 / 碰撞 / 相机跟随），
+  // 这些模块挂在界面元素上要么无效、要么把界面当成角色推着跑。
+  // UI 场景里干脆不显示模块卡片，只保留脚本卡片（脚本可以操作界面）。
+  if (!isUiScene(store.scene)) {
+    wrap.appendChild(modulesCard(obj));
+  }
   wrap.appendChild(scriptCard(obj));
   host.appendChild(wrap);
 }
@@ -309,6 +320,139 @@ function identityCard(obj: SceneObject): HTMLElement {
  * 行/列/雷数、出生点参数），而这些在编辑器里原本完全不可见 —— 只能改脚本。
  * 有了这张卡，美术/策划能直接改文案与数值。
  */
+/**
+ * UI 元素专用卡片（只在 UI 场景里出现）。
+ *
+ * 为什么不复用「自定义属性 Props」那张表：Props 是「脚本读取的键值」，
+ * 用户在那里手打 `textColor` 时既没有颜色选择器、也不知道有哪些合法键。
+ * 但文字 / 面板的这些键是**运行时硬契约**（TopDownRuntime.drawLabel 直接读
+ * props.text / textSize / textColor / textAlign），所以必须给出有约束的控件：
+ * 键名固定（错不了），值域受限（颜色是色板、对齐是下拉、字号是数字）。
+ *
+ * 仍然写回 obj.props —— 单一份数据源，导出链路一行都不用改。
+ */
+function uiElementCard(obj: SceneObject): HTMLElement {
+  const box = el("div", { class: "col" });
+  box.style.marginTop = "10px";
+  const scene = store.scene;
+  const label = Array.isArray(obj.tags) && obj.tags.indexOf("label") >= 0;
+  box.appendChild(
+    el("div", { class: "hint" }, label ? "文字 Text（运行时按 props 渲染）" : "UI 元素 Element")
+  );
+
+  const setProp = (key: string, value: string) => {
+    obj.props = obj.props ?? {};
+    obj.props[key] = value;
+    store.markDirty();
+    window.dispatchEvent(new CustomEvent("bwe:repaint"));
+  };
+  const getProp = (key: string, def: string) => {
+    const v = obj.props?.[key];
+    return v == null || String(v).trim() === "" ? def : String(v);
+  };
+
+  if (label) {
+    // 文字内容：多行框，因为 HUD 文案经常换行
+    const ta = textarea(getProp("text", ""), {
+      hint: "显示的文字。支持换行；运行时按这个内容生成字形纹理",
+      rows: 3,
+      onChange: (v) => setProp("text", v)
+    });
+    box.appendChild(fieldRow("文字 Text", ta));
+
+    box.appendChild(
+      fieldRow(
+        "字号 Size",
+        input(getProp("textSize", "24"), {
+          numeric: true,
+          hint: "像素字号（按设计分辨率计算，1280×720 下 24 是可读的正文大小）",
+          onChange: (v) => setProp("textSize", String(Math.max(6, Math.min(200, Number(v) || 24))))
+        })
+      )
+    );
+
+    box.appendChild(
+      fieldRow(
+        "颜色 Color",
+        input(getProp("textColor", "#e6edf7"), {
+          hint: "十六进制颜色，例如 #e6edf7 / #ffd166",
+          onChange: (v) => setProp("textColor", v.trim() || "#e6edf7")
+        })
+      )
+    );
+
+    // 一排常用色，省得手打色值
+    const swatchRow = el("div", { class: "row tight" });
+    for (const c of ["#ffffff", "#e6edf7", "#ffd166", "#ff6b6b", "#4cd4a0", "#7aa2ff", "#b79bff", "#101010"]) {
+      const sw = el("span");
+      sw.style.cssText = `width:18px;height:18px;border-radius:4px;border:1px solid rgba(255,255,255,.2);cursor:pointer;background:${c}`;
+      sw.title = c;
+      sw.addEventListener("click", () => {
+        setProp("textColor", c);
+        window.dispatchEvent(new CustomEvent("bwe:refresh"));
+      });
+      swatchRow.appendChild(sw);
+    }
+    box.appendChild(swatchRow);
+
+    box.appendChild(
+      fieldRow(
+        "对齐 Align",
+        select(
+          [
+            { value: "left", label: "左对齐 left" },
+            { value: "center", label: "居中 center" },
+            { value: "right", label: "右对齐 right" }
+          ],
+          getProp("textAlign", "left"),
+          {
+            hint: "文字块以对象位置为锚点：left = 左边贴住，center = 居中，right = 右边贴住",
+            onChange: (v) => setProp("textAlign", v)
+          }
+        )
+      )
+    );
+  } else {
+    // 面板 / 图片：给一个底色（props.color），运行时无贴图对象走 drawFallback 读它
+    box.appendChild(
+      fieldRow(
+        "底色 Color",
+        input(getProp("color", "#1b2030"), {
+          hint: "无贴图时的填充色（#rrggbb）。有素材时以素材为准",
+          onChange: (v) => setProp("color", v.trim() || "#1b2030")
+        })
+      )
+    );
+    const swatchRow = el("div", { class: "row tight" });
+    for (const c of ["#1b2030", "#2f6dd6", "#ffffff", "#101010", "#ff6b6b", "#4cd4a0"]) {
+      const sw = el("span");
+      sw.style.cssText = `width:18px;height:18px;border-radius:4px;border:1px solid rgba(255,255,255,.2);cursor:pointer;background:${c}`;
+      sw.title = c;
+      sw.addEventListener("click", () => {
+        setProp("color", c);
+        window.dispatchEvent(new CustomEvent("bwe:refresh"));
+      });
+      swatchRow.appendChild(sw);
+    }
+    box.appendChild(swatchRow);
+  }
+
+  // 位置提示：UI 场景里「在设计稿中的相对位置」比「第几格」有用得多
+  if (scene) {
+    const size = scenePixelSize(scene, store.project?.tileSize ?? 32);
+    const pct = (v: number, total: number) => ((v / Math.max(1, total)) * 100).toFixed(0);
+    box.appendChild(
+      el(
+        "div",
+        { class: "hint" },
+        `设计稿位置：左 ${pct(obj.x, size.w)}% · 上 ${pct(obj.y, size.h)}%（${Math.round(obj.x)}, ${Math.round(obj.y)}）`
+      )
+    );
+  }
+
+  return cardBox(label ? "文字 Text" : "UI 元素 Element", box, I.module);
+}
+
 function customPropsCard(obj: SceneObject): HTMLElement {
   const box = el("div", { class: "col" });
   box.style.marginTop = "10px";

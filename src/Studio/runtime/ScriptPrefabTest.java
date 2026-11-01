@@ -230,7 +230,7 @@ public final class ScriptPrefabTest {
         // ===================== 宿主侧直接断言（此时还没 clear） =====================
         check("pool 归还的实例 visible=false", poolReleasedHidden(rt), "visible 仍为 true");
         check("pool.acquire 取回的实例 visible=true", poolAcquiredVisible(rt), "visible 仍为 false");
-        TopDownRuntime.Actor boss = actorNamed(rt, "boss");
+        Actor boss = actorNamed(rt, "boss");
         check("宿主里 boss 存在（来自 boot prefabs 的 spawn）", boss != null, "");
         if (boss != null) {
             check("boss rotation 覆盖写回宿主", Math.abs(boss.o.rotation - 45f) < 0.01f,
@@ -616,7 +616,7 @@ public final class ScriptPrefabTest {
     private static boolean poolReleasedHidden(TopDownRuntime rt) {
         // 脚本最后把 a2 归还了；按名字找不到（池实例没名字），所以扫所有 drone 类实例。
         // 判据：存在至少一个 visible=false 的 PROP（就是池里那个）。
-        for (TopDownRuntime.Actor a : rt.actors) {
+        for (Actor a : rt.actors) {
             if (a.dead || a.o == null) {
                 continue;
             }
@@ -630,7 +630,7 @@ public final class ScriptPrefabTest {
     private static boolean poolAcquiredVisible(TopDownRuntime rt) {
         // acquire 之后是 true（同一实例），这里验证「没有把所有 drone 都关了」。
         int hidden = 0;
-        for (TopDownRuntime.Actor a : rt.actors) {
+        for (Actor a : rt.actors) {
             if (!a.dead && a.o != null && "spark.png".equals(a.o.assetName) && !a.o.visible) {
                 hidden++;
             }
@@ -703,8 +703,8 @@ public final class ScriptPrefabTest {
         return out;
     }
 
-    private static TopDownRuntime.Actor actorNamed(TopDownRuntime rt, String name) {
-        for (TopDownRuntime.Actor a : rt.actors) {
+    private static Actor actorNamed(TopDownRuntime rt, String name) {
+        for (Actor a : rt.actors) {
             if (a.o != null && name.equals(a.o.name)) {
                 return a;
             }

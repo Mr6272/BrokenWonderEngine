@@ -735,8 +735,8 @@ public final class ScriptFieldsTest {
         return String.format(java.util.Locale.ROOT, "%.3f", v);
     }
 
-    private static TopDownRuntime.Actor actorNamed(TopDownRuntime rt, String name) {
-        for (TopDownRuntime.Actor a : rt.actors) {
+    private static Actor actorNamed(TopDownRuntime rt, String name) {
+        for (Actor a : rt.actors) {
             if (a.o != null && name.equals(a.o.name)) {
                 return a;
             }

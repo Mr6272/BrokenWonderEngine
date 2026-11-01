@@ -7,7 +7,8 @@
 
 import { store, TOOLS, type Tool } from "../core/store.ts";
 import type { Project } from "../core/model.ts";
-import { createProject, normalizeProject } from "../core/model.ts";
+import { createProject, normalizeProject, isUiScene, scenePixelSize, uiSafeArea } from "../core/model.ts";
+import { SnapshotPool } from "../core/snapshot.ts";
 import { CanvasView } from "./canvas.ts";
 import { setPictureReadyHandler, paintObject, sizeOf } from "./painter.ts";
 import { orderObjects } from "./canvas.ts";
@@ -54,7 +55,14 @@ export class Editor {
     store.onSelection(() => this.refreshToolbarState());
     // 选择变化 → 右栏 Inspector 立即重建（按帧合并，连点/框选不会重复建树）
     store.onSelection(() => this.scheduleRightPanel());
-    window.addEventListener("bwe:refresh", () => this.refreshPanels());
+    // 工程被整体换掉（打开文件 / 载入示例 / 新建）时，撤销历史必须一起作废：
+    // 旧快照里的占位对应的是旧工程的素材内容，留着既还原不出正确数据，还白占内存。
+    // 挂在 store 上而不是散落在每个入口，是因为有几个入口（project.ts 打开文件）
+    // 直接调 store.setProject，绕过编辑器自己的 setProject。
+    store.onProject(() => this.resetHistoryIfProjectReplaced());
+    // 面板重建请求按帧合并：一次数据变化可能同时触发多个 bwe:refresh，
+    // 合并后同一帧只重建一次（见 schedulePanels 的注释）。
+    window.addEventListener("bwe:refresh", () => this.schedulePanels());
     window.addEventListener("bwe:hint", (e) => this.hint(String((e as CustomEvent).detail ?? "")));
     // 其它面板（Inspector 的「脚本」卡片、帮助菜单）请求跳到「剧本」页
     window.addEventListener("bwe:open-scripts", () => this.leftTab.focus("scripts"));
@@ -288,7 +296,13 @@ export class Editor {
     const centerPane = el("div", { class: "pane center" });
     this.canvas = new CanvasView({
       onHover: (x, y, hit) => {
-        this.setCell("pos", `格 ${Math.round(x / (store.project?.tileSize ?? 32))}, ${Math.round(y / (store.project?.tileSize ?? 32))}`);
+        // UI 场景没有「格」，状态栏只报设计像素（报格数会让人误以为还有瓦片对齐）
+        this.setCell(
+          "pos",
+          isUiScene(store.scene)
+            ? `px ${Math.round(x)}, ${Math.round(y)}`
+            : `格 ${Math.round(x / (store.project?.tileSize ?? 32))}, ${Math.round(y / (store.project?.tileSize ?? 32))}`
+        );
         this.setCell("hit", hit ? hit.name : "—");
       },
       onCommit: (label) => this.scheduleSnapshot(label),
@@ -410,6 +424,25 @@ export class Editor {
     this.rightTab.refresh();
     this.refreshChrome();
     this.canvas.requestPaint();
+  }
+
+  /**
+   * 按帧合并的面板重建。
+   *
+   * 为什么需要：`bwe:refresh` 有 20 多处派发点，属性面板每改一个字段就发一次，
+   * 而每次刷新要重建左右两棵 DOM 树。连续输入（比如拖数值框、连点按钮）时
+   * 一帧里可能触发好几次，每次都同步重建 = 用户能感觉到的卡顿。
+   * 合并到下一帧后，同一帧内的多次请求只重建一次，肉眼无差别、开销降一个量级。
+   */
+  private panelsDirty = false;
+
+  schedulePanels(): void {
+    if (this.panelsDirty) return;
+    this.panelsDirty = true;
+    requestAnimationFrame(() => {
+      this.panelsDirty = false;
+      this.refreshPanels();
+    });
   }
 
   /** 只重渲染右栏（对象 Inspector / 图层 / 大纲）。 */
@@ -626,15 +659,26 @@ export class Editor {
 
     const ordered = orderObjects(scene);
     const tile = project.tileSize;
-    const mapW = scene.widthTiles * tile;
-    const mapH = scene.heightTiles * tile;
+    // UI 场景的「地图」是设计分辨率，不是「格 × tileSize」。
+    // 预览窗口里也必须用同一套尺寸，否则预览里的界面对不上编辑器里摆的位置。
+    const sceneSize = scenePixelSize(scene, tile);
+    const mapW = sceneSize.w;
+    const mapH = sceneSize.h;
+    const uiScene = isUiScene(scene);
 
     const game = detectMinigame(scene);
     let miniDispose: (() => void) | null = null;
 
     let camX = mapW / 2;
     let camY = mapH / 2;
+    // 初始缩放：UI 场景按设计稿整张铺进来（否则 1280×720 的稿子在 700px 宽的
+    // 预览窗口里只能看到左上角，用户会以为「界面没画出来」）；世界场景保持 1:1。
     let zoom = 1;
+    if (uiScene) {
+      const cw0 = 700;
+      const ch0 = 520;
+      zoom = Math.max(0.15, Math.min((cw0 - 24) / mapW, (ch0 - 24) / mapH));
+    }
 
     // 交互状态（在 onClose 作用域中可见）
     let isPanning = false;
@@ -705,14 +749,29 @@ export class Editor {
         ctrl.style.marginTop = "6px";
         ctrl.appendChild(button("缩小 −", () => { zoom = Math.max(0.25, zoom - 0.25); paintPreview?.(); }, { size: "sm" }));
         ctrl.appendChild(button("放大 ＋", () => { zoom = Math.min(3, zoom + 0.25); paintPreview?.(); }, { size: "sm" }));
-        ctrl.appendChild(button("整张地图", () => {
+        ctrl.appendChild(button(uiScene ? "整张设计稿" : "整张地图", () => {
           zoom = Math.min((wrap.clientWidth - 24) / mapW, (wrap.clientHeight - 24) / mapH, 2);
+          // UI 场景整稿缩放可能小于 0.25（1280 宽塞进 700 窗口 = 0.53，但 1920 会是 0.35），
+          // 所以下限也要跟着放宽，否则「点了没反应」。
+          zoom = Math.max(uiScene ? 0.1 : 0.25, zoom);
           camX = mapW / 2;
           camY = mapH / 2;
+          zoomLabel.textContent = `缩放 ${Math.round(zoom * 100)}%`;
           paintPreview?.();
         }, { size: "sm" }));
         ctrl.appendChild(el("div", { class: "spacer" }));
-        ctrl.appendChild(el("span", { class: "muted tabular" }, `缩放 ${Math.round(zoom * 100)}%`));
+        const zoomLabel = el("span", { class: "muted tabular" }, `缩放 ${Math.round(zoom * 100)}%`);
+        ctrl.appendChild(zoomLabel);
+        // 「放大/缩小」按钮也要同步更新百分比，否则用户点了看到的数字永远不变
+        const bumpZoom = (next: number) => {
+          zoom = Math.min(3, Math.max(uiScene ? 0.1 : 0.25, next));
+          zoomLabel.textContent = `缩放 ${Math.round(zoom * 100)}%`;
+          paintPreview?.();
+        };
+        // 把上面两个按钮重绑到 bumpZoom（它们原先直接改 zoom 且不更新标签）
+        const [minusBtn, plusBtn] = Array.from(ctrl.querySelectorAll("button")) as HTMLButtonElement[];
+        minusBtn?.replaceWith(button("缩小 −", () => bumpZoom(zoom - 0.25), { size: "sm" }));
+        plusBtn?.replaceWith(button("放大 ＋", () => bumpZoom(zoom + 0.25), { size: "sm" }));
         box.appendChild(ctrl);
 
         const dpr = window.devicePixelRatio || 1;
@@ -732,24 +791,41 @@ export class Editor {
           g.fillStyle = "#15171d";
           g.fillRect(0, 0, cw, ch);
 
-          // 画网格
+          // 画网格：UI 场景按 8px 参考线，世界场景按瓦片
           g.strokeStyle = "#22252f";
           g.lineWidth = 1;
-          const startX = Math.floor(camX / tile) * tile;
-          const startY = Math.floor(camY / tile) * tile;
-          for (let x = startX; x < camX + cw / zoom; x += tile) {
+          const gridStep = uiScene ? 8 * (zoom < 0.5 ? 8 : 2) : tile;
+          const startX = Math.floor(camX / gridStep) * gridStep;
+          const startY = Math.floor(camY / gridStep) * gridStep;
+          for (let x = startX; x < camX + cw / zoom; x += gridStep) {
             const sx = worldToScreen(x, 0).x;
             g.beginPath();
             g.moveTo(sx, 0);
             g.lineTo(sx, ch);
             g.stroke();
           }
-          for (let y = startY; y < camY + ch / zoom; y += tile) {
+          for (let y = startY; y < camY + ch / zoom; y += gridStep) {
             const sy = worldToScreen(0, y).y;
             g.beginPath();
             g.moveTo(0, sy);
             g.lineTo(cw, sy);
             g.stroke();
+          }
+
+          // UI 场景：画设计分辨率外框 + 安全区，让预览能看出「窗口裁切边界」
+          if (uiScene) {
+            const o0 = worldToScreen(0, 0);
+            const o1 = worldToScreen(mapW, mapH);
+            g.strokeStyle = "rgba(76,141,255,0.85)";
+            g.lineWidth = 1.5;
+            g.strokeRect(o0.x, o0.y, o1.x - o0.x, o1.y - o0.y);
+            const sv = uiSafeArea(scene);
+            const sa = worldToScreen(sv.x, sv.y);
+            const sb = worldToScreen(sv.x + sv.w, sv.y + sv.h);
+            g.strokeStyle = "rgba(46,204,143,0.6)";
+            g.setLineDash([5, 4]);
+            g.strokeRect(sa.x, sa.y, sb.x - sa.x, sb.y - sa.y);
+            g.setLineDash([]);
           }
 
           // 画对象
@@ -767,7 +843,8 @@ export class Editor {
               time: performance.now(),
               selectedIds: new Set<string>(),
               overrides: new Map<string, { x: number; y: number }>(),
-              project
+              project,
+              ui: uiScene
             };
             paintObject(g, o, pctx, worldToScreen, zoom);
           }
@@ -865,16 +942,31 @@ export class Editor {
     });
   }
 
+  /** 上一次看到的工程对象，用于识别「整个工程换了一个」。 */
+  private lastProjectRef: Project | null = null;
+
+  /**
+   * 工程对象换了（不是字段变化，是整个对象被替换）就重置撤销历史与字符串池。
+   *
+   * 用对象引用而不是「内容不同」判断：同一次会话里编辑只是改字段，
+   * 只有打开/新建/载入示例会 new 一个工程对象。
+   */
+  private resetHistoryIfProjectReplaced(): void {
+    const p = store.project;
+    if (p === this.lastProjectRef) return;
+    this.lastProjectRef = p;
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this.snapshotPool.clear();
+    this.lastSnapshot = this.snapshot();
+  }
+
   // ---------------- 对外 ----------------
 
   setProject(p: unknown, fileName = ""): void {
     const normalized = normalizeProject(p);
     this.ensureTemplates(normalized);
     store.setProject(normalized, fileName);
-    // 撤销基线随工程一起重置，避免第一次撤销跳回上一个工程的快照
-    this.undoStack.length = 0;
-    this.redoStack.length = 0;
-    this.lastSnapshot = this.snapshot();
     this.refreshPanels();
     this.canvas.zoomToFit();
   }
@@ -938,9 +1030,17 @@ export class Editor {
   private redoStack: string[] = [];
   private suppressSnapshot = false;
   private lastSnapshot = "";
+  /** 大字符串池：同一份 base64 素材在 80 份快照里只存一次（见 core/snapshot.ts）。 */
+  private readonly snapshotPool = new SnapshotPool();
 
   private snapshot(): string {
-    return JSON.stringify(store.project ?? {});
+    return this.snapshotPool.stringify(store.project ?? {}, () => {
+      // 池满：只能把最老的撤销记录丢掉 —— 它们里面的占位已经没有对应内容了。
+      // 保留一半，比一次性清空更不容易让用户觉得「撤销突然变短」。
+      const drop = Math.ceil(this.undoStack.length / 2);
+      this.undoStack.splice(0, drop);
+      this.redoStack.length = 0;
+    });
   }
 
   /** 每次数据落定时调用（拖动结束、增删改、改参数）。 */
@@ -979,7 +1079,7 @@ export class Editor {
 
   private applySnapshot(json: string): void {
     try {
-      const parsed = JSON.parse(json);
+      const parsed = this.snapshotPool.parse(json);
       this.suppressSnapshot = true;
       store.setProject(normalizeProject(parsed), store.fileName);
       this.lastSnapshot = this.snapshot();

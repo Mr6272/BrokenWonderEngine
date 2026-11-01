@@ -275,7 +275,7 @@ public final class CityPlaytest {
         int total = 0;
         int hidden = 0;
         ScriptSpatial sp = ScriptSpatial.LAST;
-        for (TopDownRuntime.Actor a : rt.actors) {
+        for (Actor a : rt.actors) {
             if (a.o == null || a.o.tags == null) {
                 continue;
             }
@@ -361,8 +361,8 @@ public final class CityPlaytest {
      * 交通：跟踪所有自动驾驶车 20 秒，统计「累计转角 / 位移」，打转的车转角巨大而位移很小。
      */
     private static void scenarioTraffic() {
-        List<TopDownRuntime.Actor> cars = new ArrayList<TopDownRuntime.Actor>();
-        for (TopDownRuntime.Actor a : rt.actors) {
+        List<Actor> cars = new ArrayList<Actor>();
+        for (Actor a : rt.actors) {
             if (a.o != null && a.o.tags.contains("vehicle") && !a.dead) {
                 cars.add(a);
             }
@@ -385,7 +385,7 @@ public final class CityPlaytest {
         for (int f = 0; f < frames; f++) {
             step(1);
             for (int i = 0; i < n; i++) {
-                TopDownRuntime.Actor c = cars.get(i);
+                Actor c = cars.get(i);
                 totalTurn[i] += Math.abs(angDiff(c.o.rotation, lastRot[i]));
                 lastRot[i] = c.o.rotation;
                 path[i] += Math.hypot(c.x - px[i], c.y - py[i]);
@@ -460,7 +460,7 @@ public final class CityPlaytest {
 
     private static int countTag(String tag) {
         int n = 0;
-        for (TopDownRuntime.Actor a : rt.actors) {
+        for (Actor a : rt.actors) {
             if (a.o != null && a.o.tags.contains(tag) && !a.dead) {
                 n++;
             }

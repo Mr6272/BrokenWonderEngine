@@ -16,7 +16,7 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { findRuntimeJdk, packageBwe, writeQuickBuild } from "./package-bwe.mjs";
+import { findRuntimeJdk, packageAndroid, packageBwe, writeQuickBuild } from "./package-bwe.mjs";
 
 const webRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const projectRoot = resolve(webRoot, "..");
@@ -808,12 +808,16 @@ async function handleApi(req, res, url) {
   }
 
   if (path === "/api/package-bwe/status" || (path === "/api/package-bwe" && req.method === "GET")) {
-    const [javac, jpackage, candle, light] = await Promise.all([
+    const [javac, jpackage, candle, light, gradlewExists] = await Promise.all([
       which("javac"),
       which("jpackage"),
       which("candle.exe"),
-      which("light.exe")
+      which("light.exe"),
+      Promise.resolve(
+        existsSync(join(projectRoot, "android", "gradlew")) || existsSync(join(projectRoot, "android", "gradlew.bat"))
+      )
     ]);
+    const androidGradlew = gradlewExists;
     json(res, 200, {
       ok: javac && jpackage,
       node: process.version,
@@ -822,6 +826,11 @@ async function handleApi(req, res, url) {
       wix: candle && light,
       // app-image + zip 不需要 WiX；安装器方案才会用到。
       appImage: javac && jpackage,
+      android: {
+        ok: Boolean(androidGradlew),
+        gradlew: androidGradlew ? "gradlew" : null,
+        projectDir: join(projectRoot, "android")
+      },
       port,
       outRoot: join(webRoot, ".build", "packages")
     });
@@ -848,10 +857,11 @@ async function handleApi(req, res, url) {
       error: null,
       result: null,
       startedAt: new Date().toISOString(),
-      finishedAt: null
+      finishedAt: null,
+      platform: String(body.platform ?? "windows")
     };
     jobs.set(id, job);
-    pushLog(job, `收到打包任务：${body.project.name ?? "未命名工程"}`);
+    pushLog(job, `收到打包任务：${body.project.name ?? "未命名工程"}（平台：${job.platform}）`);
     json(res, 202, { ok: true, jobId: id });
     void runJob(job, body);
     return true;
@@ -890,6 +900,29 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  const downloadApkMatch = /^\/api\/package-bwe\/download-apk\/([^/]+)$/.exec(path);
+  if (downloadApkMatch) {
+    const job = jobs.get(downloadApkMatch[1]);
+    const apkPath = job?.result?.apkPath;
+    if (!apkPath) {
+      json(res, 404, { ok: false, error: "任务还没有产出 APK" });
+      return true;
+    }
+    try {
+      const data = await readFile(apkPath);
+      const name = stripForDownload(`${job.result?.appName ?? "BWE-Android"}-debug.apk`);
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": data.length,
+        "content-disposition": `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`
+      });
+      res.end(data);
+    } catch (e) {
+      json(res, 500, { ok: false, error: `读取 APK 失败：${e.message}` });
+    }
+    return true;
+  }
+
   const openMatch = /^\/api\/package-bwe\/open\/([^/]+)$/.exec(path);
   if (openMatch) {
     const job = jobs.get(openMatch[1]);
@@ -907,21 +940,54 @@ async function handleApi(req, res, url) {
 
 async function runJob(job, body) {
   try {
-    const result = await packageBwe(
-      body.project,
-      body.assets ?? [],
-      {
-        jobId: job.id,
-        name: body.name || body.project.name,
-        version: body.version || "1.0.0",
-        console: Boolean(body.console)
-      },
-      (message) => pushLog(job, message)
-    );
-    job.result = result;
-    job.status = "done";
-    job.finishedAt = new Date().toISOString();
-    pushLog(job, `打包完成，文件：${result.zipPath}`);
+    const platform = String(job.platform ?? body.platform ?? "windows").toLowerCase();
+    if (platform === "android") {
+      const result = await packageAndroid(
+        body.project,
+        body.assets ?? [],
+        {
+          jobId: job.id,
+          name: body.name || body.project.name,
+          version: body.version || "1.0.0",
+          // 默认 release（正式包）；前端显式选「测试包」时传 variant: "debug"。
+          variant: body.variant === "debug" ? "debug" : "release"
+        },
+        (message) => pushLog(job, message)
+      );
+      job.result = {
+        platform: "android",
+        variant: result.variant,
+        releaseSigned: result.releaseSigned,
+        isTestPackage: result.isTestPackage,
+        appName: result.appName,
+        version: result.version,
+        outDir: result.outDir,
+        buildDir: result.buildDir,
+        apkName: result.apkName,
+        apkPath: result.apkPath,
+        sizeBytes: result.sizeBytes,
+        warnings: result.warnings
+      };
+      job.status = "done";
+      job.finishedAt = new Date().toISOString();
+      pushLog(job, `Android 打包完成（${result.variant}${result.isTestPackage ? " · 测试包" : ""}），文件：${result.apkPath}`);
+    } else {
+      const result = await packageBwe(
+        body.project,
+        body.assets ?? [],
+        {
+          jobId: job.id,
+          name: body.name || body.project.name,
+          version: body.version || "1.0.0",
+          console: Boolean(body.console)
+        },
+        (message) => pushLog(job, message)
+      );
+      job.result = result;
+      job.status = "done";
+      job.finishedAt = new Date().toISOString();
+      pushLog(job, `打包完成，文件：${result.zipPath}`);
+    }
   } catch (e) {
     job.status = "error";
     job.error = e?.message || String(e);

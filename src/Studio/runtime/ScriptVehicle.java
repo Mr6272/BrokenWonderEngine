@@ -50,11 +50,11 @@ final class ScriptVehicle {
      * <p>用 {@link LinkedHashMap}（插入序）而不是 IdentityHashMap：后者遍历顺序随对象哈希变化，
      * 多车同帧更新顺序不确定 → 回放/测试不可复现。Actor 未重写 equals/hashCode，语义等同按引用。</p>
      */
-    private final Map<TopDownRuntime.Actor, Veh> vehicles =
-            new LinkedHashMap<TopDownRuntime.Actor, Veh>();
+    private final Map<Actor, Veh> vehicles =
+            new LinkedHashMap<Actor, Veh>();
     /** 驾驶员 → 车辆（反向索引，用于 {@code vehicleOf}）。 */
-    private final Map<TopDownRuntime.Actor, TopDownRuntime.Actor> driving =
-            new IdentityHashMap<TopDownRuntime.Actor, TopDownRuntime.Actor>();
+    private final Map<Actor, Actor> driving =
+            new IdentityHashMap<Actor, Actor>();
 
     /** 事件订阅：crash / hijack / enter / exit。 */
     private final Map<String, List<Holder>> handlers = new LinkedHashMap<String, List<Holder>>();
@@ -74,8 +74,8 @@ final class ScriptVehicle {
     /** 一辆车的运行状态。 */
     static final class Veh {
         final long id;
-        TopDownRuntime.Actor actor;
-        TopDownRuntime.Actor driver;
+        Actor actor;
+        Actor driver;
         /** 车辆类型：car / taxi / police（数据驱动，引擎不写死含义）。 */
         String kind = "car";
         /** 当前速度（px/s，沿 heading 方向）。 */
@@ -128,7 +128,7 @@ final class ScriptVehicle {
         /** 自上次切换路点以来累计转过的角度（弧度）；超过 270° 视为够不着该点 → 跳过，杜绝原地打转。 */
         float turnAccum;
 
-        Veh(long id, TopDownRuntime.Actor actor) {
+        Veh(long id, Actor actor) {
             this.id = id;
             this.actor = actor;
         }
@@ -166,7 +166,7 @@ final class ScriptVehicle {
         // 于是脚本里 `e.x` / `e.hpMax` / `bwe.vehicle.followRoad(e, ...)` 全部拿不到东西
         // （Rhino 不认 Actor 的字段），车辆"生成了但永远不动" —— soak 实测 moved=0/4。
         api.addMethod(ns, "spawn", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor a = spawnVehicle(ScriptJs.arg(args, 0));
+            Actor a = spawnVehicle(ScriptJs.arg(args, 0));
             return a == null ? null : api.entity(a);
         });
 
@@ -188,27 +188,27 @@ final class ScriptVehicle {
 
         // vehicleOf(e) → 该实体正在驾驶的车 | null
         api.addMethod(ns, "vehicleOf", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor car = driving.get(api.actorOf(ScriptJs.arg(args, 0)));
+            Actor car = driving.get(api.actorOf(ScriptJs.arg(args, 0)));
             return car == null ? null : api.entity(car);
         });
 
         // enter(driver, vehicle, opts) → bool
         api.addMethod(ns, "enter", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor driver = api.actorOf(ScriptJs.arg(args, 0));
-            TopDownRuntime.Actor car = api.actorOf(ScriptJs.arg(args, 1));
+            Actor driver = api.actorOf(ScriptJs.arg(args, 0));
+            Actor car = api.actorOf(ScriptJs.arg(args, 1));
             return Boolean.valueOf(enterVehicle(driver, car));
         });
 
         // exit(driver, opts) → bool（下车，车留下）
         api.addMethod(ns, "exit", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor driver = api.actorOf(ScriptJs.arg(args, 0));
+            Actor driver = api.actorOf(ScriptJs.arg(args, 0));
             return Boolean.valueOf(exitVehicle(driver));
         });
 
         // hijack(hijacker, vehicle) → bool（劫车：原驾驶员被踢出并派发 hijack）
         api.addMethod(ns, "hijack", (cx, thisObj, args) -> {
-            TopDownRuntime.Actor who = api.actorOf(ScriptJs.arg(args, 0));
-            TopDownRuntime.Actor car = api.actorOf(ScriptJs.arg(args, 1));
+            Actor who = api.actorOf(ScriptJs.arg(args, 0));
+            Actor car = api.actorOf(ScriptJs.arg(args, 1));
             return Boolean.valueOf(hijack(who, car));
         });
 
@@ -384,14 +384,14 @@ final class ScriptVehicle {
 
     // ---------------- 造车 / 上下车 ----------------
 
-    private TopDownRuntime.Actor spawnVehicle(Object opts) {
+    private Actor spawnVehicle(Object opts) {
         Object kind = ScriptJs.get(opts, "kind");
         String k = ScriptJs.str(kind, "car");
         Object x = ScriptJs.get(opts, "x");
         Object y = ScriptJs.get(opts, "y");
         float px = ScriptJs.fnum(x, 0f);
         float py = ScriptJs.fnum(y, 0f);
-        TopDownRuntime.Actor a = api.spawnActor(opts);
+        Actor a = api.spawnActor(opts);
         if (a == null) {
             return null;
         }
@@ -408,9 +408,9 @@ final class ScriptVehicle {
         if (vehicles.isEmpty()) {
             return;
         }
-        List<TopDownRuntime.Actor> gone = new ArrayList<TopDownRuntime.Actor>();
-        for (Map.Entry<TopDownRuntime.Actor, Veh> e : vehicles.entrySet()) {
-            TopDownRuntime.Actor a = e.getKey();
+        List<Actor> gone = new ArrayList<Actor>();
+        for (Map.Entry<Actor, Veh> e : vehicles.entrySet()) {
+            Actor a = e.getKey();
             Veh v = e.getValue();
             if (a == null || a.dead) {
                 gone.add(a);
@@ -420,7 +420,7 @@ final class ScriptVehicle {
             updateVehicle(v, dt);
         }
         for (int i = 0; i < gone.size(); i++) {
-            TopDownRuntime.Actor a = gone.get(i);
+            Actor a = gone.get(i);
             Veh v = vehicles.remove(a);
             if (v != null && v.driver != null) {
                 driving.remove(v.driver);
@@ -442,7 +442,7 @@ final class ScriptVehicle {
      * </pre>
      */
     private void updateVehicle(Veh v, float dt) {
-        TopDownRuntime.Actor a = v.actor;
+        Actor a = v.actor;
         if (v.autoDrive && v.route != null) {
             autoStep(v, dt);
         } else {
@@ -565,7 +565,7 @@ final class ScriptVehicle {
      * 自动驾驶一帧：过点判定 → 目标速度（限速 / 弯前减速 / 到站刹停曲线 × (1−brake)）→ 追踪式比例转向。
      */
     private void autoStep(Veh v, float dt) {
-        TopDownRuntime.Actor a = v.actor;
+        Actor a = v.actor;
         List<float[]> r = v.route;
         // 1) 过点：到达半径 max(16, |v|·0.25)，或已越过该点的法平面（dot(wp−car, dir) < 0）
         while (v.routeIndex < r.size()) {
@@ -1091,7 +1091,7 @@ final class ScriptVehicle {
         return a;
     }
 
-    boolean enterVehicle(TopDownRuntime.Actor driver, TopDownRuntime.Actor car) {
+    boolean enterVehicle(Actor driver, Actor car) {
         Veh v = vehicles.get(car);
         if (v == null || driver == null || driver.dead) {
             return false;
@@ -1102,7 +1102,7 @@ final class ScriptVehicle {
             fire("exit", v, v.driver);
         }
         // 一人只能开一辆：若他正开着别的车，先从那辆车上解绑
-        TopDownRuntime.Actor prevCar = driving.get(driver);
+        Actor prevCar = driving.get(driver);
         if (prevCar != null && prevCar != car) {
             Veh pv = vehicles.get(prevCar);
             if (pv != null && pv.driver == driver) {
@@ -1121,17 +1121,17 @@ final class ScriptVehicle {
     }
 
     /** 车左侧（垂直车头方向，距离 halfH+12）放置下车的人。 */
-    private static void placeLeft(TopDownRuntime.Actor who, TopDownRuntime.Actor car, Veh v) {
+    private static void placeLeft(Actor who, Actor car, Veh v) {
         float d = car.o.halfH + 12f;
         who.x = car.x + (float) Math.sin(v.heading) * d;
         who.y = car.y - (float) Math.cos(v.heading) * d;
     }
 
-    boolean exitVehicle(TopDownRuntime.Actor driver) {
+    boolean exitVehicle(Actor driver) {
         if (driver == null) {
             return false;
         }
-        TopDownRuntime.Actor car = driving.remove(driver);
+        Actor car = driving.remove(driver);
         if (car == null) {
             return false;
         }
@@ -1153,12 +1153,12 @@ final class ScriptVehicle {
         return true;
     }
 
-    boolean hijack(TopDownRuntime.Actor hijacker, TopDownRuntime.Actor car) {
+    boolean hijack(Actor hijacker, Actor car) {
         Veh v = vehicles.get(car);
         if (v == null || hijacker == null) {
             return false;
         }
-        TopDownRuntime.Actor old = v.driver;
+        Actor old = v.driver;
         if (old != null && old != hijacker) {
             driving.remove(old);
             // 原驾驶员被拽到车左侧（之后 enterVehicle 照旧再派发一次 exit，事件序列与旧版一致）并派发 hijack（游戏逻辑据此决定"受害者逃跑/报警"）
@@ -1178,7 +1178,7 @@ final class ScriptVehicle {
 
     // ---------------- 事件 ----------------
 
-    private void fire(String evt, Veh v, TopDownRuntime.Actor who) {
+    private void fire(String evt, Veh v, Actor who) {
         List<Holder> list = handlers.get(evt);
         if (list == null || list.isEmpty()) {
             return;

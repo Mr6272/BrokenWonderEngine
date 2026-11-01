@@ -120,8 +120,8 @@ public final class ScriptPhysicsTest {
         engine.update(1f / 60f);
         check("第 1 帧后脚本启动", engine.started && !engine.failed, "");
 
-        TopDownRuntime.Actor player = actorNamed(rt, "player");
-        TopDownRuntime.Actor crate = actorNamed(rt, "crate");
+        Actor player = actorNamed(rt, "player");
+        Actor crate = actorNamed(rt, "crate");
         check("找到 player/crate", player != null && crate != null, "");
         float startX = crate == null ? 0f : crate.x;
         float startPlayerX = player == null ? 0f : player.x;
@@ -480,8 +480,8 @@ public final class ScriptPhysicsTest {
         return out;
     }
 
-    private static TopDownRuntime.Actor actorNamed(TopDownRuntime rt, String name) {
-        for (TopDownRuntime.Actor a : rt.actors) {
+    private static Actor actorNamed(TopDownRuntime rt, String name) {
+        for (Actor a : rt.actors) {
             if (a.o != null && name.equals(a.o.name)) {
                 return a;
             }

@@ -98,7 +98,7 @@ public final class OpenWorldTest {
 
         // 玩家初始在楼外（放在 (240,240)，楼在 (400,300) 范围 200x200）
         sp.resolve();
-        TopDownRuntime.Actor player = engine.findPlayerActor();
+        Actor player = engine.findPlayerActor();
         check("找到玩家实体", player != null, "");
         int startLevel = sp.levelOf(player);
         check("玩家初始在 0 层", startLevel == 0, "level=" + startLevel);
@@ -209,10 +209,10 @@ public final class OpenWorldTest {
         final int[] enter = {0};
         final int[] stay = {0};
         final int[] exit = {0};
-        final TopDownRuntime.Actor[] watched = new TopDownRuntime.Actor[2];
+        final Actor[] watched = new Actor[2];
         col.setObserver(new ScriptCollision.Observer() {
             @Override
-            public void on(String evt, TopDownRuntime.Actor x, TopDownRuntime.Actor y) {
+            public void on(String evt, Actor x, Actor y) {
                 if (watched[0] == null) {
                     return;
                 }
@@ -231,9 +231,9 @@ public final class OpenWorldTest {
             }
         });
         // 造两个重叠实体
-        TopDownRuntime.Actor a1 = engine.spawnScripted(600, 400, "", "colA", "PROP", 0, 20, 20,
+        Actor a1 = engine.spawnScripted(600, 400, "", "colA", "PROP", 0, 20, 20,
                 "", new ArrayList<String>(), new ArrayList<GameData.RtModule>());
-        TopDownRuntime.Actor a2 = engine.spawnScripted(600, 400, "", "colB", "PROP", 0, 20, 20,
+        Actor a2 = engine.spawnScripted(600, 400, "", "colB", "PROP", 0, 20, 20,
                 "", new ArrayList<String>(), new ArrayList<GameData.RtModule>());
         watched[0] = a1;
         watched[1] = a2;
@@ -254,9 +254,9 @@ public final class OpenWorldTest {
         check("exit 恰好 1 次", exit[0] == 1, "exit=" + exit[0]);
 
         // 销毁期不派发 exit
-        TopDownRuntime.Actor c1 = engine.spawnScripted(900, 400, "", "colC", "PROP", 0, 20, 20,
+        Actor c1 = engine.spawnScripted(900, 400, "", "colC", "PROP", 0, 20, 20,
                 "", new ArrayList<String>(), new ArrayList<GameData.RtModule>());
-        TopDownRuntime.Actor c2 = engine.spawnScripted(900, 400, "", "colD", "PROP", 0, 20, 20,
+        Actor c2 = engine.spawnScripted(900, 400, "", "colD", "PROP", 0, 20, 20,
                 "", new ArrayList<String>(), new ArrayList<GameData.RtModule>());
         watched[0] = c1;
         watched[1] = c2;
@@ -310,7 +310,7 @@ public final class OpenWorldTest {
         ScriptCombat cmb = ScriptCombat.LAST;
         check("bwe.combat 已安装", cmb != null, "");
         check("武器表至少有 4 项", cmb.weaponCountTest() >= 4, "weapons=" + cmb.weaponCountTest());
-        TopDownRuntime.Actor victim = engine.spawnScripted(1200, 400, "", "victim", "ACTOR", 0, 12, 12, "", new ArrayList<String>(), new ArrayList<GameData.RtModule>());
+        Actor victim = engine.spawnScripted(1200, 400, "", "victim", "ACTOR", 0, 12, 12, "", new ArrayList<String>(), new ArrayList<GameData.RtModule>());
         victim.hpMax = 30f;
         victim.hp = 30f;
         float beforeHp = victim.hp;
@@ -361,8 +361,8 @@ public final class OpenWorldTest {
         // 表现是「日志说生成了 20 个行人，屏幕上一个都没有」，drawCall 计数却完全正常。
         //
         // 这里直接构造「场景对象在 layer=4」的局面，再 spawn，断言新实体的 layer 跟着变 4。
-        TopDownRuntime.Actor anchor = null;
-        for (TopDownRuntime.Actor a : rt.actors) {
+        Actor anchor = null;
+        for (Actor a : rt.actors) {
             if (a != null && a.o != null) {
                 anchor = a;
                 break;
@@ -375,7 +375,7 @@ public final class OpenWorldTest {
         }
         check("场景主 layer 被正确识别为 4", rt.dominantSceneLayer() == 4,
                 "dominant=" + rt.dominantSceneLayer());
-        TopDownRuntime.Actor probe = engine.spawnScripted(500, 500, "", "layerprobe", "ACTOR",
+        Actor probe = engine.spawnScripted(500, 500, "", "layerprobe", "ACTOR",
                 0, 12, 12, "", new ArrayList<String>(), new ArrayList<GameData.RtModule>());
         check("spawn 出来的实体 layer 跟随场景主 layer（不写死 0）",
                 probe != null && probe.o.layer == 4,
@@ -387,7 +387,7 @@ public final class OpenWorldTest {
 
         // ---------- 11) 延迟销毁 ----------
         int n0 = rt.actors.size();
-        TopDownRuntime.Actor tmp = engine.spawnScripted(300, 300, "", "tmp", "PROP", 0, 8, 8, "", new ArrayList<String>(), new ArrayList<GameData.RtModule>());
+        Actor tmp = engine.spawnScripted(300, 300, "", "tmp", "PROP", 0, 8, 8, "", new ArrayList<String>(), new ArrayList<GameData.RtModule>());
         check("spawn 后实体数 +1", rt.actors.size() == n0 + 1, "actors=" + rt.actors.size());
         rt.requestDestroy(tmp);
         check("requestDestroy 后仍在列表（延迟提交）", rt.actors.size() == n0 + 1, "actors=" + rt.actors.size());

@@ -107,7 +107,7 @@ final class ScriptEngine {
 
     /** 脚本挂的子精灵（{@code e.attach}）：引擎在帧末统一画。 */
     static final class Attachment {
-        final TopDownRuntime.Actor owner;
+        final Actor owner;
         long id;
         String assetName = "";
         float dx;
@@ -118,7 +118,7 @@ final class ScriptEngine {
         float w;
         float h;
 
-        Attachment(TopDownRuntime.Actor owner) {
+        Attachment(Actor owner) {
             this.owner = owner;
         }
     }
@@ -164,7 +164,7 @@ final class ScriptEngine {
     /** Actor → 对象脚本（script.js 模块）。 */
     // 用 LinkedHashMap：对象脚本 onUpdate 的派发顺序必须稳定（= 场景对象顺序）。
     // IdentityHashMap 的迭代顺序跨运行会变，会让「同种子同输入」的涌现结果不可复现（见 docs/scripting-api.md §2.11.7 第 6 条）。
-    private final Map<TopDownRuntime.Actor, ScriptDef> bound = new LinkedHashMap<TopDownRuntime.Actor, ScriptDef>();
+    private final Map<Actor, ScriptDef> bound = new LinkedHashMap<Actor, ScriptDef>();
 
     // ---------------- 运行状态 ----------------
 
@@ -200,7 +200,7 @@ final class ScriptEngine {
     int lastScreenY;
 
     // 相机
-    TopDownRuntime.Actor cameraTarget;
+    Actor cameraTarget;
     float cameraSmooth = -1f;
     float cameraLookAhead;
     float[] cameraBounds; // {x,y,w,h}
@@ -223,7 +223,7 @@ final class ScriptEngine {
     ScriptAudio audio;
     Prompt prompt;
     int interactKey = java.awt.event.KeyEvent.VK_E; // 默认触发键 KeyE（bwe.d.ts）
-    TopDownRuntime.Actor interactActor;
+    Actor interactActor;
     long nextSpawnerId = 1;
 
     /** 世界事件总线（bwe.world.on/off/emit）。 */
@@ -447,6 +447,45 @@ final class ScriptEngine {
     }
 
     /** 每帧：计时器 + 全局 update 钩子 + 对象 onUpdate + 微任务。 */
+    /**
+     * 待执行回调队列：**跨线程**事件（AWT 点击、Android 触摸/软键盘）不能直接调脚本函数。
+     *
+     * <p><b>为什么必须排队</b>：{@code invoke()} 依赖 {@code Context.getCurrentContext()}，
+     * 而 AWT 事件线程没有 Rhino Context → 直接调用会<b>静默返回 null</b>，
+     * 回调永远不执行（表现是「输入框按回车没反应」这类，且不报错、极难查）。
+     *
+     * <p>做法：跨线程处把「要做的脚本调用」塞进队列，下一次 {@link #update} 在脚本上下文里排空。
+     * 代价是延迟一帧（≤16ms），对 UI 回调完全无感。
+     */
+    private final java.util.List<Runnable> pendingScriptCalls =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<Runnable>());
+
+    /** 从任意线程安全地排队一次脚本调用（会在下次 update 的脚本上下文里执行）。 */
+    void postScriptCall(Runnable call) {
+        if (call != null) {
+            pendingScriptCalls.add(call);
+        }
+    }
+
+    /** 在脚本上下文里排空跨线程回调。必须在已进入 Context 的调用栈里调。 */
+    private void drainPendingCalls() {
+        if (pendingScriptCalls.isEmpty()) {
+            return;
+        }
+        java.util.List<Runnable> batch;
+        synchronized (pendingScriptCalls) {
+            batch = new java.util.ArrayList<Runnable>(pendingScriptCalls);
+            pendingScriptCalls.clear();
+        }
+        for (Runnable r : batch) {
+            try {
+                r.run();
+            } catch (Throwable t) {
+                host.scriptLog("[脚本] 跨线程回调异常: " + t);
+            }
+        }
+    }
+
     void update(float dt) {
         Context cx = Context.enter();
         try {
@@ -457,6 +496,7 @@ final class ScriptEngine {
             if (failed) {
                 return;
             }
+            drainPendingCalls();
             tick(cx, dt);
         } catch (Throwable t) {
             host.scriptLog("[脚本] update 异常: " + t);
@@ -520,6 +560,20 @@ final class ScriptEngine {
     }
 
     /** 点击（AWT/EDT 线程）：入队，update 时派发。 */
+    /** 指针移动（触摸拖动）：优先给虚拟摇杆，否则只更新鼠标坐标。 */
+    void pointerMove(int screenX, int screenY) {
+        if (host != null) {
+            host.pointerMoveAt(screenX, screenY);
+        }
+    }
+
+    /** 指针抬起：释放虚拟摇杆占用。 */
+    void pointerUp() {
+        if (host != null) {
+            host.pointerUpAt();
+        }
+    }
+
     void pointerDown(int worldX, int worldY, boolean right, int screenX, int screenY) {
         synchronized (clicks) {
             if (clicks.size() < 32) {
@@ -557,7 +611,7 @@ final class ScriptEngine {
 
             // 2) 对象脚本绑定 + onStart
             bindSceneObjects();
-            for (Map.Entry<TopDownRuntime.Actor, ScriptDef> e : new ArrayList<Map.Entry<TopDownRuntime.Actor, ScriptDef>>(bound.entrySet())) {
+            for (Map.Entry<Actor, ScriptDef> e : new ArrayList<Map.Entry<Actor, ScriptDef>>(bound.entrySet())) {
                 dispatchObject(e.getKey(), e.getValue(), "onStart", new Object[0]);
             }
 
@@ -687,12 +741,12 @@ final class ScriptEngine {
     }
 
     private void bindSceneObjects() {
-        for (TopDownRuntime.Actor a : host.actors) {
+        for (Actor a : host.actors) {
             bindActor(a);
         }
     }
 
-    private void bindActor(TopDownRuntime.Actor a) {
+    private void bindActor(Actor a) {
         if (a == null || a.o == null) {
             return;
         }
@@ -759,8 +813,8 @@ final class ScriptEngine {
                 }
                 invoke(h.def, h.fn, h.scope, new Object[]{Double.valueOf(frameDt)});
             }
-            for (Map.Entry<TopDownRuntime.Actor, ScriptDef> e : snapshotBound()) {
-                TopDownRuntime.Actor a = e.getKey();
+            for (Map.Entry<Actor, ScriptDef> e : snapshotBound()) {
+                Actor a = e.getKey();
                 if (a.dead) {
                     continue;
                 }
@@ -810,11 +864,11 @@ final class ScriptEngine {
      * </ul>
      * 语义与原实现一致：遍历期间不会看到本帧新增的对象（这正是快照要保证的）。
      */
-    private final List<Map.Entry<TopDownRuntime.Actor, ScriptDef>> boundSnapshotBuf =
-            new ArrayList<Map.Entry<TopDownRuntime.Actor, ScriptDef>>();
+    private final List<Map.Entry<Actor, ScriptDef>> boundSnapshotBuf =
+            new ArrayList<Map.Entry<Actor, ScriptDef>>();
     private int boundSnapshotVersion = -1;
 
-    private List<Map.Entry<TopDownRuntime.Actor, ScriptDef>> snapshotBound() {
+    private List<Map.Entry<Actor, ScriptDef>> snapshotBound() {
         if (boundSnapshotVersion == boundVersion && !boundSnapshotBuf.isEmpty()) {
             return boundSnapshotBuf;
         }
@@ -844,7 +898,7 @@ final class ScriptEngine {
             int button = c.right ? 2 : 0;
             mouseNow[button] = true;
             mousePressed[button] = true;
-            TopDownRuntime.Actor hit = topmostAt(c.wx, c.wy);
+            Actor hit = topmostAt(c.wx, c.wy);
             Object entityArg = hit == null ? null : api.entity(hit);
             List<Handler> clickList = handlers("click");
             for (int i = 0; i < handlerCount(clickList); i++) {
@@ -880,7 +934,7 @@ final class ScriptEngine {
                 }
                 invoke(h.def, h.fn, h.scope, new Object[]{name, Integer.valueOf(code)});
             }
-            for (Map.Entry<TopDownRuntime.Actor, ScriptDef> e : snapshotBound()) {
+            for (Map.Entry<Actor, ScriptDef> e : snapshotBound()) {
                 if (e.getKey().dead) {
                     continue;
                 }
@@ -901,7 +955,7 @@ final class ScriptEngine {
     }
 
     /** 对象脚本回调：args[0] 固定是 ctx。 */
-    void dispatchObject(TopDownRuntime.Actor a, ScriptDef def, String fnName, Object[] extra) {
+    void dispatchObject(Actor a, ScriptDef def, String fnName, Object[] extra) {
         if (def == null || a == null) {
             return;
         }
@@ -1112,7 +1166,7 @@ final class ScriptEngine {
     }
 
     /** 某对象上挂的脚本（没有返回 null）。 */
-    ScriptDef boundScript(TopDownRuntime.Actor a) {
+    ScriptDef boundScript(Actor a) {
         return a == null ? null : bound.get(a);
     }
 
@@ -1274,20 +1328,20 @@ final class ScriptEngine {
 
     // ---------------- 世界操作 ----------------
 
-    Scriptable context(TopDownRuntime.Actor self) {
+    Scriptable context(Actor self) {
         return api.context(self);
     }
 
-    Scriptable entity(TopDownRuntime.Actor a) {
+    Scriptable entity(Actor a) {
         return api.entity(a);
     }
 
     /** 按世界坐标点命中实体（从最上层往下，顺序与绘制相反）。 */
-    TopDownRuntime.Actor topmostAt(float wx, float wy) {
-        List<TopDownRuntime.Actor> sorted = new ArrayList<TopDownRuntime.Actor>(host.actors);
-        Collections.sort(sorted, new Comparator<TopDownRuntime.Actor>() {
+    Actor topmostAt(float wx, float wy) {
+        List<Actor> sorted = new ArrayList<Actor>(host.actors);
+        Collections.sort(sorted, new Comparator<Actor>() {
             @Override
-            public int compare(TopDownRuntime.Actor a, TopDownRuntime.Actor b) {
+            public int compare(Actor a, Actor b) {
                 int layer = Integer.compare(a.o.layer, b.o.layer);
                 if (layer != 0) {
                     return layer;
@@ -1300,7 +1354,7 @@ final class ScriptEngine {
             }
         });
         for (int i = sorted.size() - 1; i >= 0; i--) {
-            TopDownRuntime.Actor a = sorted.get(i);
+            Actor a = sorted.get(i);
             if (a.dead || !a.o.visible) {
                 continue;
             }
@@ -1313,13 +1367,13 @@ final class ScriptEngine {
         return null;
     }
 
-    TopDownRuntime.Actor findPlayerActor() {
-        for (TopDownRuntime.Actor a : host.actors) {
+    Actor findPlayerActor() {
+        for (Actor a : host.actors) {
             if (a.o.tags.contains("玩家") || a.o.tags.contains("Player") || a.o.tags.contains("player")) {
                 return a;
             }
         }
-        for (TopDownRuntime.Actor a : host.actors) {
+        for (Actor a : host.actors) {
             if ("ACTOR".equalsIgnoreCase(a.o.kind)) {
                 return a;
             }
@@ -1328,10 +1382,10 @@ final class ScriptEngine {
     }
 
     /** 脚本 spawn：复用宿主 spawnScripted，然后绑定脚本/模块/标签，派发 onStart。 */
-    TopDownRuntime.Actor spawnScripted(float x, float y, String assetName, String name, String kind,
+    Actor spawnScripted(float x, float y, String assetName, String name, String kind,
                                        int z, float halfW, float halfH, String scriptName,
                                        List<String> tags, List<GameData.RtModule> modules) {
-        TopDownRuntime.Actor a = host.spawnScripted(x, y, assetName, name, kind, z, halfW, halfH);
+        Actor a = host.spawnScripted(x, y, assetName, name, kind, z, halfW, halfH);
         if (a == null) {
             return null;
         }
@@ -1373,7 +1427,7 @@ final class ScriptEngine {
      * 「编辑器里摆的对象」和「脚本 spawn / prefab spawn 出来的实体」血量行为一致。
      * 运行时新增模块（{@code e.addModule("combat.health", ...)}）也要调它。
      */
-    void applyHealthModule(TopDownRuntime.Actor a) {
+    void applyHealthModule(Actor a) {
         if (a == null) {
             return;
         }
@@ -1386,7 +1440,7 @@ final class ScriptEngine {
     }
 
     /** 脚本销毁实体：先派发 onDestroy / "destroy" 事件，再从宿主移除。 */
-    void destroyEntity(TopDownRuntime.Actor a) {
+    void destroyEntity(Actor a) {
         if (a == null || a.dead) {
             return;
         }
@@ -1407,7 +1461,7 @@ final class ScriptEngine {
      * </ul>
      * 幂等：对已经摘过的 Actor 重复调用无副作用。
      */
-    void detachActor(TopDownRuntime.Actor a) {
+    void detachActor(Actor a) {
         if (a == null) {
             return;
         }
@@ -1582,8 +1636,8 @@ final class ScriptEngine {
             cx = Context.enter();
             prepare(cx);
             bindSceneObjects();
-            for (Map.Entry<TopDownRuntime.Actor, ScriptDef> e
-                    : new ArrayList<Map.Entry<TopDownRuntime.Actor, ScriptDef>>(bound.entrySet())) {
+            for (Map.Entry<Actor, ScriptDef> e
+                    : new ArrayList<Map.Entry<Actor, ScriptDef>>(bound.entrySet())) {
                 dispatchObject(e.getKey(), e.getValue(), "onStart", new Object[0]);
             }
             sceneStartDone = true;
@@ -1633,7 +1687,7 @@ final class ScriptEngine {
                 }
                 float x = at.owner.x + at.dx;
                 float y = at.owner.y + at.dy;
-                TopDownRuntime.Texture tex = null;
+                Texture tex = null;
                 try {
                     tex = host.firstTextureForName(at.assetName);
                 } catch (Throwable ignored) {
@@ -1652,7 +1706,7 @@ final class ScriptEngine {
 
     // ---------------- 相机 ----------------
 
-    void cameraFollow(TopDownRuntime.Actor target, float smooth, float lookAhead) {
+    void cameraFollow(Actor target, float smooth, float lookAhead) {
         cameraTarget = target;
         cameraSmooth = smooth;
         cameraLookAhead = lookAhead;
@@ -1883,11 +1937,11 @@ final class ScriptEngine {
 
     private void processZones() {
         // 触发区（kind=ZONE）：玩家进出时派发对象脚本 onEnter/onLeave 与实体 "enter"/"leave"。
-        TopDownRuntime.Actor player = findPlayerActor();
+        Actor player = findPlayerActor();
         if (player == null) {
             return;
         }
-        for (TopDownRuntime.Actor a : new ArrayList<TopDownRuntime.Actor>(host.actors)) {
+        for (Actor a : new ArrayList<Actor>(host.actors)) {
             if (a.dead || a.o == null || !"ZONE".equalsIgnoreCase(a.o.kind)) {
                 continue;
             }
@@ -1910,5 +1964,5 @@ final class ScriptEngine {
         }
     }
 
-    private final Map<TopDownRuntime.Actor, Boolean> zoneInside = new IdentityHashMap<TopDownRuntime.Actor, Boolean>();
+    private final Map<Actor, Boolean> zoneInside = new IdentityHashMap<Actor, Boolean>();
 }

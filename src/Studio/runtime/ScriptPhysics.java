@@ -126,8 +126,8 @@ final class ScriptPhysics {
 
     private org.jbox2d.dynamics.World phys;
 
-    private final Map<TopDownRuntime.Actor, BodyState> bodies =
-            new IdentityHashMap<TopDownRuntime.Actor, BodyState>();
+    private final Map<Actor, BodyState> bodies =
+            new IdentityHashMap<Actor, BodyState>();
     private final List<Body> tileBodies = new ArrayList<Body>();
     private boolean[] tileSolid;
     private boolean tilesBuilt;
@@ -153,8 +153,8 @@ final class ScriptPhysics {
         public void beginContact(Contact contact) {
             Fixture fa = contact.getFixtureA();
             Fixture fb = contact.getFixtureB();
-            TopDownRuntime.Actor a = actorOf(fa);
-            TopDownRuntime.Actor b = actorOf(fb);
+            Actor a = actorOf(fa);
+            Actor b = actorOf(fb);
             if (a == null && b == null) {
                 return; // 瓦片 vs 瓦片：不关心
             }
@@ -380,7 +380,7 @@ final class ScriptPhysics {
 
     // ---------------- 刚体管理 ----------------
 
-    private Object body(TopDownRuntime.Actor actor, ScriptableObject opts) {
+    private Object body(Actor actor, ScriptableObject opts) {
         if (actor == null) {
             warnOnce("body.actor", "[物理] body(e, opts)：e 不是实体（先用 bwe.world.find/spawn 拿 Entity）");
             return null;
@@ -476,7 +476,7 @@ final class ScriptPhysics {
         return api.entityOf(actor);
     }
 
-    private boolean remove(TopDownRuntime.Actor actor) {
+    private boolean remove(Actor actor) {
         BodyState bs = actor == null ? null : bodies.get(actor);
         if (bs == null) {
             return false;
@@ -501,11 +501,11 @@ final class ScriptPhysics {
         if (bodies.isEmpty()) {
             return;
         }
-        Set<TopDownRuntime.Actor> alive = deadSet();
-        Iterator<Map.Entry<TopDownRuntime.Actor, BodyState>> it = bodies.entrySet().iterator();
+        Set<Actor> alive = deadSet();
+        Iterator<Map.Entry<Actor, BodyState>> it = bodies.entrySet().iterator();
         while (it.hasNext()) {
-            Map.Entry<TopDownRuntime.Actor, BodyState> e = it.next();
-            TopDownRuntime.Actor a = e.getKey();
+            Map.Entry<Actor, BodyState> e = it.next();
+            Actor a = e.getKey();
             if (a == null || a.o == null || a.dead || !alive.contains(a)) {
                 BodyState bs = e.getValue();
                 try {
@@ -519,10 +519,10 @@ final class ScriptPhysics {
         }
     }
 
-    private Set<TopDownRuntime.Actor> deadSet() {
-        Set<TopDownRuntime.Actor> set = java.util.Collections.newSetFromMap(
-                new IdentityHashMap<TopDownRuntime.Actor, Boolean>());
-        for (TopDownRuntime.Actor a : host.actors) {
+    private Set<Actor> deadSet() {
+        Set<Actor> set = java.util.Collections.newSetFromMap(
+                new IdentityHashMap<Actor, Boolean>());
+        for (Actor a : host.actors) {
             set.add(a);
         }
         return set;
@@ -539,7 +539,7 @@ final class ScriptPhysics {
             return;
         }
         for (BodyState bs : bodies.values()) {
-            TopDownRuntime.Actor a = bs.actor;
+            Actor a = bs.actor;
             float dx = a.x - bs.lastX;
             float dy = a.y - bs.lastY;
             if (Math.abs(dx) <= SCRIPT_MOVE_EPS && Math.abs(dy) <= SCRIPT_MOVE_EPS) {
@@ -572,7 +572,7 @@ final class ScriptPhysics {
             if (Math.abs(px - bs.lastX) <= 0.0005f && Math.abs(py - bs.lastY) <= 0.0005f) {
                 continue;
             }
-            TopDownRuntime.Actor a = bs.actor;
+            Actor a = bs.actor;
             a.x = px;
             a.y = py;
             a.baseX = px;
@@ -658,7 +658,7 @@ final class ScriptPhysics {
         return body;
     }
 
-    private static TopDownRuntime.Actor actorOf(Fixture f) {
+    private static Actor actorOf(Fixture f) {
         if (f == null) {
             return null;
         }
@@ -669,7 +669,7 @@ final class ScriptPhysics {
 
     // ---------------- 力 / 速度 ----------------
 
-    private boolean applyImpulse(TopDownRuntime.Actor actor, float ix, float iy) {
+    private boolean applyImpulse(Actor actor, float ix, float iy) {
         BodyState bs = actor == null ? null : bodies.get(actor);
         if (bs == null || bs.type != BodyType.DYNAMIC) {
             return false;
@@ -680,7 +680,7 @@ final class ScriptPhysics {
         return true;
     }
 
-    private Scriptable velocity(TopDownRuntime.Actor actor) {
+    private Scriptable velocity(Actor actor) {
         ScriptJs.Flex o = (ScriptJs.Flex) api.newObj();
         BodyState bs = actor == null ? null : bodies.get(actor);
         if (bs != null) {
@@ -694,7 +694,7 @@ final class ScriptPhysics {
         return o;
     }
 
-    private boolean setVelocity(TopDownRuntime.Actor actor, float vx, float vy) {
+    private boolean setVelocity(Actor actor, float vx, float vy) {
         BodyState bs = actor == null ? null : bodies.get(actor);
         if (bs == null) {
             return false;
@@ -708,7 +708,7 @@ final class ScriptPhysics {
      * 朝目标抛：无重力时按「直线 + 指定速度」；有重力时按抛物线解算（力度按距离自适应），
      * 这样俯视角和侧视角两套关卡都能用同一个 API。
      */
-    private boolean throwAt(TopDownRuntime.Actor actor, float tx, float ty, float speed) {
+    private boolean throwAt(Actor actor, float tx, float ty, float speed) {
         BodyState bs = actor == null ? null : bodies.get(actor);
         if (bs == null) {
             return false;
@@ -746,7 +746,7 @@ final class ScriptPhysics {
         float y;
         float nx;
         float ny = -1f;
-        TopDownRuntime.Actor actor;
+        Actor actor;
         boolean sensor;
         boolean any;
 
@@ -797,16 +797,16 @@ final class ScriptPhysics {
     }
 
     private final class QueryCollector implements QueryCallback {
-        final List<TopDownRuntime.Actor> out = new ArrayList<TopDownRuntime.Actor>();
-        final Map<TopDownRuntime.Actor, Boolean> seen =
-                new IdentityHashMap<TopDownRuntime.Actor, Boolean>();
+        final List<Actor> out = new ArrayList<Actor>();
+        final Map<Actor, Boolean> seen =
+                new IdentityHashMap<Actor, Boolean>();
         float pointX;
         float pointY;
         boolean pointOnly;
 
         @Override
         public boolean reportFixture(Fixture fixture) {
-            TopDownRuntime.Actor a = actorOf(fixture);
+            Actor a = actorOf(fixture);
             if (a == null) {
                 return true;
             }
@@ -822,7 +822,7 @@ final class ScriptPhysics {
 
     private Scriptable queryPoint(float x, float y) {
         if (!enabled || phys == null) {
-            return entityArray(new ArrayList<TopDownRuntime.Actor>());
+            return entityArray(new ArrayList<Actor>());
         }
         QueryCollector qc = new QueryCollector();
         qc.pointOnly = true;
@@ -840,7 +840,7 @@ final class ScriptPhysics {
 
     private Scriptable queryAABB(float x, float y, float w, float h) {
         if (!enabled || phys == null) {
-            return entityArray(new ArrayList<TopDownRuntime.Actor>());
+            return entityArray(new ArrayList<Actor>());
         }
         float minX = Math.min(x, x + w);
         float minY = Math.min(y, y + h);
@@ -857,7 +857,7 @@ final class ScriptPhysics {
         return entityArray(qc.out);
     }
 
-    private Scriptable entityArray(List<TopDownRuntime.Actor> list) {
+    private Scriptable entityArray(List<Actor> list) {
         Context cx = Context.getCurrentContext();
         if (cx == null) {
             return api.newObj();
@@ -908,8 +908,8 @@ final class ScriptPhysics {
             Object[] handlers = collisionHandlers.toArray();
             for (int i = 0; i < queue.size(); i++) {
                 Pending p = queue.get(i);
-                TopDownRuntime.Actor a = p.a;
-                TopDownRuntime.Actor b = p.b;
+                Actor a = p.a;
+                Actor b = p.b;
                 if (a != null && (a.o == null || a.dead)) {
                     a = null;
                 }
@@ -1028,7 +1028,7 @@ final class ScriptPhysics {
     // ---------------- 数据结构 ----------------
 
     private static final class BodyState {
-        final TopDownRuntime.Actor actor;
+        final Actor actor;
         final Body body;
         final BodyType type;
         final boolean circle;
@@ -1039,7 +1039,7 @@ final class ScriptPhysics {
         float lastX;
         float lastY;
 
-        BodyState(TopDownRuntime.Actor actor, Body body, BodyType type, boolean circle,
+        BodyState(Actor actor, Body body, BodyType type, boolean circle,
                   float radiusPx, float halfWPx, float halfHPx, boolean sensor) {
             this.actor = actor;
             this.body = body;
@@ -1053,12 +1053,12 @@ final class ScriptPhysics {
     }
 
     private static final class Pending {
-        final TopDownRuntime.Actor a;
-        final TopDownRuntime.Actor b;
+        final Actor a;
+        final Actor b;
         final boolean sensor;
         float impulse;
 
-        Pending(TopDownRuntime.Actor a, TopDownRuntime.Actor b, boolean sensor) {
+        Pending(Actor a, Actor b, boolean sensor) {
             this.a = a;
             this.b = b;
             this.sensor = sensor;

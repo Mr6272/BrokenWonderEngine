@@ -143,7 +143,7 @@ public final class ScriptSelfTest {
         expectLog("bwe.scripts.call 等价", log, "SELFTEST scripts.call=7");
         expectLog("Promise 微任务在帧内排空", log, "SELFTEST promise.then=1");
         expectLog("world 事件总线 emit/on", log, "SELFTEST world.event=7");
-        TopDownRuntime.Actor spawned = actorNamed(rt, "spawned");
+        Actor spawned = actorNamed(rt, "spawned");
         check("spawn 后宿主里确有该实体", spawned != null && !spawned.dead, "");
         check("spawn 的 tags 写回宿主", spawned != null && spawned.o.tags.contains("enemy"), "");
         check("spawn 坐标写回宿主", spawned != null && Math.abs(spawned.x - 96f) < 0.01f
@@ -162,7 +162,7 @@ public final class ScriptSelfTest {
         expectLog("Entity.heal 回满", log, "SELFTEST ent.heal=1");
         expectLog("Entity.distanceTo", log, "SELFTEST ent.dist=1");
         expectLog("Entity 事件 on/damage 不崩", log, "SELFTEST ent.on=1");
-        TopDownRuntime.Actor crate = actorNamed(rt, "crate");
+        Actor crate = actorNamed(rt, "crate");
         check("宿主里 crate 存在", crate != null, "");
         if (crate != null) {
             check("crate setSize 写回 halfW/halfH", Math.abs(crate.o.halfW - 24f) < 0.01f
@@ -629,8 +629,8 @@ public final class ScriptSelfTest {
         return out;
     }
 
-    private static TopDownRuntime.Actor actorNamed(TopDownRuntime rt, String name) {
-        for (TopDownRuntime.Actor a : rt.actors) {
+    private static Actor actorNamed(TopDownRuntime rt, String name) {
+        for (Actor a : rt.actors) {
             if (a.o != null && name.equals(a.o.name)) {
                 return a;
             }

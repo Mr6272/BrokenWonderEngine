@@ -111,7 +111,7 @@ public final class ScriptContractTest {
         TopDownRuntime rtW = new TopDownRuntime(boot);
         rtW.scripts.update(0.02f);
         rtW.addWheel(3);
-        TopDownRuntime.Actor probe = rtW.actors.isEmpty() ? null : rtW.actors.get(0);
+        Actor probe = rtW.actors.isEmpty() ? null : rtW.actors.get(0);
         int wheelRead = rtW.scripts.api().readWheel();
         check("wheel：注入 +3 后读到非 0（抓得住「恒 0」回归）", wheelRead != 0, "读到 " + wheelRead);
         check("wheel：读到值等于注入值 +3（向上为正）", wheelRead == 3, "读到 " + wheelRead);

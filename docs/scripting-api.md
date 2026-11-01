@@ -175,6 +175,106 @@ function onSceneEnd(ctx) {}      // 运行期关闭时（窗口关闭 / 进程�
 
 键名兼容三种写法：`"Space"` / `" "` / `32`。
 
+### 2.3.1 `bwe.stick` —— 虚拟摇杆 / 虚拟按键
+
+触屏上没法按 WASD / 空格 / 回车 / Tab / Esc。这个模块**一行**就能把它们变成屏幕按钮：
+自动摆位（左下十字摇杆 + 右侧功能键）、自动画在最上层、自动优先消费触摸
+（手指落在按钮上时不会顺带点到场景）。
+
+| 调用 | 说明 |
+|---|---|
+| `bwe.stick.mount(spec?)` | 挂载。省略参数 = `"WASD,space,enter,tab,esc"` |
+| `bwe.stick.unmount()` | 释放所有按键状态（避免切场景后按键卡住） |
+| `bwe.stick.show()` / `hide()` | 显隐（hide 会同时释放按键） |
+| `bwe.stick.opacity(v)` | 整体不透明度，0.1~1（默认 0.55） |
+| `bwe.stick.axis()` | `{x, y}` 摇杆归一化轴值（-1~1，没按为 0,0） |
+| `bwe.stick.down(id)` | 某键是否按下（含摇杆映射的方向键，如 `"W"` / `"space"`） |
+| `bwe.stick.mounted` | 是否已挂载 |
+
+**布局语法**（逗号分隔的项）：
+
+| 写法 | 效果 |
+|---|---|
+| `"WASD"` / `"cross"` | 左下十字摇杆，映射 W/A/S/D |
+| `"arrows"` / `"dpad"` | 左下十字摇杆，映射 ↑↓←→ |
+| `"space"` `"enter"` `"tab"` `"esc"` | 右侧独立圆角按钮，依次竖向排布 |
+
+```js
+// 经典平台跳跃：十字 + 空格 + 回车
+bwe.stick.mount("WASD,space,enter");
+
+// 只要功能键（触摸点格子为主，别挡棋盘）
+bwe.stick.mount("space,enter,tab,esc");
+bwe.stick.opacity(0.5);
+
+// 每帧读摇杆（等价 bwe.input.axis，但只受摇杆影响）
+function onUpdate(dt) {
+  var a = bwe.stick.axis();
+  player.setPos(player.x + a.x * 120 * dt, player.y + a.y * 120 * dt);
+}
+```
+
+**实现要点**（从这里改引擎时别踩）：
+
+- 摇杆轴带 **15% 死区**，超过半径夹到 1，避免手抖漂移；
+- 摇杆按下后**手指移出底盘仍继续跟手**（手机摇杆的标准手感），抬起才复位；
+- 方向键状态会**同步写进 `keys[]`**，所以 `bwe.input.down("W")` 与手动按键表现一致；
+- `hide()` / 失焦必须 `releaseAll()` —— 否则会出现「按键一直按住」的经典 bug。
+
+### 2.3.2 `bwe.board` —— 网格模块的格子状态
+
+挂了 `grid.board` / `grid.tile` / `grid.reveal` / `grid.flag` / `game.minesweeper`
+任一模块后可用；没挂时 `mounted === false`。
+
+| 调用 | 说明 |
+|---|---|
+| `bwe.board.mounted` | 是否挂了网格类模块 |
+| `bwe.board.size()` | `{rows, cols, count}` |
+| `bwe.board.opened(idx)` / `flagged(idx)` | 该格是否已翻开 / 已标记 |
+| `bwe.board.indexAt(wx, wy)` | 世界坐标 → 格子索引（越界 `-1`） |
+| `bwe.board.open(idx)` | 翻开一格（无雷玩法用它代替「点开」，**不会判负**） |
+| `bwe.board.toggle(idx)` | 切换标记（没挂 `grid.flag` 时不生效） |
+| `bwe.board.floodCount(idx)` | 从该格泛洪能翻开多少格 |
+
+> **别和 `bwe.grid` 混淆**：`bwe.grid` 是**瓦片地图**的坐标换算（`toCell` / `toWorld` / `snap`），
+> 任何工程都有；`bwe.board` 才是本次拆分出的**网格模块**的格子状态。
+
+### 2.3.3 `bwe.textinput` —— 点一下就能键入的输入框
+
+解决「手机上改不了数字参数」：`40 雷` 用 +/- 要点三十多次。现在点一下数值框就能直接输入。
+桌面端走物理键盘；Android 由宿主自动弹系统软键盘（引擎调宿主，脚本不用关心）。
+
+| 调用 | 说明 |
+|---|---|
+| `bwe.textinput.define(id, value, min?, max?, numeric?)` | 定义/更新输入框 |
+| `bwe.textinput.rect(id, nx, ny, nw, nh)` | 归一化位置（0~1，相对逻辑视口） |
+| `bwe.textinput.value(id)` | 当前文本（编辑中是用户敲的内容） |
+| `bwe.textinput.number(id, fallback)` | 当前整数（自动按 min/max 钳制） |
+| `bwe.textinput.active()` | 正在编辑的框 id（没有则空串） |
+| `bwe.textinput.editing` | 是否有框在编辑（画高亮/光标用） |
+| `bwe.textinput.cancel()` | 取消编辑 |
+| `bwe.textinput.onSubmit(fn)` | 回车 / 点框外确认时回调 `(id, text)` |
+
+```js
+// 每帧同步布局（脚本知道自己的坐标），引擎负责命中测试与输入
+syncInputField("mines", fx, fy, fw, fh, MS.mines, 1, cap, W);
+
+// 提交时应用
+bwe.textinput.onSubmit(function (id, text) {
+  MS[id] = Math.max(1, Number(text) || 1);
+  pushBoard();
+});
+
+// 画高亮：编辑中的框底色变白，并在文字右侧画光标
+if (bwe.textinput.editing === "mines") {
+  box(fx, fy, fw, fh, "#ffffff");
+  box(fx + fw / 2 + tw / 2 + 2, fy + 3, 2, fh - 6, "#1a66ff");
+}
+```
+
+> 引擎侧行为：点框内 → 激活并清空旧值（直接敲新值比「全选覆盖」更符合触摸直觉）；
+> 点框外 / 回车 → 提交；Esc → 取消。输入框优先于场景点击，不会顺手点到棋盘。
+
 ### 2.4 `bwe.camera`
 
 | 调用 | 说明 |

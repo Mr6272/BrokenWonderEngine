@@ -19,6 +19,33 @@ import java.util.Date;
  */
 public final class BweLauncher {
 
+    /**
+     * 平台后端：把「日志」和「致命错误提示」两件事从平台细节里拆出来。
+     *
+     * <p><b>为什么需要</b>：桌面端写 {@code Build/bwe.log} + 弹 Swing 对话框；
+     * Android 上没有可写目录、也没有对话框，只能写 logcat。
+     * 早期做法是给 Android 单独复制一份同名 BweLauncher，结果两端源码分叉、
+     * 且 Gradle 源集里同名类冲突。现在改成「一份源码 + 可替换后端」：
+     * Android 启动时调 {@link #setBackend} 注入自己的实现即可。
+     *
+     * <p>不注入时保持桌面默认行为，所以桌面端零改动。
+     */
+    public interface Backend {
+        /** 普通日志。 */
+        void log(File boot, String message);
+
+        /** 致命错误（含堆栈）。 */
+        void fail(File boot, String message, Throwable t);
+    }
+
+    /** 当前后端；null = 走桌面默认实现（写文件 + Swing）。 */
+    private static volatile Backend backend;
+
+    /** 安装平台后端（Android 在 Application/Activity 启动时调用一次）。 */
+    public static void setBackend(Backend b) {
+        backend = b;
+    }
+
     private BweLauncher() {
     }
 
@@ -76,6 +103,11 @@ public final class BweLauncher {
     }
 
     public static void log(File boot, String message) {
+        Backend b = backend;
+        if (b != null) {
+            b.log(boot, message);
+            return;
+        }
         System.out.println("[BWE] " + message);
         File log = logFile(boot);
         try (PrintWriter out = new PrintWriter(new OutputStreamWriter(
@@ -86,6 +118,11 @@ public final class BweLauncher {
     }
 
     public static void fail(File boot, String message, Throwable t) {
+        Backend b = backend;
+        if (b != null) {
+            b.fail(boot, message, t);
+            return;
+        }
         StringWriter sw = new StringWriter();
         t.printStackTrace(new PrintWriter(sw));
         log(boot, message + "\n" + sw);

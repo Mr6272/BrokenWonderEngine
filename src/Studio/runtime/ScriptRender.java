@@ -54,14 +54,23 @@ final class ScriptRender {
         String tint;
         boolean shadow = true;
         float u0, v0, u1, v1 = 1f;
-        TopDownRuntime.Texture tex;
+        Texture tex;
     }
 
     private final ScriptEngine engine;
     private final TopDownRuntime host;
 
     /** 文字纹理缓存：key = 字号|颜色|阴影|内容。 */
-    private final Map<String, TopDownRuntime.Texture> textCache = new HashMap<String, TopDownRuntime.Texture>();
+    private final Map<String, Texture> textCache = new HashMap<String, Texture>();
+
+    /**
+     * 清空文字纹理缓存（GL 上下文重建后必须调）。
+     * 缓存里存的是旧上下文的纹理 id，重建后 bind 它们只会得到黑色。
+     */
+    void clearTextTextures() {
+        textCache.clear();
+        textLru.clear();
+    }
     /**
      * LRU 顺序表（最近使用的在最后）。{@link #textCache} 单靠 HashMap 无上限：
      * HUD 里 {@code "FPS 62"}、{@code "金币 37"}、计时器这类<b>每秒都变</b>的文本
@@ -70,11 +79,11 @@ final class ScriptRender {
      * 这里加硬上限 + 淘汰，把缓存变成真正的有界缓存。
      */
     private static final int TEXT_CACHE_MAX = 256;
-    private final LinkedHashMap<String, TopDownRuntime.Texture> textLru =
-            new LinkedHashMap<String, TopDownRuntime.Texture>(16, 0.75f, true);
+    private final LinkedHashMap<String, Texture> textLru =
+            new LinkedHashMap<String, Texture>(16, 0.75f, true);
     /** 被淘汰的纹理：登记给宿主，下一帧在 GL 线程里真正 glDeleteTextures。 */
-    private final java.util.ArrayDeque<TopDownRuntime.Texture> evicted =
-            new java.util.ArrayDeque<TopDownRuntime.Texture>();
+    private final java.util.ArrayDeque<Texture> evicted =
+            new java.util.ArrayDeque<Texture>();
     /** 累计创建过的文本纹理数（只增不减，用于证明「有界」而不是「没创建」）。 */
     private int textCreated;
 
@@ -256,14 +265,14 @@ final class ScriptRender {
         }
     }
 
-    private TopDownRuntime.Texture textTexture(Cmd c) {
+    private Texture textTexture(Cmd c) {
         int fs = Math.max(6, Math.round(c.size));
         // 高 DPI 超采样：纹理按「逻辑字号 × 物理/逻辑倍率」生成。
         // 否则 GL 把整幅画面放大 1.5 倍时，文字纹理被 NEAREST 插值拉伸 → 发虚/锯齿。
         float scale = host.displayScale();
         int px = Math.max(6, Math.round(fs * scale));
         String key = px + "|" + c.color + "|" + (c.shadow ? "1" : "0") + "|" + c.text;
-        TopDownRuntime.Texture cached = textCache.get(key);
+        Texture cached = textCache.get(key);
         if (cached != null) {
             textLru.get(key); // 触碰：把这个 key 移到 LRU 末尾
             return cached;
@@ -273,7 +282,7 @@ final class ScriptRender {
             return null;
         }
         try {
-            TopDownRuntime.Texture t = host.textureFromImage(img);
+            Texture t = host.textureFromImage(img);
             if (t != null) {
                 textCache.put(key, t);
                 textLru.put(key, t);
@@ -289,12 +298,12 @@ final class ScriptRender {
     /** 超上限时按 LRU 淘汰，并把旧纹理登记给宿主销毁（避免显存泄漏）。 */
     private void trimTextCache() {
         while (textCache.size() > TEXT_CACHE_MAX) {
-            java.util.Iterator<Map.Entry<String, TopDownRuntime.Texture>> it =
+            java.util.Iterator<Map.Entry<String, Texture>> it =
                     textLru.entrySet().iterator();
             if (!it.hasNext()) {
                 return;
             }
-            Map.Entry<String, TopDownRuntime.Texture> eldest = it.next();
+            Map.Entry<String, Texture> eldest = it.next();
             it.remove();
             textCache.remove(eldest.getKey());
             if (eldest.getValue() != null) {
@@ -309,7 +318,7 @@ final class ScriptRender {
             return;
         }
         while (!evicted.isEmpty()) {
-            TopDownRuntime.Texture t = evicted.poll();
+            Texture t = evicted.poll();
             if (t != null && t.id >= 0) {
                 int[] ids = {t.id};
                 try {
@@ -344,6 +353,16 @@ final class ScriptRender {
             }
         }
         return new Font(Font.SANS_SERIF, Font.PLAIN, size);
+    }
+
+    /**
+     * 给宿主用的文字纹理生成入口（虚拟摇杆的按键标签用）。
+     *
+     * <p>复用同一套 font/textImage 实现，保证标签与 HUD 文字风格一致；
+     * 内部只是 {@link #textImage} 的公开包装。
+     */
+    static BufferedImage textImageForHost(String text, int size, Color color, boolean shadow) {
+        return textImage(text, size, color, shadow);
     }
 
     /** 把一行文字画成 ARGB 图片；失败返回 null（绝不抛）。 */
@@ -387,6 +406,7 @@ final class ScriptRender {
     }
 
     // ---------------- 渲染 ----------------
+
 
     void render(GL2 gl, List<Cmd> cmds) {
         if (gl == null) {
@@ -442,8 +462,9 @@ final class ScriptRender {
         }
     }
 
+
     private void drawText(GL2 gl, Cmd c) {
-        TopDownRuntime.Texture t = c.tex;
+        Texture t = c.tex;
         if (t == null) {
             t = textTexture(c);
             c.tex = t;

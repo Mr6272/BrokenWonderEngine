@@ -163,6 +163,65 @@ function Invoke-Offscreen([string]$boot, [string]$prefix) {
     } finally { Pop-Location }
 }
 
+function Resolve-GradleJdk {
+    # Gradle 7.5.1 bundles Groovy 3.0.10, which cannot read JDK 20+ class files
+    # (Unsupported class file major version 69). Restrict to JDK 8~19.
+    $roots = @('C:\Program Files\Microsoft','C:\Program Files\Java',
+               'C:\Program Files\Eclipse Adoptium', 'D:\UnityAndroid\OpenJDK')
+    $found = @()
+    foreach ($r in $roots) {
+        if (-not (Test-Path $r)) { continue }
+        if (Test-Path (Join-Path $r 'bin\java.exe')) { $found += (Get-Item $r).FullName; continue }
+        foreach ($d in Get-ChildItem $r -Directory -ErrorAction SilentlyContinue) {
+            if (Test-Path (Join-Path $d.FullName 'bin\java.exe')) { $found += $d.FullName }
+        }
+    }
+    $usable = @()
+    foreach ($home_ in $found) {
+        $exe = Join-Path $home_ 'bin\java.exe'
+        try { $ver = (& $exe -version 2>&1 | Select-Object -First 1) -join '' } catch { continue }
+        if ($ver -match 'version "(\d+)') {
+            $major = [int]$Matches[1]
+            if ($major -ge 11 -and $major -le 19) {
+                $usable += [pscustomobject]@{ Home = $home_; Major = $major }
+            }
+        }
+    }
+    if ($usable.Count -eq 0) { return $null }
+    return ($usable | Sort-Object Major -Descending | Select-Object -First 1).Home
+}
+
+function Invoke-Android {
+    param([string]$Variant = 'release')
+    $androidRoot = Join-Path $RepoRoot 'android'
+    $gradlew = Join-Path $androidRoot 'gradlew.bat'
+    if (-not (Test-Path $gradlew)) {
+        throw "Android gradle wrapper missing: $gradlew (run 'gradle wrapper' in android/ once)."
+    }
+    $jdkHome = Resolve-GradleJdk
+    if (-not $jdkHome) { throw 'No usable JDK found for Gradle (need JDK 11~19; AGP 7.4.2 needs 11+, Groovy 3.0.10 caps at 19).' }
+    Write-Host "Android build with JAVA_HOME=$jdkHome (variant=$Variant)"
+    $env:JAVA_HOME = $jdkHome
+    $task = 'assembleRelease'
+    if ($Variant -eq 'debug') { $task = 'assembleDebug' }
+    Push-Location $androidRoot
+    try {
+        & $gradlew $task --no-daemon
+        if ($LASTEXITCODE -ne 0) { throw "gradlew $task failed exit=$LASTEXITCODE" }
+        $apkRel = 'app\build\outputs\apk\release\app-release.apk'
+        if ($Variant -eq 'debug') { $apkRel = 'app\build\outputs\apk\debug\app-debug.apk' }
+        $apk = Join-Path $androidRoot $apkRel
+        if (-not (Test-Path $apk)) { throw "APK not produced: $apk" }
+        $size = (Get-Item $apk).Length
+        $hasKey = (Test-Path (Join-Path $androidRoot 'signing.properties')) -or
+                  (Test-Path (Join-Path $androidRoot 'bwe-release.jks')) -or
+                  [bool]$env:BWE_KEYSTORE
+        $note = ''
+        if ($Variant -eq 'release' -and -not $hasKey) { $note = '  [TEST PACKAGE: falls back to debug signing]' }
+        Write-Host ('APK OK  {0}  {1:N1} MB{2}' -f $apk, ($size / 1MB), $note) -ForegroundColor Green
+    } finally { Pop-Location }
+}
+
 switch ($Command.ToLower()) {
     'build' { Invoke-Build }
     'test' { Invoke-Build; Invoke-Tests }
@@ -171,9 +230,10 @@ switch ($Command.ToLower()) {
     'apidocs' { Invoke-ApiDocs }
     'typecheck' { Invoke-Typecheck }
     'offscreen' { Invoke-Build; Invoke-Offscreen $Arg1 $Arg2 }
+    'android' { Invoke-Android $(if ($Arg1) { $Arg1 } else { 'release' }) }
     default {
         Write-Host "Unknown command: $Command"
-        Write-Host 'Available: build | test | test-all | run <Class> | apidocs [-Strict] | typecheck | offscreen <boot> <prefix> [frames] [w] [h]'
+        Write-Host 'Available: build | test | test-all | run <Class> | apidocs [-Strict] | typecheck | offscreen <boot> <prefix> [frames] [w] [h] | android'
         exit 2
     }
 }

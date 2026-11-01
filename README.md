@@ -119,6 +119,47 @@ npm run gen:examples
 - 扫雷的行数、列数、地雷数，以及换装每个部位的造型，都在「模块编辑器」（工具栏「模块」或 `M`）里调
 - 挂上 `game.minesweeper` / `game.dressup` 模块后，点「预览」可直接试玩
 
+### UI 场景（界面独立编一层）
+
+界面的排版不该和地图上的角色、地块混在同一个坐标系里。所以场景分成两类：
+
+| 类型 | 坐标系 | 干什么 |
+|------|--------|--------|
+| **世界场景** | 格 × `tileSize` | 地图、角色、地块、触发区 |
+| **UI 场景** | 设计分辨率像素（默认 1280×720） | 文字、图片、面板、按钮 |
+
+- 场景面板左栏分成「世界场景」与「UI 场景」两组，点「新建 UI」建一张设计稿
+- UI 场景的画布不画瓦片网格，改画「设计分辨率外框 + 5% 安全区」；右键菜单只给界面元素
+- 文字用 `tags: ["label"]` + `props.text / textSize / textColor / textAlign` 表达，运行时按真实字体渲染
+- 导出时 UI 场景进 `boot.json` 的 `uiScenes[]`（世界场景仍在 `scenes[]`），**旧工程导出的 boot.json 逐字节不变**
+- 运行时把设计分辨率按「等比 contain 居中」铺进真实窗口，所以窗口缩放不会裁掉界面
+- 完整契约见 [`docs/mapping-contract.md §6`](docs/mapping-contract.md)
+
+### 用 VS Code 写脚本
+
+编辑器「剧本」面板的 JS / Yarn 编辑器有两个按钮：**VS Code 打开** 与 **载入 VS Code 改动**。
+
+- 脚本存在 `.bwproj` 的 JSON 里，不是磁盘上的文件，所以服务端会把它**镜像**成
+  `web/.build/scripts/<工程名>/<脚本名>.js|.yarn`，再用 `code -g file:line` 打开（需要 `npm run serve`）
+- 在 VS Code 里改完保存，编辑器轮询到 mtime 变化后会亮出「载入 VS Code 改动」，点一下取回
+  （不自动覆盖，避免吞掉编辑器里正在敲的内容）
+- 服务端找不到 `code` 命令时不会只说失败：文件已经写好，返回里带 `file` 与可执行的下一步
+
+配套的 **BWE Script** VS Code 扩展给这些脚本提供补全 / 悬浮 / 规则检查：
+
+```powershell
+node tools/vscode-bwe/build-vsix.mjs
+code --install-extension tools/vscode-bwe/dist/bwe-script-0.1.0.vsix
+```
+
+- 输入 `bwe.` 出补全（401 条，来自 `data/bwe-api.json`，由 `node web/tools/gen-vscode-api.mjs` 从
+  `apiDocs.ts` + `bwe.d.ts` 生成）；悬浮显示签名、摘要、分组与 `docs/api` 链接
+- 规则检查（9 条）：`import` / `require` / `export`、浏览器宿主对象、`setTimeout/setInterval`、
+  `onSceneStart` 里访问 `ctx.self` 等 —— 运行时是 Rhino ES5，这些一律不存在
+- 开了 `npm run serve` 后自动把源码 POST 到 `/api/js-check` 合并 TypeScript 诊断；
+  没开服务静默降级成「仅规则检查」，不弹错误
+- 详见 [`tools/vscode-bwe/README.md`](tools/vscode-bwe/README.md)
+
 ## 已知边界
 
 - 渲染为 OpenGL 固定管线（`glBegin/glEnd` + 显示列表）。已做**纹理按路径共享 + 同纹理合批**：
@@ -156,4 +197,16 @@ foreach ($t in 'ScriptSelfTest','ScriptFieldsTest','ScriptPhysicsTest','ScriptAi
 
 # API 四方一致性（Java ↔ bwe.d.ts ↔ apiDocs.ts ↔ docs/api）
 node web/tools/verify-apidocs.mjs
+
+# UI 场景往返一致性（模型保存→重开 / 导出 / Java 运行时真解析）
+npm run verify:uiscene
+
+# VS Code 扩展：数据表同步 + 单元测试 + 打包
+node web/tools/gen-vscode-api.mjs --check
+node tools/vscode-bwe/test/analyzer.test.mjs
+node tools/vscode-bwe/test/table.test.mjs
+node tools/vscode-bwe/test/serverCheck.test.mjs
+node tools/vscode-bwe/test/extension.test.mjs
+node tools/vscode-bwe/build-vsix.mjs
 ```
+

@@ -60,7 +60,7 @@ export interface ModuleDef {
   experimental?: boolean;
 }
 
-export type ModuleCategoryId = "move" | "render" | "detect" | "event" | "combat" | "dialogue" | "fx" | "game";
+export type ModuleCategoryId = "move" | "render" | "detect" | "event" | "combat" | "dialogue" | "fx" | "grid" | "game";
 
 export interface ModuleCategory {
   id: ModuleCategoryId;
@@ -165,6 +165,22 @@ export interface SceneModel {
   objects: SceneObject[];
   onStartScript: string;
   bgmAssetId: string;
+  /**
+   * ★ UI 场景标记（optional，缺省 = 普通世界场景）。
+   *
+   * 「UI 场景」是一张**屏幕空间**画布：尺寸单位是设计分辨率像素，不是「格 × tileSize」。
+   * 因此 UI 对象（文字 / 图片 / 面板）不会被混进地图的地形/角色图层里，
+   * 摆位也不受 tileSize 影响 —— 这正是「UI 不该和场景物体混在一起编辑」的落地方式。
+   *
+   * 导出时 UI 场景进 boot.json 的 `uiScenes[]`（世界场景仍进 `scenes[]`），
+   * 运行时在世界绘制之后覆盖绘制，并以「等比 contain 居中」变换把设计分辨率映射到真实视口，
+   * 所以 1280×720 的设计稿在任何窗口尺寸下都完整可见、位置比例一致。
+   */
+  ui?: boolean;
+  /** UI 场景设计分辨率宽（像素）。ui=true 时有效，缺省 1280。 */
+  designW?: number;
+  /** UI 场景设计分辨率高（像素）。ui=true 时有效，缺省 720。 */
+  designH?: number;
   /**
    * ★ 开放世界扩展段（全部 optional，旧工程没有 → 运行时按"单层平地"处理）。
    *
@@ -313,6 +329,84 @@ export function createScene(name: string, widthTiles = 60, heightTiles = 40): Sc
     onStartScript: "",
     bgmAssetId: ""
   };
+}
+
+/** UI 场景的默认设计分辨率。1280×720 是 16:9，主流手机横屏与桌面窗口都能等比容纳。 */
+export const UI_DESIGN_W = 1280;
+export const UI_DESIGN_H = 720;
+
+/**
+ * 新建一张 UI 场景。
+ *
+ * 与 createScene 的差别只在三个字段：ui=true 与设计分辨率。
+ * 仍然保留 layers / widthTiles / heightTiles —— 后者是「兜底几何」：
+ * 设计分辨率换算成格数（按 32px 一格）存进去，让不知道 UI 概念的老代码
+ * （例如导出器的通用地图尺寸校验）拿到一个合法值而不是 0。
+ */
+export function createUiScene(
+  name: string,
+  designW = UI_DESIGN_W,
+  designH = UI_DESIGN_H,
+  tileSize = 32
+): SceneModel {
+  const w = Math.max(64, Math.round(designW));
+  const h = Math.max(64, Math.round(designH));
+  const ts = Math.max(4, tileSize);
+  return {
+    id: uid(),
+    name,
+    originX: 0,
+    originY: 0,
+    // 只是一份「看起来合理」的兜底格数；真正参与布局的是 designW/designH。
+    widthTiles: Math.max(1, Math.round(w / ts)),
+    heightTiles: Math.max(1, Math.round(h / ts)),
+    layers: [createLayer("背景"), createLayer("界面"), createLayer("浮层")],
+    objects: [],
+    onStartScript: "",
+    bgmAssetId: "",
+    ui: true,
+    designW: w,
+    designH: h
+  };
+}
+
+/** 这张场景是不是 UI 场景（旧工程没有 ui 字段 → false）。 */
+export function isUiScene(s: SceneModel | null | undefined): boolean {
+  return !!s && s.ui === true;
+}
+
+/**
+ * 场景在**当前语境**下的像素宽高。
+ *
+ * 世界场景 = 格数 × tileSize；UI 场景 = 设计分辨率。
+ * 画布、缩放、导出、离屏渲染都必须走这一个函数，否则「UI 场景里画布按格子算尺寸」
+ * 就会出现整体缩放对不上的经典错位。
+ */
+export function scenePixelSize(
+  s: SceneModel,
+  tileSize: number
+): { w: number; h: number } {
+  if (isUiScene(s)) {
+    return {
+      w: Math.max(64, Math.round(s.designW ?? UI_DESIGN_W)),
+      h: Math.max(64, Math.round(s.designH ?? UI_DESIGN_H))
+    };
+  }
+  const ts = Math.max(4, tileSize || 32);
+  return {
+    w: Math.max(1, Math.round(s.widthTiles * ts)),
+    h: Math.max(1, Math.round(s.heightTiles * ts))
+  };
+}
+
+/** UI 场景在设计分辨率内的一条「安全区」（四周各留 5%，避开刘海/圆角/系统手势区）。 */
+export function uiSafeArea(
+  s: SceneModel
+): { x: number; y: number; w: number; h: number } {
+  const size = scenePixelSize(s, 32);
+  const mx = size.w * 0.05;
+  const my = size.h * 0.05;
+  return { x: mx, y: my, w: size.w - mx * 2, h: size.h - my * 2 };
 }
 
 export function createProject(name = "未命名工程"): Project {
@@ -601,6 +695,15 @@ export function normalizeProject(raw: unknown): Project {
     if (ext.buildings !== undefined) (sc as unknown as Record<string, unknown>).buildings = ext.buildings;
     if (ext.navLinks !== undefined) (sc as unknown as Record<string, unknown>).navLinks = ext.navLinks;
     if (ext.roadNetwork !== undefined) (sc as unknown as Record<string, unknown>).roadNetwork = ext.roadNetwork;
+    // ★ UI 场景三件套同样必须显式透传：normalizeProject 是「打开 .bwproj」的唯一入口，
+    //   漏了这三行 = 用户打开 UI 场景 → 随手改一个字 → 保存，UI 场景就退化成世界场景。
+    if (ext.ui === true) (sc as unknown as Record<string, unknown>).ui = true;
+    if (typeof ext.designW === "number" && ext.designW > 0) {
+      (sc as unknown as Record<string, unknown>).designW = Math.round(ext.designW);
+    }
+    if (typeof ext.designH === "number" && ext.designH > 0) {
+      (sc as unknown as Record<string, unknown>).designH = Math.round(ext.designH);
+    }
     const objs = Array.isArray(s.objects) ? s.objects : [];
     for (const o of objs) {
       sc.objects.push({

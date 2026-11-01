@@ -86,16 +86,16 @@ public final class OpenWorldSoakTest {
         check("脚本已启动", engine.started && !engine.failed, "");
 
         // 记录初始实体集合
-        List<TopDownRuntime.Actor> initial = new ArrayList<TopDownRuntime.Actor>(rt.actors);
+        List<Actor> initial = new ArrayList<Actor>(rt.actors);
         int n0 = initial.size();
         // 场景本身 1 个玩家 + world 脚本 onSceneStart 里生成 18 平民 + 5 车 = 24。
         // 阈值取 >= 20（而不是 30）：这测的是"生成器真的生成了"，不是固定数字。
         check("初始实体 >= 20（平民 + 车辆已生成）", n0 >= 20, "n=" + n0);
 
         // 记录若干被跟踪实体的初始位置（平民 / 车辆各取几个）
-        List<TopDownRuntime.Actor> trackNpc = new ArrayList<TopDownRuntime.Actor>();
-        List<TopDownRuntime.Actor> trackCar = new ArrayList<TopDownRuntime.Actor>();
-        for (TopDownRuntime.Actor a : rt.actors) {
+        List<Actor> trackNpc = new ArrayList<Actor>();
+        List<Actor> trackCar = new ArrayList<Actor>();
+        for (Actor a : rt.actors) {
             if (a.o == null) {
                 continue;
             }
@@ -155,7 +155,7 @@ public final class OpenWorldSoakTest {
         // ---- NPC 真的动了 ----
         int npcMoved = 0;
         for (int i = 0; i < trackNpc.size(); i++) {
-            TopDownRuntime.Actor a = trackNpc.get(i);
+            Actor a = trackNpc.get(i);
             if (a.dead) {
                 npcMoved++; // 死亡也算"状态变化"，不算卡死
                 continue;
@@ -172,7 +172,7 @@ public final class OpenWorldSoakTest {
         // ---- 车辆真的在动 ----
         int carMoved = 0;
         for (int i = 0; i < trackCar.size(); i++) {
-            TopDownRuntime.Actor a = trackCar.get(i);
+            Actor a = trackCar.get(i);
             if (a.dead) {
                 carMoved++;
                 continue;
@@ -198,7 +198,7 @@ public final class OpenWorldSoakTest {
         check("最慢单帧 < 80ms（无长卡顿）", maxMs < 80.0, "max=" + fmt(maxMs) + "ms");
 
         // ---- 通缉 / 警察链路 ----
-        TopDownRuntime.Actor player = engine.findPlayerActor();
+        Actor player = engine.findPlayerActor();
         check("玩家仍存在", player != null && !player.dead || player != null, "");
         // 触发一次犯罪（走与脚本完全相同的 world 事件通道：引擎 emitWorld → 脚本 world.on）
         //
@@ -228,7 +228,7 @@ public final class OpenWorldSoakTest {
         if (spatialOk && ScriptSpatial.LAST != null) {
             // 记录警察楼层分布
             int beforeLevelSum = 0;
-            for (TopDownRuntime.Actor a : new ArrayList<TopDownRuntime.Actor>(rt.actors)) {
+            for (Actor a : new ArrayList<Actor>(rt.actors)) {
                 if (a.o != null && a.o.tags.contains("police")) {
                     beforeLevelSum += ScriptSpatial.LAST.levelOf(a);
                 }
@@ -271,7 +271,7 @@ public final class OpenWorldSoakTest {
 
     private static int countTag(String tag) {
         int n = 0;
-        for (TopDownRuntime.Actor a : new ArrayList<TopDownRuntime.Actor>(host().actors)) {
+        for (Actor a : new ArrayList<Actor>(host().actors)) {
             if (a != null && !a.dead && a.o != null && a.o.tags.contains(tag)) {
                 n++;
             }
