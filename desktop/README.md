@@ -67,6 +67,172 @@ node desktop/main.mjs [--console] [--shot=<png>] [--size=WxH] [--probe=<json>] [
   非背景占比**双边**的理由：单边下界只防「界面没起来」（只剩底栏），
   防不了「渲染退化成噪点/纯色块」——那种图前景接近 100%，看着"内容很多"，其实什么都没画对。
 
+## 模型切换与 Trae 导入
+
+编辑器支持**多供应商、一份可增删的模型清单**（下拉开切），数据在 `settings.json` 的 `ai.models`：
+
+```json
+{
+  "ai": {
+    "activeModelId": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+    "models": [
+      { "id": "ds-flash", "label": "DeepSeek Flash", "provider": "deepseek",
+        "baseUrl": "https://api.deepseek.com", "model": "deepseek-v4-flash",
+        "apiKey": "", "encryptedApiKey": "<DPAPI 密文>", "needsKey": true, "source": "" }
+    ]
+  }
+}
+```
+
+- 每条模型可有**自己的** `apiKey` —— 不同供应商用不同 key，不会串用。
+  Key 落盘时统一加密成 `encryptedApiKey`（safeStorage/DPAPI），明文只在内存。
+- `provider` 支持 `deepseek` / `siliconflow` / `openai-compatible` / `mock` / `trae-imported`。
+  预设（baseUrl、建议模型名、去哪拿 key）见 `desktop/lib/ai/provider.mjs` 的 `PRESETS`。
+- **向后兼容**：老的 `ai.provider` + `ai.modelFlash/modelPro`（两槽配置）继续有效，
+  `resolveProvider(ai, "flash"|"pro")` 行为与改造前完全一致（有单测锁定）。
+
+### IPC 三通道（渲染侧经 `preload` 调用）
+
+| 通道 | 返回 |
+|---|---|
+| `bwe:ai-import-trae` | `{ ok, providers, warnings, dbPath, totalEntries, uniqueModels, importedEntries }` |
+| `bwe:ai-models` | `{ ok, models: [{id,label,provider,baseUrl,model,ready,needsKey,source,contextWindow,reason}], active }` |
+| `bwe:ai-set-model` | 参数 `{ id, apiKey? }` → `{ ok, models, active, message, ready }` |
+| `bwe:ai-add-model` | 参数 `{ label, provider, baseUrl, model, apiKey? }` → `{ ok, models, active, id, created, updated }`（同 `provider+baseUrl+model` 就地覆盖） |
+| `bwe:ai-probe-model` | 参数 `{ id }` → `{ ok, id, status, reachable, method, detail, reason, latencyMs }`（**真实探测连通性**） |
+
+### ⚠ `ready` 的语义边界（重要）
+
+`ready === true` 的意思是 **「配置齐全」**（provider/baseUrl/model/apiKey 都到位），
+**不是「能连上」**。填了假 key、或地址根本不通，`ready` 仍然是 `true`。
+
+为什么不在加载清单时逐个探测：几十个模型每个打一次网络请求会让「打开设置」卡死几秒到几十秒。
+所以拆成两层：
+
+| 层 | 谁提供 | 回答的问题 | 成本 |
+|---|---|---|---|
+| 配置状态 | `ready` / `needsKeyMissing` / `hasApiKey` | 我配好了没 | 零网络 |
+| 连通状态 | `bwe:ai-probe-model`（`probeModel(id)`） | 这条现在能用吗 | 一次 `/models` 请求，3 秒超时 |
+
+UI 应该用前者显示「未配置」，用后者显示「测试连通性」的结果 —— 两者混用会让用户
+看到「可用」然后一发消息就 401。
+
+`probeModel()` 的 `ok` 是**三态**，不要当布尔用：
+- `true` 明确可用（端点连通且 Key 被接受）
+- `false` 明确不可用（连不上 / Key 明确无效 / HTTP 错误）
+- `null` **判不出来** —— 例如 `/models` 端点权限要求更高而拒绝了 key。
+  这种情况 `reason` 是 `unauthorized-on-models`，`detail` 会说明
+  「不代表对话接口一定失败」。宁可给出模糊的正确答案，也不给确切的错误答案。
+
+`aiStatus()` 额外返回 `activeModelId` / `activeModel` / `modelList` / `intendedProvider`，
+面板据此渲染下拉框与「缺 key」提示。
+
+### 从 Trae 导入（`desktop/lib/ai/trae-import.mjs`）
+
+读 `%APPDATA%\Trae CN\User\globalStorage\state.vscdb`（**只读**打开，`node:sqlite`），
+取键 `4337993333357580_AI.agent.model.model_list_map`，按 `base_url` 归组去重（实测 46 条 → 2 条）。
+
+**三条硬约束（写在代码注释里，改之前先读）**：
+1. **不解密、不伪造 Trae 的 API Key。** 它的 key 是设备绑定的 AES-256-GCM（密钥服务端下发），
+   DPAPI/os_crypt 主密钥/sha256(deviceId) 等派生全部认证失败，既解不开也不该去解。
+   导入条目的 `apiKey` **恒为空**、`needsKey: true`、`source: "trae-import"`，界面提示手动填。
+2. **空 key 绝不当成可用。** `resolveProvider` 见到 `needsKey && !apiKey` 就 `ready:false`
+   并给出人话原因 —— 否则界面显示「已就绪」，用户一提问就 401。
+3. **模型名取 `name` 里 `//` 之后的部分**，不是 `custom_model_id`。
+   `custom_model_id`（如 `7443714`）只是 Trae 内部数字 ID，发给供应商会报「模型不存在」。
+   （实测踩过：拿它当 model 发出去必然失败。）数字 ID 保留在 `traeModelId` 里仅供排查。
+
+网络可达性自检：对每个 baseUrl 探 `HEAD /models`（3 秒超时），遇到 404/405 自动降级 `GET`
+—— 实测 SiliconFlow 的 HEAD 返 404 而 GET 返 401，只用 HEAD 会误判。**拿到任何 HTTP 响应
+就算可达**（401 恰好证明「网络通、只是没 key」），失败只记 `reachable:false`，不阻断导入。
+
+真实验证命令见「验收命令清单」：
+- 第 5b 项 `--ipc-probe`：打印四个通道的真实返回（覆盖 safeStorage 加密 + 真实 sqlite + 真实网络）；
+- 第 5c 项 `verify-models.mjs`：**真实 settings → 真实下拉框**的闭环验收。
+
+#### `--user-data=<绝对目录>`（让自动化读真实配置）
+
+自动化模式（`--shot` / `--ipc-probe`）默认用一次性 `pid` 后缀 userData（并发安全），
+于是里面的 settings **永远是空的** —— 意味着「模型清单 / 已填的 key / 切到哪个模型」
+从未在自动化里被真实验证过。`--user-data` 就是出口：
+
+```bash
+# 语义：用一份现成的用户配置做验收（非隔离）
+node desktop/main.mjs --shot=... --user-data=D:/tmp/verify-ud --tap="[data-panel-tab=ai]"
+```
+
+- 给了目录 → `USER_DATA_DIR = 该目录`（**不加 pid 后缀**），不存在则创建；
+- 不参与 `.shot-profile/` 的「只保留最近 6 个」清理，**也不在退出时删除**（那是用户数据）；
+- 启动日志会注明 `（来自 --user-data，非隔离模式）`。
+
+#### `--probe-dom=<json>`（读 DOM 内容而不是只数元素）
+
+`UI 骨架: xxx=1` 只能证明"有这个元素"，证明不了"里面装的内容对不对"。
+`--probe-dom` 读真实 DOM，返回 `selects`（每个 select 的 option 数量与文本）、
+`modelSelect`（模型下拉框的专查，按 `[data-model-select]` → `.ai-panel select` → 首个 select 依次查找）、
+`aiPanelText`、`statusText` 并落盘 JSON。
+
+### 探测的可复跑验证（`verify-probe-scenarios.mjs`）
+
+`bwe:ai-probe-model` 的三态分类必须**真打网络**才能证明（单元测试用假 fetch，只证明逻辑对）。
+所以提供可复跑脚本，5 个场景各带明确期望：
+
+```bash
+node desktop/tools/verify-probe-scenarios.mjs
+node desktop/tools/verify-probe-scenarios.mjs --allow-offline   # 无网时按跳过处理
+```
+
+| 场景 | 期望 reason | 为什么期望它 |
+|---|---|---|
+| SiliconFlow · 假 key | `unauthorized` | 401 且响应体点名 `Token is invalid`（code 30014）→ 可确信 key 不对；**不是 404 说明地址与模型名都对** |
+| SiliconFlow · 无 key | `unauthorized` | 没配 key 时 401 是明确的「缺配置」 |
+| DeepSeek · 假 key | `unauthorized` | 401 响应体含 `api key ... is invalid` |
+| 不存在的域名 | `dns` | DNS 失败在 `err.cause.code` 里（Node fetch 的 message 只有 `fetch failed`） |
+| 连不上的地址 | `network` | 端口不通要与 DNS 区分，否则排查时分不清 |
+
+实测输出（本机，2026-11-02）：
+```
+SiliconFlow · 假 key   unauthorized / ok=false  status=401  428ms  PASS
+SiliconFlow · 无 key   unauthorized / ok=false  status=401  356ms  PASS
+DeepSeek · 假 key      unauthorized / ok=false  status=401  323ms  PASS
+不存在的域名            dns / ok=false           status=0    106ms  PASS
+连不上的地址            network / ok=false       status=0    1ms    PASS
+[probe-scenarios] 全部 5 个场景符合期望
+```
+（不需要真 key —— 假 key 恰好是最强的判据：401 + 点名无效 = 地址与模型名都对。）
+
+### ⚠ 新增 IPC 通道必须登记契约（否则测试会红）
+
+新增/修改任何 IPC 通道，**必须同时登记到 `desktop/lib/ipc-contract.mjs`**
+（`desktop/test/ipc-contract.test.mjs` 会机器校验 preload 方法名、通道名、返回字段与语义注释）。
+
+**契约靠人读人改会漂，靠数据校验不会。** 这条规则的由来是一次真实的跨线断裂：
+B 侧按 `aiProbeModel(id)` 期望 `{kind, httpStatus, ms}`，而主进程实际是 `probeModel(id)` 返回
+`{reason, status, latencyMs}` —— 方法名与三个字段名全不同，且**没有任何测试变红**（字段全 undefined
+后静默 fallback 到 error）。
+
+契约测试的两层：
+- **静态层**：preload 引用的通道 ↔ 主进程注册的通道 ↔ 声明表，三方必须完全对齐（防「一边叫 A、一边叫 B」）。
+- **运行时层**：真 Electron 里跑只读探针，比对**实际返回的字段集合**与声明。
+  （不用静态解析 return 对象：本仓库有 `return await respond(...)` 和 `{...response, ...}` 两种形态，
+  硬解析必然误报，误报一多测试就没人信了。）
+  注意 `bwe:ai-probe-model` 有 **mock 与真实两个分支**，两个都必须查 —— 只查 mock 的话，
+  真实分支的字段名被改坏测不出来（我用注入断裂验证过这个盲区）。
+
+### 验收工具只读原则
+
+`verify-models.mjs` 用 `--ipc-probe-no-import`（只读模式）读被测目录，**不修改被测状态**。
+实测证据（同一份 settings.json，跑前/跑后 hash）：
+
+| 模式 | settings.json | 结论 |
+|---|---|---|
+| `--ipc-probe`（完整） | 297 → 2382 字节，hash **变了** | 会执行 Trae 导入并写入模型清单 |
+| `--ipc-probe --ipc-probe-no-import` | 297 → 297 字节，hash **未变** | 只读，符合预期 |
+
+**验收工具必须只读**，否则「跑两次结果不同」会让人怀疑产品代码而不是工具。
+（注：Electron 自身会在 userData 下写 `Code Cache`/`IndexedDB` 等浏览器运行时文件，
+那是宿主行为、不影响业务状态；判断「有没有改被测状态」应看 `settings.json` 而非目录里的文件数。）
+
 ## 验收命令清单
 
 > README 是唯一会被后来人读的东西。**验收命令散落在对话里等于没有** —— 所以集中列在这里。
@@ -88,10 +254,15 @@ powershell -File tools/bwe.ps1 test          # 7 套件
 # ── 3. 桌面壳 / AI 层单测 ─────────────────────────────────────
 npm run desk:test
 #   等价于逐个跑：prefix / router / session / usage
-#   另有三个（重点，别漏）：
+#   另有五个（重点，别漏）：
 node desktop/test/png.test.mjs           # 截图判死阈值（10 项：主题/空白/双边非背景）
 node desktop/test/ai-bridge.test.mjs     # AI 端到端链路（9 项：mock 流式/工具/取消/压缩）
 node desktop/test/concurrency.test.mjs   # 并发截图回归（2 进程 × 2 轮，两边都必须出奶油图）
+node desktop/test/trae-import.test.mjs   # Trae 导入（12 项：去重/模型名/不伪造 key/降级）
+node desktop/test/models.test.mjs        # 模型清单（20 项：向后兼容/按 id 取/每模型独立 key）
+node desktop/test/modelCatalog.test.mjs   # 清单写操作（18 项：判重/id/apiKey 三态）
+node desktop/test/probe.test.mjs         # 连通性探测（18 项：三态分类/降级/cause 链）
+node desktop/test/ipc-contract.test.mjs  # IPC 契约一致性（11 项：通道/字段/语义，含真进程运行时校验）
 
 # ── 4. 打包 + 产物自检（双尺寸断言）───────────────────────────
 node desktop/tools/package.mjs --verify
@@ -104,6 +275,19 @@ node desktop/tools/package.mjs --verify
 node desktop/main.mjs --shot=.tmp_desk/shot.png --size=1600x1000 --console
 node desktop/main.mjs --shot=.tmp_desk/ai.png --size=1600x1000 --tap="[data-panel-tab=ai]" --probe=.tmp_desk/ai.json --console
 node desktop/main.mjs --shot=.tmp_desk/narrow.png --size=1280x720 --probe=.tmp_desk/narrow.json --console
+
+# ── 5b. 模型清单 / Trae 导入（在真 Electron 里跑，覆盖 safeStorage + sqlite + 网络）──
+node desktop/main.mjs --ipc-probe=.tmp_desk/ipc.json --console
+
+# ── 5c. 模型切换功能的机器可验证证据（真实 settings → 真实下拉框）──
+node desktop/tools/verify-models.mjs
+
+# ── 5d. 探测三态的真实网络验证（可选，需外网；无网加 --allow-offline）──
+node desktop/tools/verify-probe-scenarios.mjs
+#   期望：cryptoAvailable=true；ai-import-trae 的 ok=true、providers 含 siliconflow、
+#        uniqueModels=2、reachable=true/reachableStatus=401；
+#        ai-models 每项 ready=false + needsKey=true（导入的模型没 key）；
+#        ai-status 的 intendedProvider=siliconflow 而 provider=mock（缺 key 时降级）
 
 # ── 6. 打包产物也能截（双击 exe 那条路）──────────────────────
 "desktop/dist/win-unpacked/BWE Studio.exe" --shot=D:/tmp/ai.png --size=1600x1000 --tap="[data-panel-tab=ai]" --console

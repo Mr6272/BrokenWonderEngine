@@ -125,6 +125,54 @@ const host = {
     return subscribe("ai:event", cb);
   },
 
+  // ---------- 模型切换 / Trae 导入 ----------
+  /** 从本机 Trae 配置导入自定义供应商（导入的条目 key 恒为空，需手动填）。 */
+  aiImportTrae() {
+    return invoke("bwe:ai-import-trae");
+  },
+  /** 模型清单 + 当前选中 id（界面下拉框用）。 */
+  aiModels() {
+    return invoke("bwe:ai-models");
+  },
+  /** 切换当前模型（可顺带补填该模型的 API Key；空串不清 key，要清用 aiClearModelKey）。 */
+  aiSetModel(id, apiKey) {
+    const payload = { id: String(id ?? "") };
+    // 只有明确传了「非空」apiKey 才带上：空串在 UI 上等于「没填」，
+    // 绝不能因此把用户已存的 key 清掉（主进程侧同样按此语义，双保险）。
+    if (typeof apiKey === "string" && apiKey.trim().length > 0) payload.apiKey = apiKey;
+    return invoke("bwe:ai-set-model", payload);
+  },
+  /** 手动添加/覆盖一条模型（同 provider+baseUrl+model 就地更新，不新增第二条）。 */
+  aiAddModel(input) {
+    const src = input && typeof input === "object" ? input : {};
+    const payload = {
+      label: src.label !== undefined ? String(src.label) : "",
+      provider: String(src.provider ?? ""),
+      baseUrl: src.baseUrl !== undefined ? String(src.baseUrl) : "",
+      model: String(src.model ?? "")
+    };
+    // 同样：只有非空 apiKey 才带，避免「添加时输入框为空」把 key 清掉
+    if (typeof src.apiKey === "string" && src.apiKey.trim().length > 0) payload.apiKey = src.apiKey;
+    if (src.contextWindow !== undefined) payload.contextWindow = Number(src.contextWindow);
+    if (src.maxTokens !== undefined) payload.maxTokens = Number(src.maxTokens);
+    if (src.notes !== undefined) payload.notes = String(src.notes);
+    return invoke("bwe:ai-add-model", payload);
+  },
+  /** 显式清除某条模型已保存的 API Key（唯一能删 key 的入口）。 */
+  aiClearModelKey(id) {
+    return invoke("bwe:ai-set-model", { id: String(id ?? ""), clearApiKey: true });
+  },
+  /**
+   * 真实探测某条模型的连通性（用户点「测试」时调）。
+   *
+   * 与 `aiModels()` 里的 `ready` 是两件事：`ready` 只说「配置齐全」，不代表能连上；
+   * 这个能真正判出 200 / 401 / 超时。返回里 `ok` 是**三态**：
+   *   true 明确可用 · false 明确不可用 · null 判不出来（见 detail 的说明）。
+   */
+  probeModel(id) {
+    return invoke("bwe:ai-probe-model", { id: String(id ?? "") });
+  },
+
   // ---------- 原生菜单 → 渲染侧 ----------
   onMenuCommand(cb) {
     return subscribe("menu:command", cb);

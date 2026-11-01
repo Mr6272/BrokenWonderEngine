@@ -18,23 +18,33 @@ import { I } from "../ui/icons.ts";
 import { store } from "../core/store.ts";
 import { isUiScene, scriptLang, scriptNamesOfLang, type Project, type SceneModel } from "../core/model.ts";
 import { allProblems } from "../core/diagnostics.ts";
+import { appendOutput } from "../core/output.ts";
+import { modelStateOf, modelStateSuffix, isNeedsKey, countNeedsKey, canUseNow, probeModelOf, type ProbeResult } from "./aiModelState.ts";
 import {
   aiStatus,
   aiChat,
   aiCancel,
   aiReset,
+  aiModels,
+  aiSetModel,
+  aiAddModel,
+  aiImportTrae,
   onAiEvent,
   type AiEvent,
   type AiStatus,
   type AiChatRequest,
   type AiModel,
+  type AiModelEntry,
+  type AiModelInput,
+  type AiModelsState,
   type TokenUsage
 } from "../core/host.ts";
-import { info, ok } from "../ui/toast.ts";
+import { error, info, modal, ok, warn } from "../ui/toast.ts";
 
 // ============================================================================
 // 工程摘要（契约 §4.5）—— 唯一允许进入 prompt 的工程信息
 // ============================================================================
+
 
 const KIND_CN: Record<string, string> = {
   ACTOR: "角色",
@@ -351,6 +361,12 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
   mockHint.style.display = "none";
   wrap.appendChild(mockHint);
 
+  // 「测试连接」结果区宿主：常驻但默认空，探测后才有内容。
+  // 必须在 thread 之前创建并赋值，否则 renderProbeArea 拿不到它（早前漏了赋值，
+  // 结果区一条都不显示 —— 又一次"看起来实现了、实际不工作"）。
+  probeHostEl = el("div", { class: "ai-probe-host" });
+  wrap.appendChild(probeHostEl);
+
   const thread = el("div", { class: "ai-thread" });
   wrap.appendChild(thread);
 
@@ -507,11 +523,41 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
     }
 
     const mock = status.mode === "mock" || !status.ready;
-    bar.appendChild(
-      el("span", { class: "model-chip " + (mock ? "flash" : "pro") }, mock ? "本地演示" : `${status.provider} · 已连接`)
-    );
+
+    // 模型清单必须先加载：下面要根据当前条目的 ready/needsKeyMissing 决定 chip 文案。
+    // （早前是先画 chip 后 loadModels，导致 activeEntry() 恒为 null，chip 永远显示默认"已连接"）
+    await loadModels();
+
+    // 常驻状态标识：不只弹一次性 toast。
+    // 为什么必须常驻：用户可能过一会儿才发下一条消息，那时才会失败；
+    // 一次性提示早消失了，用户会以为是"偶发网络问题"而不是"这条模型根本不能用"。
+    //
+    // 文案由 aiModelState.ts 单点决定 —— ready:true 只能说「已配置」，
+    // **不能说「可用」**（ready 只检查配置齐不齐，从不发网络探测）。
+    const entryForState = activeEntry();
+    // mock 模式下整条 chip 就是"本地演示"，不需要"测试连接"（它不发网络请求）
+    const st = modelStateOf(entryForState, mock || !entryForState || entryForState.provider === "mock");
+    const chipLabel = entryForState && !mock ? `${entryForState.label} · ${st.short}` : st.short;
+    const stateChip = el("span", { class: "model-chip " + st.cls }, chipLabel);
+    stateChip.title = mock
+      ? st.why
+      : `${entryForState?.label ?? ""}：${st.why}`;
+    // 已配置时给个「测试连接」入口：这是唯一能确认"真的连得上"的办法
+    if (st.kind === "configured" && entryForState) {
+      const probeBtn = button("测试连接", () => void runProbe(entryForState), {
+        size: "sm",
+        variant: "ghost",
+        iconPath: I.wand,
+        title: "发一个最小请求验证这条模型能否真的连通"
+      });
+      probeBtn.dataset.aiProbeModel = "1";
+      stateChip.style.display = "inline-flex";
+      stateChip.style.alignItems = "center";
+      stateChip.style.gap = "6px";
+      stateChip.appendChild(probeBtn);
+    }
+    bar.appendChild(stateChip);
     bar.appendChild(el("div", { class: "spacer" }));
-    bar.appendChild(el("span", { class: "hint" }, `flash ${status.models.flash} · pro ${status.models.pro}`));
 
     if (mock) {
       hintBox.textContent = status.message || "没有可用的 AI 宿主，当前是本地演示模式。";
@@ -519,10 +565,616 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
     } else {
       hintBox.style.display = "none";
     }
+
+    // 模型下拉：「flash/pro 两行字」换成真正可选的下拉。
+    // 这是用户明确要的功能 —— 能在编辑器里换模型，而不是去改配置文件。
+    renderModelPicker(bar);
+
     updateMeter();
   }
 
+
+  // ---------------- 测试连接（用户主动触发的连通性探测） ----------------
+
+  /**
+   * 探测当前/指定模型能否真的连通，并把结果画进结果区。
+   *
+   * 三个设计点：
+   *   1. **只在用户点击时跑**，绝不放进清单加载路径（N 条模型逐个探活会把面板打开拖成几秒）；
+   *   2. **loading 态必须有**：探测可能要等几秒（超时类），没有 loading 用户会重复点；
+   *   3. **四类结果分开显示**（200 / 401 / DNS / 超时），下一步动作完全不同 —— 见 aiModelState.ts。
+   */
+  async function runProbe(entry: AiModelEntry): Promise<void> {
+    if (probeBusy) return;
+    probeBusy = true;
+    lastProbe = { entryId: entry.id, label: entry.label, state: "loading" };
+    renderProbeArea(entry);
+
+    try {
+      const r = await probeModelOf(entry);
+      lastProbe = { entryId: entry.id, label: entry.label, state: "done", result: r };
+      appendOutput(
+        "AI",
+        `测试连接 ${entry.label}：${r.headline}${r.latencyMs !== undefined ? `（${r.latencyMs}ms）` : ""}${r.detail ? ` — ${r.detail}` : ""}`,
+        r.kind === "ok" ? "ok" : "warn"
+      );
+    } catch (e) {
+      lastProbe = {
+        entryId: entry.id,
+        label: entry.label,
+        state: "done",
+        result: {
+          kind: "error",
+          headline: "连接异常",
+          next: "看下面的细节",
+          detail: (e as Error)?.message || String(e)
+        }
+      };
+    } finally {
+      probeBusy = false;
+    }
+    renderProbeArea(entry);
+    // 顶部 chip 也要跟着刷新（探测结果可能让"已配置"变成"连不上"的提示）
+    const head = meterEl?.closest(".ai-panel")?.querySelector(".ai-head");
+    if (head && mockHintEl) void refreshStatus(head as HTMLElement, mockHintEl);
+  }
+
+  /** 结果区：loading / 四类结果，画在面板顶部临时区域。 */
+  function renderProbeArea(entry: AiModelEntry): void {
+    // 结果区挂在 mock 提示下面，避免挤占对话区
+    const host = probeHostEl;
+    if (!host) return;
+    host.replaceChildren();
+
+    if (!lastProbe || lastProbe.entryId !== entry.id) return;
+
+    const box = el("div", { class: "ai-probe" });
+    box.dataset.aiProbeResult = "1";
+
+    if (lastProbe.state === "loading") {
+      box.appendChild(el("span", { class: "ai-probe-spinner" }));
+      box.appendChild(el("span", { class: "ai-probe-headline" }, `正在测试「${entry.label}」…`));
+      host.appendChild(box);
+      return;
+    }
+
+    const r = lastProbe.result;
+    if (!r) return;
+    // 三档视觉，不是两档：
+    //   ok → 绿（确认能连）
+    //   unknown → 中性（**判不出来**，既不能画绿也不能画红，否则等于替引擎下结论）
+    //   其余 → 黄（明确需要处理）
+    const tone = r.kind === "ok" ? "ok" : r.kind === "unknown" ? "unknown" : "warn";
+    box.classList.add(tone);
+
+    const head = el("div", { class: "ai-probe-head" });
+    head.appendChild(
+      el("span", { class: "ai-probe-mark" }, r.kind === "ok" ? "✓" : r.kind === "unknown" ? "?" : "⚠")
+    );
+    head.appendChild(el("span", { class: "ai-probe-headline" }, r.headline));
+    head.appendChild(el("div", { class: "spacer" }));
+    if (r.latencyMs !== undefined) head.appendChild(el("span", { class: "hint" }, `${r.latencyMs}ms`));
+    const close = button("×", () => {
+      lastProbe = null;
+      host.replaceChildren();
+    }, { size: "sm", variant: "ghost", title: "收起" });
+    head.appendChild(close);
+    box.appendChild(head);
+
+    box.appendChild(el("div", { class: "ai-probe-next" }, `下一步：${r.next}`));
+    if (r.detail) box.appendChild(el("div", { class: "ai-probe-detail mono" }, r.detail));
+    // 探测方式单独一行：排查时"打的是哪个端点"往往比结论更关键
+    if (r.method) {
+      box.appendChild(el("div", { class: "ai-probe-detail mono" }, `探测方式：${r.method}`));
+    }
+
+    host.appendChild(box);
+  }
+
+  // ---------------- 模型切换（用户要求：编辑器内可切换模型） ----------------
+
+  /**
+   * 拉取模型清单（结果缓存到模块级）。
+   *
+   * 门面永不抛错：网页版会给 mock 两条，所以 UI 任何情况下都有内容，
+   * 不需要在这里写"没宿主"的降级分支。
+   */
+  async function loadModels(): Promise<AiModelsState | null> {
+    if (modelsState) return modelsState;
+
+    try {
+      modelsState = await aiModels();
+      return modelsState;
+    } catch {
+      modelsState = null;
+      return null;
+    }
+  }
+
+  /** 当前模型条目。 */
+  function activeEntry(): AiModelEntry | null {
+    if (!modelsState) return null;
+    return modelsState.models.find((m) => m.id === modelsState!.active) ?? modelsState.models[0] ?? null;
+  }
+
+  /**
+   * 一个条目「下一步该做什么」。
+   *
+   * 为什么单独抽：needsKey 与 ready 是两件事（host.ts 的类型注释写明了）------
+   *   needsKey=true                -> 缺 key，下一步是「填 key」
+   *   needsKey=false, ready=false  -> 填了但连不上，下一步是「检查 baseUrl / 网络」
+   * 合并成一句"不可用"，用户就不知道该干嘛了。
+   */
+  /** 顶部右侧的模型下拉 + 导入按钮。 */
+  function renderModelPicker(bar: HTMLElement): void {
+    const box = el("div", { class: "ai-model-picker" });
+
+    const activeForTip = activeEntry();
+    const sel = el("select", {
+      class: "select ai-model-select",
+      title: activeForTip
+        ? `当前：${activeForTip.label} · ${modelStateOf(activeForTip, false).short}（切换后下一轮对话生效）`
+        : "切换模型（下一轮对话生效）"
+    });
+    sel.dataset.aiModelSelect = "1";
+    const models = modelsState?.models ?? [];
+    const active = activeEntry();
+    for (const m of models) {
+      // 下拉项后缀由 aiModelState.ts 单点决定，只说"缺什么"，不说"能不能用"
+      // （ready 只代表配置齐了，不代表连得上）。
+      const hint = modelStateSuffix(m);
+      const opt = el("option", { value: m.id }, hint ? `${m.label}（${hint}）` : m.label);
+      if (active && m.id === active.id) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    if (!models.length) {
+      sel.appendChild(el("option", { value: "" }, "没有可用模型"));
+    }
+    sel.addEventListener("change", () => {
+      const picked = models.find((m) => m.id === sel.value);
+      if (!picked) return;
+      // 只有"真的缺 key"才弹输入框（判断走单点，不许面板直读字段）。
+      if (isNeedsKey(picked)) {
+        sel.value = active?.id ?? "";
+        keyDialogFor = picked;
+        renderKeyDialog();
+        return;
+      }
+      void applyModel(picked.id);
+    });
+    box.appendChild(sel);
+
+    const importBtn = button("从 Trae 导入", () => void doImportTrae(), {
+      size: "sm",
+      variant: "ghost",
+      iconPath: I.import,
+      title: "从本机 Trae 编辑器的配置里导入模型（API Key 是设备绑定的，无法导出，导入后要手填）"
+    });
+    importBtn.dataset.aiImportTrae = "1";
+    box.appendChild(importBtn);
+
+    // 「+ 添加模型」：Trae 里没有的模型（DeepSeek 官方 / 自建反代 / 本地 Ollama）
+    // 必须能手动录入 —— 只靠"下拉里选 needsKey 项弹 key 框"只能给已有条目补 key，
+    // 满足不了"新增一个不在导入清单里的模型"。
+    const addBtn = button("+ 添加", () => openAddModelDialog(), {
+      size: "sm",
+      variant: "ghost",
+      iconPath: I.plus,
+      title: "手动添加模型（供应商 / 服务地址 / 模型名 / API Key）"
+    });
+    addBtn.dataset.aiAddModel = "1";
+    box.appendChild(addBtn);
+
+    // 模型计数：原生 select 折叠时只显示当前项，用户看不到"还有几个可选"。
+    // 这行小字同时解决了产品上的信息缺失与验收截图的自证需求。
+    const needsKey = countNeedsKey(models);
+    const countText = models.length
+      ? `共 ${models.length} 个模型${needsKey ? `（${needsKey} 个待填 key）` : ""}`
+      : "没有可用模型（桌面版可导入）";
+    const countHint = el("span", { class: "hint ai-model-count" }, countText);
+    countHint.dataset.aiModelCount = "1";
+    box.appendChild(countHint);
+
+    bar.appendChild(box);
+  }
+
+  /** 真正切模型：成功后刷新清单，并提示"下一轮生效"。 */
+  async function applyModel(id: string, apiKey?: string): Promise<void> {
+    try {
+      // AiModelsState 现在正式带 message / ready（host.ts 已补齐），直接用类型。
+      const next = await aiSetModel(id, apiKey);
+      modelsState = next;
+      const entry = next.models.find((m) => m.id === next.active) ?? null;
+      if (entry) {
+        currentModelLabel = entry.label;
+        appendOutput("AI", `模型已切换到 ${entry.label}（${entry.provider} / ${entry.model}）`);
+
+        // 切换「成功」≠「能用」。ready===false 时必须用 warn 级提示，
+        // 并把主进程给的 message 原样带出来（它就是 reason）。
+        // 用 ok() 会让用户以为已经可以对话了 —— 这是实测发现的缺口。
+        // ready 的判定也走单点（canUseNow），避免面板自己读原始字段
+        if (!canUseNow(entry)) {
+          warn(next.message || `已切换到「${entry.label}」，但当前模型不可用`);
+        } else if (isNeedsKey(entry)) {
+          warn(`已切换到「${entry.label}」，它还没有 API Key（点下拉重新选它可填写）`);
+        } else {
+          ok(`已切换到「${entry.label}」，下一轮对话生效`);
+        }
+        // 常驻状态标识由 refreshStatus 重画（见顶部 chip），这里只保证它被刷新
+      } else {
+        warn("切换后没有找到对应模型，请检查清单");
+      }
+    } catch (e) {
+      error(`切换模型失败：${(e as Error).message}`);
+    }
+    renderThread();
+    updateMeter();
+    // 顶部条重画（下拉里的选中项、needsKey 标记都可能变）
+    const head = meterEl?.closest(".ai-panel")?.querySelector(".ai-head");
+    if (head && mockHintEl) void refreshStatus(head as HTMLElement, mockHintEl);
+  }
+
+  /** needsKey 条目的填 key 小输入框。 */
+  function renderKeyDialog(): void {
+    if (!keyDialogFor) return;
+    const m = keyDialogFor;
+    modal({
+      title: `填写 API Key — ${m.label}`,
+      body: () => {
+        const col = el("div", { class: "col" });
+        col.appendChild(
+          el(
+            "div",
+            { class: "hint" },
+            `这个模型来自 ${m.provider}（${m.baseUrl || "未提供地址"}）。\n`
+            + "它还没有 API Key，所以现在发不出请求。填好保存后即可使用。\n"
+            + "提示：从其他编辑器（如 Trae）导入的 Key 通常是设备绑定的、无法导出，需要在这里手动填。"
+          )
+        );
+        col.appendChild(el("div", { class: "group-label" }, "API Key"));
+        const inp = el("input", {
+          class: "input",
+          type: "password",
+          placeholder: "粘贴 API Key（不会明文显示）",
+          autocomplete: "off",
+          spellcheck: "false"
+        });
+        inp.dataset.aiKeyInput = "1";
+        col.appendChild(inp);
+        return col;
+      },
+      actions: [
+        {
+          label: "保存并切换",
+          variant: "primary",
+          onClick: (close) => {
+            const key = (document.querySelector("[data-ai-key-input]") as HTMLInputElement | null)?.value.trim() ?? "";
+            if (!key) {
+              warn("Key 不能为空");
+              return;
+            }
+            close();
+            keyDialogFor = null;
+            void applyModel(m.id, key);
+          }
+        },
+        {
+          label: "取消",
+          variant: "ghost",
+          onClick: (close) => {
+            keyDialogFor = null;
+            close();
+          }
+        }
+      ],
+      onClose: () => {
+        keyDialogFor = null;
+      }
+    });
+  }
+
+  /**
+   * 从 Trae 导入。
+   *
+   * warnings 是**一等内容**：Trae 的 Key 是设备绑定的、无法导出，
+   * 不把这句话显示出来，用户点完导入会以为已经能用了。
+   */
+  async function doImportTrae(): Promise<void> {
+    importPreview = null;
+    try {
+      importPreview = await aiImportTrae();
+    } catch (e) {
+      importPreview = { ok: false, providers: [], warnings: [`导入失败：${(e as Error).message}`] };
+    }
+    modelDialogOpen = true;
+    renderImportModal();
+  }
+
+  function renderImportModal(): void {
+    const r = importPreview;
+    if (!r) return;
+    const providers = r.providers ?? [];
+    const needsKeyCount = countNeedsKey(providers);
+
+    modal({
+      title: r.ok ? `从 Trae 导入模型（找到 ${providers.length} 个）` : "从 Trae 导入模型",
+      wide: true,
+      body: () => {
+        const col = el("div", { class: "col" });
+
+        if (providers.length) {
+          col.appendChild(
+            el(
+              "div",
+              { class: "hint" },
+              `找到 ${providers.length} 个可用模型配置，其中 ${needsKeyCount} 个需要手动填写 API Key。`
+            )
+          );
+          const list = el("div", { class: "ai-import-list" });
+          for (const p of providers) {
+            const row = el("div", { class: "ai-import-row" });
+            const cb = el("input", { type: "checkbox", class: "ai-import-check" }) as HTMLInputElement;
+            cb.checked = true;
+            cb.dataset.aiImportCheck = "1";
+            row.appendChild(cb);
+            const info2 = el("div", { class: "grow" });
+            info2.appendChild(el("div", { class: "name" }, p.label));
+            info2.appendChild(
+              el(
+                "div",
+                { class: "sub" },
+                `${p.provider} · ${p.model}${p.baseUrl ? " · " + p.baseUrl : ""}`
+                + (isNeedsKey(p) ? " · 需要填 key" : "")
+              )
+            );
+            row.appendChild(info2);
+            list.appendChild(row);
+          }
+          col.appendChild(list);
+        } else {
+          col.appendChild(el("div", { class: "hint" }, "没有从 Trae 配置里读到一个可用模型。"));
+        }
+
+        // warnings 逐条显示，不折叠 —— 看完才知道下一步该干嘛
+        if (r.warnings?.length) {
+          col.appendChild(el("div", { class: "group-label" }, "注意"));
+          for (const w of r.warnings) {
+            col.appendChild(el("div", { class: "hint ai-import-warning" }, `⚠ ${w}`));
+          }
+        }
+        return col;
+      },
+      actions: [
+        {
+          label: `导入选中的${providers.length ? `（${providers.length}）` : ""}`,
+          variant: "primary",
+          onClick: (close) => {
+            close();
+            modelDialogOpen = false;
+            // 导入 = 把清单刷新一遍（主进程已经把 provider 写进 settings）
+            modelsState = null;
+            void (async () => {
+              await loadModels();
+              const head = meterEl?.closest(".ai-panel")?.querySelector(".ai-head");
+              if (head && mockHintEl) void refreshStatus(head as HTMLElement, mockHintEl);
+              ok(`已导入 ${providers.length} 个模型，其中 ${needsKeyCount} 个需要手动填写 API Key`);
+              warn("Trae 的 API Key 是设备绑定的、无法导出，导入的模型需要你手动填 key 才能用");
+            })();
+          }
+        },
+        {
+          label: "关闭",
+          variant: "ghost",
+          onClick: (close) => {
+            modelDialogOpen = false;
+            close();
+          }
+        }
+      ],
+      onClose: () => {
+        modelDialogOpen = false;
+      }
+    });
+  }
+
+
+  // ---------------- 手动添加模型（用户明确要求「自己填 key」的完整入口） ----------------
+
+  /**
+   * 打开「添加模型」对话框。
+   *
+   * 为什么需要它（而不是只靠下拉里选 needsKey 项弹 key 输入框）：
+   *   下拉那条路径只能给**已有的**条目补 key。用户要的第二种情况是
+   *   「Trae 里根本没有的模型」—— 比如 DeepSeek 官方、自己的反代、本地 Ollama。
+   *   这些必须能手动录入 provider / baseUrl / model / key。
+   *
+   * 判重由主进程负责（同 provider+baseUrl+model = 同一条，就地更新并保留原 id），
+   * 所以这里不需要在前端做去重判断 —— 重复提交会变成"更新"，不会产生第二条。
+   */
+  function openAddModelDialog(): void {
+    // provider 预设：常见几家的 baseUrl 自动填，减少用户手打出错
+    const PRESET_URL: Record<string, string> = {
+      deepseek: "https://api.deepseek.com",
+      siliconflow: "https://api.siliconflow.cn/v1",
+      "openai-compatible": "http://127.0.0.1:11434/v1"
+    };
+
+    modal({
+      title: "添加模型",
+      wide: true,
+      body: () => {
+        const col = el("div", { class: "col" });
+
+        col.appendChild(
+          el(
+            "div",
+            { class: "hint" },
+            "填一个 Trae 里没有的模型（DeepSeek 官方 / 自建反代 / 本地 Ollama 等）。\n"
+            + "同一个「供应商 + 地址 + 模型名」会被视为同一条：重复提交是更新，不会多出一条。"
+          )
+        );
+
+        const form = el("div", { class: "ai-add-form" });
+
+        // 供应商
+        form.appendChild(el("div", { class: "group-label" }, "供应商 Provider"));
+        const provSel = el("select", { class: "select", "data-ai-add-provider": "1" });
+        for (const p of ["deepseek", "siliconflow", "openai-compatible", "mock"]) {
+          provSel.appendChild(el("option", { value: p }, p));
+        }
+        form.appendChild(provSel);
+
+        // 服务地址
+        form.appendChild(el("div", { class: "group-label" }, "服务地址 Base URL"));
+        const urlInput = el("input", {
+          class: "input",
+          type: "text",
+          placeholder: "https://api.deepseek.com",
+          "data-ai-add-baseurl": "1"
+        });
+        urlInput.value = PRESET_URL["deepseek"] ?? "";
+        form.appendChild(urlInput);
+
+        // 模型名（必填）
+        form.appendChild(el("div", { class: "group-label" }, "模型名 Model（必填）"));
+        const modelInput = el("input", {
+          class: "input",
+          type: "text",
+          placeholder: "例如 deepseek-chat / moonshotai/Kimi-K2-Thinking",
+          "data-ai-add-model-name": "1"
+        });
+        form.appendChild(modelInput);
+
+        // 显示名
+        form.appendChild(el("div", { class: "group-label" }, "显示名 Label（选填，留空用模型名）"));
+        const labelInput = el("input", {
+          class: "input",
+          type: "text",
+          placeholder: "例如 DeepSeek 聊天",
+          "data-ai-add-label": "1"
+        });
+        form.appendChild(labelInput);
+
+        // Key
+        form.appendChild(el("div", { class: "group-label" }, "API Key（可留空，之后再填）"));
+        const keyInput = el("input", {
+          class: "input",
+          type: "password",
+          placeholder: "粘贴 API Key（不会明文显示；留空表示稍后填写）",
+          autocomplete: "off",
+          spellcheck: "false",
+          "data-ai-add-key": "1"
+        });
+        form.appendChild(keyInput);
+        form.appendChild(
+          el("div", { class: "hint" }, "留空也能先创建，之后在下拉里选中它会提示「需要填 API Key」。")
+        );
+
+        // 上下文窗口（选填）
+        form.appendChild(el("div", { class: "group-label" }, "上下文窗口 tokens（选填）"));
+        const ctxInput = el("input", {
+          class: "input",
+          type: "number",
+          placeholder: "例如 65536",
+          "data-ai-add-context": "1"
+        });
+        form.appendChild(ctxInput);
+
+        col.appendChild(form);
+
+        // 切供应商时自动填地址（用户改过就不再覆盖）
+        let urlTouched = false;
+        urlInput.addEventListener("input", () => {
+          urlTouched = true;
+        });
+        provSel.addEventListener("change", () => {
+          if (urlTouched) return;
+          const preset = PRESET_URL[provSel.value];
+          if (preset) urlInput.value = preset;
+        });
+
+        return col;
+      },
+      actions: [
+        {
+          label: "添加并切换",
+          variant: "primary",
+          onClick: (close) => {
+            const read = (sel: string): string =>
+              (document.querySelector(sel) as HTMLInputElement | HTMLSelectElement | null)?.value.trim() ?? "";
+
+            const provider = read("[data-ai-add-provider]");
+            const model = read("[data-ai-add-model-name]");
+            const baseUrl = read("[data-ai-add-baseurl]");
+            const label = read("[data-ai-add-label]");
+            const apiKey = read("[data-ai-add-key]");
+            const ctxRaw = read("[data-ai-add-context]");
+
+            // 前端只做"明显填错"的拦截；业务规则（缺 model / 缺 baseUrl / 判重）
+            // 一律交给主进程，避免两边规则漂移。
+            if (!model) {
+              warn("模型名必填（例如 deepseek-chat）");
+              return;
+            }
+            if (provider !== "mock" && !baseUrl) {
+              warn("服务地址必填（例如 https://api.deepseek.com）");
+              return;
+            }
+
+            close();
+            void addModelViaHost({
+              provider,
+              baseUrl,
+              model,
+              label,
+              apiKey,
+              contextWindow: ctxRaw ? Number(ctxRaw) : undefined
+            });
+          }
+        },
+        { label: "取消", variant: "ghost", onClick: (close) => close() }
+      ]
+    });
+  }
+
+  /**
+   * 调主进程 add-model 通道。
+   *
+   * 判重 / provider 降级 / 缺字段校验全在主进程（modelCatalog.mjs，有单测），
+   * 渲染侧不复制任何业务规则 —— 两边各写一套一定会漂移。
+   */
+  async function addModelViaHost(input: AiModelInput): Promise<void> {
+    try {
+      const r = await aiAddModel(input);
+      modelsState = r;
+      const refreshed = await loadModels();
+      const head = meterEl?.closest(".ai-panel")?.querySelector(".ai-head");
+      if (head && mockHintEl) void refreshStatus(head as HTMLElement, mockHintEl);
+      const entry = refreshed ? refreshed.models.find((m) => m.id === refreshed.active) : null;
+      currentModelLabel = entry?.label ?? input.label ?? input.model;
+
+      const scoped = r as AiModelsState & { created?: boolean; updated?: boolean; warning?: string };
+      if (scoped.created === false && scoped.updated === true) {
+        ok(`已更新已有模型「${currentModelLabel}」`);
+      } else {
+        ok(`已添加并切换到「${currentModelLabel}」`);
+      }
+      // 主进程的 warning 是一等提示（例如"未知 provider 已按 openai-compatible 处理"），
+      // 不当成功吞掉。
+      if (scoped.warning) warn(scoped.warning);
+      // 加完就不可用的情况（例如没填 key 就添加）也要立刻说清楚。
+      // 判定走单点：直接读 r.ready 会让面板又维护一份"什么算可用"的定义。
+      if (entry && !canUseNow(entry)) warn(r.message || "模型已添加，但当前还不能发请求");
+      appendOutput("AI", `手动添加模型：${input.provider} / ${input.model}`);
+      renderThread();
+      updateMeter();
+    } catch (e) {
+      warn(`添加模型失败：${(e as Error).message}`);
+    }
+  }
+
   // ---------------- 内部渲染 ----------------
+
 
   function renderThread(): void {
     thread.replaceChildren();
@@ -639,8 +1291,29 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
   function updateMeter(): void {
     meter.replaceChildren();
 
-    const modelLabel = lastModel === "pro" ? "pro" : lastModel === "flash" ? "flash" : status?.mode === "mock" || status === null ? "本地演示" : "未开始";
-    meter.appendChild(el("span", { class: "model-chip " + (lastModel || "flash") }, modelLabel));
+    // 优先显示当前选中的模型 label（用户看的是名字，不是内部 id）
+    const entry = modelsState ? modelsState.models.find((m) => m.id === modelsState!.active) : null;
+    const modelLabel =
+      currentModelLabel
+      || (entry ? entry.label : "")
+      || (lastModel === "pro" ? "pro" : lastModel === "flash" ? "flash" : status?.mode === "mock" || status === null ? "本地演示" : "未开始");
+    // 用量条上的模型 chip 也常驻显示可用性：
+    // 用户可能过一会儿才发下一条消息，那时才会真的失败；
+    // 只在切换瞬间弹一次 toast，用户早就看不到原因了。
+    // 用量条的模型 chip 走同一个语义单点（不许自己写一套判断 —— 上一轮三处各写
+    // 一份，其中一处路径根本不走，"安静地不工作"最难发现）
+    const cur = activeEntry();
+    const curSt = modelStateOf(cur, cur === null);
+    // 类型是 string（可能是 "warn" 这种非 AiModel 的修饰态）
+    let meterCls: string = lastModel || curSt.cls;
+    let meterText = modelLabel;
+    if (cur && curSt.kind !== "configured") {
+      meterCls = curSt.cls;
+      meterText = `${modelLabel}（${curSt.short}）`;
+    }
+    const meterChip = el("span", { class: "model-chip " + meterCls }, meterText);
+    if (cur) meterChip.title = `${cur.label}：${curSt.why}`;
+    meter.appendChild(meterChip);
     meter.appendChild(el("span", { class: "k" }, routeReasonText()));
 
     // 还没有一轮对话时显示 "—"：写 0% 会让人以为"缓存完全没命中"，那是误导
@@ -891,6 +1564,37 @@ let pendingAction: AiChatRequest["intent"] | null = null;
 /** 首屏那条"本地演示模式"提示只播一次（面板反复重渲染不该反复刷屏）。 */
 let greeterShown = false;
 
+/**
+ * 模型清单（来自 host 门面，网页版退化成 mock 两条）。
+ *
+ * 为什么缓存在模块级而不是每次渲染都拉：面板会因为数据变化反复重渲染，
+ * 每渲染一次就打一次 IPC 既慢又没必要。切模型成功后再刷新这份缓存。
+ */
+let modelsState: AiModelsState | null = null;
+/** 模型切换对话框是否打开（needsKey 的条目要填 key） */
+let keyDialogFor: AiModelEntry | null = null;
+/** Trae 导入结果预览（加载中 / 结果面板） */
+let importPreview: { ok: boolean; providers: AiModelEntry[]; warnings: string[] } | null = null;
+/** 导入弹窗是否打开 */
+let modelDialogOpen = false;
+/** 当前模型的显示名（用量条用 label 而不是 id） */
+let currentModelLabel = "";
+/** 顶部 mock 提示元素引用（模型切换后重画状态条要用） */
+let mockHintEl: HTMLElement | null = null;
+/** 用量条 DOM（模块层回调要用） */
+let meterEl: HTMLElement | null = null;
+/** 「测试连接」结果区宿主（挂载时赋值） */
+let probeHostEl: HTMLElement | null = null;
+
+/** 探测进行中（防重复点击：超时类探测可能等几秒，用户会重复点） */
+let probeBusy = false;
+
+/** 最近一次探测状态：挂在模块级，面板重渲染后结果仍在 */
+let lastProbe:
+  | { entryId: string; label: string; state: "loading"; result?: undefined }
+  | { entryId: string; label: string; state: "done"; result: ProbeResult }
+  | null = null;
+
 export function requestAiAction(intent: AiChatRequest["intent"]): void {
   if (hooks) {
     hooks.runAction(intent);
@@ -914,6 +1618,87 @@ export async function resetAiConversation(): Promise<void> {
 }
 
 /** 状态栏要显示的 AI 摘要（模型 / 命中率 / token / 是否 mock）。 */
+/**
+ * 验收出口：把一份模型清单注入面板（只影响本次会话的内存，不写 settings）。
+ *
+ * 为什么需要：`--shot` 用隔离的临时 profile（正确设计 —— 验收不该污染用户真实配置），
+ * 所以截图永远看不到"用户导入过模型之后"的界面。为了让 UI 的多模型渲染
+ * （下拉选项、needsKey 标记、计数）能被截图自证，这里提供注入入口。
+ * 注入的清单与门面返回的形状完全一致，渲染路径不变。
+ */
+export function injectModelsForDemo(state: AiModelsState): void {
+  modelsState = state;
+  currentModelLabel =
+    state.models.find((m) => m.id === state.active)?.label || state.models[0]?.label || "";
+  hooks?.updateMeter();
+}
+
+/** 造一份演示清单（含 ready / needsKey / 导入来源三种状态，覆盖所有渲染分支）。 */
+export function demoModelsState(): AiModelsState {
+  return {
+    active: "preset:deepseek-chat",
+    models: [
+      {
+        id: "preset:deepseek-chat",
+        label: "DeepSeek 聊天",
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com",
+        model: "deepseek-chat",
+        ready: true,
+        needsKey: false,
+        source: "preset",
+        contextWindow: 65536
+      },
+      {
+        id: "trae:siliconflow-moonshotai-kimi-k2-thinking",
+        label: "moonshotai/Kimi-K2-Thinking",
+        provider: "siliconflow",
+        baseUrl: "https://api.siliconflow.cn/v1",
+        model: "moonshotai/Kimi-K2-Thinking",
+        ready: false,
+        needsKey: true,
+        source: "trae-import",
+        contextWindow: 128000
+      },
+      {
+        id: "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+        label: "moonshotai/Kimi-K2-Thinking-Turbo",
+        provider: "siliconflow",
+        baseUrl: "https://api.siliconflow.cn/v1",
+        model: "moonshotai/Kimi-K2-Thinking-Turbo",
+        ready: false,
+        needsKey: true,
+        source: "trae-import",
+        contextWindow: 128000
+      },
+      {
+        id: "manual:local-ollama",
+        label: "本地 Ollama（自定义）",
+        provider: "openai-compatible",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        model: "qwen2.5",
+        ready: false,
+        needsKey: false,
+        source: "manual"
+      }
+    ]
+  };
+}
+
+/**
+ * 验收/排查出口：面板当前持有的模型清单与门面原始返回。
+ * 为什么需要：截图只能看到下拉里被选中的那一项，看不到"清单其实有几条"；
+ * 排查"为什么 UI 是 mock 而主进程说有 5 条"时必须能一次看到两侧的原始数据。
+ */
+export function aiPanelDebugModels(): { state: AiModelsState | null; hostMode: string; hasHost: boolean } {
+  const w = window as unknown as { bweHost?: { mode?: string } };
+  return {
+    state: modelsState,
+    hostMode: w.bweHost?.mode ?? "(无 bweHost)",
+    hasHost: !!w.bweHost
+  };
+}
+
 export function aiPanelSummary(): { model: AiModel | ""; cacheHitRate: number; usage: TokenUsage | null; mock: boolean } {
   return {
     model: lastModel,

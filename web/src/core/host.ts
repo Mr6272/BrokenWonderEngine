@@ -78,6 +78,91 @@ export interface AiChatRequest {
   intent: "chat" | "explain-error" | "edit-script" | "scene-review";
 }
 
+/**
+ * 一个可切换的模型。
+ *
+ * `needsKey` 与 `needsKeyMissing` 是**两个不同的东西**，混用是最容易犯的错：
+ *   needsKey        = 这个**供应商类型**是否需要 key（mock 不需要、deepseek 需要）；
+ *   needsKeyMissing = **这一条**是否真的还没填 key。
+ * 一条已经填好 key 的 DeepSeek 模型仍然 `needsKey: true`，但 `needsKeyMissing: false`。
+ * 面板要给用户看的提示必须用 `needsKeyMissing` —— 用 `needsKey` 会让用户以为自己的 key 没生效
+ * （这是真实发生过的 UI bug，由 `desktop/tools/verify-models.mjs` 抓出来的）。
+ *
+ * `ready` 又是第三件事：现在能不能真的发请求（有 key + baseUrl 非空 + 可达性探测没失败）。
+ */
+export interface AiModelEntry {
+  id: string;
+  label: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  ready: boolean;
+  /** 供应商类型是否需要 key（不是"这条缺不缺 key"） */
+  needsKey: boolean;
+  /** 这条是否真的缺 key。UI 的「需要填 API Key」提示必须用这个字段。 */
+  needsKeyMissing?: boolean;
+  /** 这条是否已经有 key（可以据此在 UI 上显示「已配置」而不是「需要填」）。 */
+  hasApiKey?: boolean;
+  /** 为什么不可用（UI 唯一的提示来源）。 */
+  reason?: string;
+  /** 导入来源（trae-import / manual / preset），便于以后审计这条配置是谁加的 */
+  source?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  /** 最近一次 baseUrl 可达性探测结果；没探测过是 undefined（不是 false）。 */
+  reachable?: boolean;
+}
+
+export interface AiModelsState {
+  models: AiModelEntry[];
+  active: string;
+  /** 主进程给的一句话说明（当前能/不能用的原因）。切换/添加后由主进程回填。 */
+  message?: string;
+  /** 切换/添加后当前模型是否真的可用。UI 必须用它决定「切换成功」还是「切换了但用不了」。 */
+  ready?: boolean;
+}
+
+/**
+ * 手动添加模型时的输入。
+ * 规则（判重 / provider 降级 / 缺字段）都在主进程的 `modelCatalog.mjs`，
+ * 渲染侧只拦「明显填错」（缺 model / 缺 baseUrl），不要把业务规则复制一份。
+ */
+export interface AiModelInput {
+  label?: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+/**
+ * 一次连通性探测的结果。
+ *
+ * `ok` 是**三态**而不是布尔，这个设计是刻意的：
+ *   true  明确可用（HTTP 2xx，key 被接受）
+ *   false 明确不可用（401 且服务端明确说凭据无效 / DNS 失败 / 超时）
+ *   null  判不出来（比如 `/models` 端点要求更高权限，不代表对话接口一定失败）
+ * 把 null 当成 false 会误伤一个其实能用的服务；当成 true 又会在用户发消息时才失败。
+ * UI 必须把三态分开显示，并给出对应的「下一步」。
+ */
+export interface AiProbeResult {
+  /** 三态：true 可用 / false 不可用 / null 判不出来 */
+  ok: boolean | null;
+  id?: string;
+  /** HTTP 状态码；没拿到响应（DNS/超时/连不上）时为 0 */
+  status?: number;
+  reachable?: boolean;
+  method?: string;
+  /** 给人看的结论（含「为什么判不出来」的解释） */
+  detail?: string;
+  /** 机器可读的分类：ok / auth / dns / timeout / network / unsupported / error */
+  reason?: string;
+  errorCode?: string;
+  latencyMs?: number;
+}
+
 export interface BweHost {
   mode: "desktop";
   version: string;
@@ -103,6 +188,17 @@ export interface BweHost {
   aiCancel?(requestId: string): Promise<void>;
   aiReset?(): Promise<void>;
   onAiEvent?(cb: (ev: AiEvent) => void): () => void;
+  /** 模型管理：列出可切换的模型、切换当前模型、从其它编辑器导入供应商配置。 */
+  aiModels?(): Promise<AiModelsState>;
+  aiSetModel?(id: string, apiKey?: string): Promise<AiModelsState>;
+  aiImportTrae?(): Promise<{ ok: boolean; providers: AiModelEntry[]; warnings: string[] }>;
+  /** 手动添加 / 覆盖一条模型（Trae 里没有的模型，比如官方 API 或自建反代）。 */
+  aiAddModel?(input: AiModelInput): Promise<AiModelsState>;
+  /**
+   * 真实探测一条模型的连通性（用户点「测试连接」时才调）。
+   * `ok` 是**三态**：true 明确可用 / false 明确不可用 / null 判不出来（看 detail）。
+   */
+  probeModel?(id: string): Promise<AiProbeResult>;
 }
 
 declare global {
@@ -362,6 +458,192 @@ export function onAiEvent(cb: (ev: AiEvent) => void): () => void {
 /** 原生菜单命令（新建/打开/保存/打包…）。网页版没有菜单，返回空取消函数。 */
 export function onMenuCommand(cb: (c: string) => void): () => void {
   return host()?.onMenuCommand?.(cb) ?? (() => void 0);
+}
+
+// ==========================================================================
+// 模型管理门面
+// --------------------------------------------------------------------------
+// 「切换模型」在桌面版是主进程的职责（它持有设置、能读 Trae 配置、能探测 baseUrl）。
+// 渲染侧只调这三个函数，全部**永不抛错**：网页版返回「只有 mock 两条」的清单，
+// 让面板的下拉框永远有内容可选，而不是空白。
+// ==========================================================================
+
+/** 网页版 / 无宿主时的清单：只有 mock 两条，明确告诉用户这不是真的模型。 */
+function mockModels(): AiModelsState {
+  return {
+    active: "mock-flash",
+    models: [
+      {
+        id: "mock-flash",
+        label: "本地演示 flash",
+        provider: "mock",
+        baseUrl: "",
+        model: "mock-flash",
+        ready: true,
+        needsKey: false,
+        source: "preset"
+      },
+      {
+        id: "mock-pro",
+        label: "本地演示 pro",
+        provider: "mock",
+        baseUrl: "",
+        model: "mock-pro",
+        ready: true,
+        needsKey: false,
+        source: "preset"
+      }
+    ]
+  };
+}
+
+export async function aiModels(): Promise<AiModelsState> {
+  const h = host();
+  if (h?.aiModels) {
+    try {
+      const r = await h.aiModels();
+      if (r && Array.isArray(r.models) && r.models.length) return r;
+    } catch {
+      /* 落到 mock 清单 */
+    }
+  }
+  return mockModels();
+}
+
+export async function aiSetModel(id: string, apiKey?: string): Promise<AiModelsState> {
+  const h = host();
+  if (h?.aiSetModel) {
+    try {
+      const r = await h.aiSetModel(String(id ?? ""), apiKey);
+      if (r && Array.isArray(r.models)) return r;
+    } catch {
+      /* 落到 mock 清单 */
+    }
+  }
+  return mockModels();
+}
+
+/**
+ * 手动添加 / 覆盖一条模型。
+ *
+ * 判重规则在主进程（`modelCatalog.mjs`，有单测）：同 provider + 同 baseUrl + 同 model
+ * 算同一条，**就地更新并保留原 id** —— 所以「给 Trae 导入的条目手填 key」不会变成第三条。
+ * 渲染侧不要自己再写一套判重，两边规则漂移是最难查的那类不一致。
+ */
+export async function aiAddModel(input: AiModelInput): Promise<AiModelsState> {
+  const h = host();
+  if (h?.aiAddModel) {
+    try {
+      const r = await h.aiAddModel(input);
+      if (r && Array.isArray(r.models)) return r;
+    } catch {
+      /* 落到 mock 清单 */
+    }
+  }
+  // 网页版没有模型管理：把用户刚填的这条**本地可见地加进 mock 清单**，
+  // 让面板的下拉框能显示「你填了但这里用不了」，而不是点了没反应。
+  const base = mockModels();
+  const model = String(input?.model ?? "").trim();
+  if (!model) return base;
+  const id = `mock:${model}`;
+  return {
+    active: base.active,
+    models: [
+      ...base.models,
+      {
+        id,
+        label: input?.label?.trim() || model,
+        provider: String(input?.provider ?? "mock"),
+        baseUrl: String(input?.baseUrl ?? ""),
+        model,
+        ready: false,
+        needsKey: !String(input?.apiKey ?? "").trim(),
+        source: "manual",
+        contextWindow: input?.contextWindow
+      }
+    ]
+  };
+}
+
+/**
+ * 从本机 Trae 的配置里导入供应商/模型。
+ *
+ * 注意返回值里 `warnings` 是**一等内容**而不是装饰：Trae 的 API Key 是设备绑定的、
+ * 无法导出，所以导入来的条目几乎一定 `needsKey: true`，界面必须把这句话显示出来，
+ * 而不是让用户点了「导入」之后以为已经能用了。
+ */
+export async function aiImportTrae(): Promise<{ ok: boolean; providers: AiModelEntry[]; warnings: string[] }> {
+  const h = host();
+  if (h?.aiImportTrae) {
+    try {
+      const r = await h.aiImportTrae();
+      if (r && Array.isArray(r.providers)) return r;
+    } catch (e) {
+      return { ok: false, providers: [], warnings: [`读取 Trae 配置失败：${(e as Error)?.message || e}`] };
+    }
+  }
+  return {
+    ok: false,
+    providers: [],
+    warnings: [
+      "网页版读不到本机 Trae 配置。用桌面客户端（BWE Studio.exe）才能导入；导入后仍需手动填写 API Key。"
+    ]
+  };
+}
+
+/**
+ * 真实探测一条模型的连通性。
+ *
+ * 只在用户点「测试连接」时调 —— **绝不放进清单加载路径**：清单里有 N 条模型，
+ * 逐个探活会把面板打开拖成几秒，还会在用户没要求时打 N 个网络请求。
+ *
+ * 归一化职责在这里做，不在面板里做：主进程的叫法（`status` / `latencyMs` / `reason`）
+ * 与 UI 想要的分类（`httpStatus` / `ms` / `kind`）不同，两处各自映射一次必然漂移。
+ * 所以这里统一转成 `AiProbeResult` 的字段，并把 `reason` 归一成 UI 那七类。
+ */
+export async function probeModel(id: string): Promise<AiProbeResult> {
+  const h = host();
+  if (!h?.probeModel) {
+    return {
+      ok: null,
+      reason: "unsupported",
+      detail: "当前宿主没有探测通道：网页版没有本地网络权限，用桌面客户端才能测真实连通性"
+    };
+  }
+  try {
+    const r = await h.probeModel(String(id ?? ""));
+    const status = Number(r?.status ?? 0);
+    // 主进程的 reason 已是机器可读分类（ok/auth/dns/timeout/network/...），
+    // 这里只做一件事：当它缺失时按 HTTP 状态码补一个，避免 UI 拿到空字符串。
+    const reason =
+      String(r?.reason ?? "").trim() ||
+      (status >= 200 && status < 300
+        ? "ok"
+        : status === 401 || status === 403
+          ? "auth"
+          : status === 0
+            ? "network"
+            : "http-error");
+    return {
+      ok: r?.ok === undefined ? null : r.ok,
+      id,
+      status,
+      reachable: r?.reachable,
+      method: r?.method,
+      detail: r?.detail,
+      reason,
+      errorCode: r?.errorCode,
+      latencyMs: r?.latencyMs
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      id,
+      status: 0,
+      reason: "error",
+      detail: `探测时出错：${(e as Error)?.message || e}`
+    };
+  }
 }
 
 /** 原生「打开工程」被触发时，主进程把内容直接送进来（网页版打开走自己的对话框）。 */

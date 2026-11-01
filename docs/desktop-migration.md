@@ -57,6 +57,16 @@ export function isDesktop(): boolean;
 
 ## 3. `window.bweHost`（preload 暴露，主进程实现）
 
+> **新增 / 修改任何 IPC 通道，必须同时登记到 `desktop/lib/ipc-contract.mjs`**
+> （`desktop/test/ipc-contract.test.mjs` 会机器校验 preload 方法名、通道名、返回字段与语义注释）。
+> 契约靠人读人改会漂，靠数据校验不会。
+>
+> **由来（真实事故）**：UI 侧按 `aiProbeModel(id)` 期望 `{kind, httpStatus, ms}`，主进程实际提供
+> `probeModel(id)` 返回 `{reason, status, latencyMs}` —— **方法名与三个字段名全不同**，
+> 结果全部 fallback 到 error 分支，**而且没有任何测试变红**。
+> 教训：契约只存在于对话里 = 一定会漂；字段**语义**（三态还是布尔、`ready` 是否含连通性）
+> 比字段名更容易出错，必须一起写进契约表。
+
 ```ts
 interface BweHost {
   mode: "desktop";

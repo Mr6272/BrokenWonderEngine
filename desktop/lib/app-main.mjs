@@ -16,6 +16,10 @@ import { fileURLToPath } from "node:url";
 import { createEmbeddedApi } from "./api.mjs";
 import { createAiBridge } from "./ai/bridge.mjs";
 import { createApiIndex, defaultApiDocsPath } from "./ai/apiIndex.mjs";
+import { importTraeConfig, toModelEntries } from "./ai/trae-import.mjs";
+import { listModels } from "./ai/provider.mjs";
+import { addModel, setActiveModel } from "./ai/modelCatalog.mjs";
+import { probeModelEndpoint, PROBE_TIMEOUT_MS } from "./ai/probe.mjs";
 import { createToolCache } from "./ai/prune.mjs";
 import { openSession, workspaceHash } from "./ai/session.mjs";
 import { createRecentStore } from "./recent.mjs";
@@ -37,7 +41,10 @@ const PRELOAD = join(REPO_ROOT, "desktop", "preload.cjs");
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { console: false, shot: null, size: null, verify: false, probe: null, tap: null };
+  const out = {
+    console: false, shot: null, size: null, verify: false, probe: null, tap: null,
+    ipcProbe: null, userData: null, probeDom: null, ipcProbeNoImport: false
+  };
   // 命令行可能被 cmd.exe / 脚本包装过，参数里会留下成对的引号（--tap="..."）。
   // 不剥掉的话选择器会带着引号去找元素，永远找不到 —— 这类失败很难看出来。
   const stripQuotes = (s) => {
@@ -54,6 +61,10 @@ function parseArgs(argv) {
     else if (arg.startsWith("--shot=")) out.shot = stripQuotes(arg.slice("--shot=".length));
     else if (arg.startsWith("--probe=")) out.probe = stripQuotes(arg.slice("--probe=".length));
     else if (arg.startsWith("--tap=")) out.tap = stripQuotes(arg.slice("--tap=".length));
+    else if (arg.startsWith("--ipc-probe=")) out.ipcProbe = stripQuotes(arg.slice("--ipc-probe=".length));
+    else if (arg.startsWith("--user-data=")) out.userData = stripQuotes(arg.slice("--user-data=".length));
+    else if (arg === "--ipc-probe-no-import") out.ipcProbeNoImport = true;
+    else if (arg.startsWith("--probe-dom=")) out.probeDom = stripQuotes(arg.slice("--probe-dom=".length));
     else if (arg.startsWith("--size=")) {
       const m = /^(\d+)x(\d+)$/.exec(stripQuotes(arg.slice("--size=".length)));
       if (m) out.size = { width: Number(m[1]), height: Number(m[2]) };
@@ -64,6 +75,23 @@ function parseArgs(argv) {
 
 const ARGS = parseArgs(process.argv);
 const SHOT_MODE = Boolean(ARGS.shot);
+/**
+ * 自动化模式：截图 与 --ipc-probe 都属于「跑完就退」的批处理，必须满足两条：
+ *   ① 不参与单实例锁（否则本机开着编辑器 / 另一条线在截图时，它直接 quit 且没有任何输出
+ *      —— 我实际踩过：8 个 electron 进程在跑，探针静默退出，查了半天以为代码没执行）；
+ *   ② 用一次性的隔离 userData（pid 后缀），不污染用户真实设置、也不和并发进程争 Chromium 缓存。
+ */
+const AUTOMATION_MODE = SHOT_MODE || Boolean(ARGS.ipcProbe);
+/**
+ * 纯探针模式（--ipc-probe 且只读）：**不需要窗口**。
+ *
+ * 为什么单独区分：`--ipc-probe` 的完整模式要跑 K 线截图相关的东西，但只读模式
+ * （`--ipc-probe-no-import`）只读 settings + 发一个网络探测，完全不碰渲染侧。
+ * 若仍然创建 BrowserWindow，退出时渲染进程会被强杀（实测 `渲染进程结束：crashed exitCode 143`），
+ * 让进程退出码变成非 0 —— 验收脚本按退出码判死就会误报。
+ * 只读时不建窗口，进程退出干净。
+ */
+const PROBE_ONLY_MODE = Boolean(ARGS.ipcProbe) && Boolean(ARGS.ipcProbeNoImport);
 const DEFAULT_SHOT_SIZE = { width: 1600, height: 1000 };
 
 // ⚠ 截图模式强制 dpr=1：
@@ -119,11 +147,33 @@ process.on("unhandledRejection", (e) => {
 //     · 要么 JS 没跑起来：截图 99.8% 纯奶油、非背景 0.2%，被判「空白截图 FAIL」。
 //   症状是**随机的红**，看起来像逻辑错，实际是环境竞争 —— 这类假红必须治根。
 // 用 pid 后缀天然隔离；进程退出时删掉自己那一份（异常退出留下的由下次启动清理）。
+//
+// ⚠ 但「隔离」有个副作用：自动化里的 settings 永远是空的，于是「模型清单 / 已填的 key /
+//   切到哪个模型」这些**从未在自动化里被真实验证过**。所以另给一个出口：
+//     --user-data=<绝对目录>
+//   语义是「**用一份现成的用户配置做验收**」，不是隔离 —— 给了它就不加 pid 后缀、
+//   不参与 .shot-profile 的清理、也不在退出时删除。这样验收脚本可以做到真实闭环：
+//     ① 一次性目录里写入 settings（模型清单 + key）
+//     ② --shot --user-data=同一目录 → 截图里的下拉框来自**真实** settings
 app.setName("BWE Studio");
 const APPDATA_DIR = app.getPath("appData");
 const SHOT_PROFILE_BASE = join(APPDATA_DIR, "BWE Studio", ".shot-profile");
-// 截图模式用独立的 userData：不与正在跑的实例抢单实例锁、也不污染用户的会话/设置。
-const USER_DATA_DIR = SHOT_MODE ? join(SHOT_PROFILE_BASE, String(process.pid)) : join(APPDATA_DIR, "BWE Studio");
+/** 用户显式指定的 userData 目录（给了就表示「用现成配置」，非隔离语义）。 */
+const EXPLICIT_USER_DATA = ARGS.userData ? resolve(stripQuotesDeep(ARGS.userData)) : null;
+/** 是否使用一次性隔离目录（只有自动化模式且没给 --user-data 时才是）。 */
+const ISOLATED_USER_DATA = AUTOMATION_MODE && !EXPLICIT_USER_DATA;
+const USER_DATA_DIR = EXPLICIT_USER_DATA
+  ? EXPLICIT_USER_DATA
+  : ISOLATED_USER_DATA
+    ? join(SHOT_PROFILE_BASE, String(process.pid))
+    : join(APPDATA_DIR, "BWE Studio");
+
+/** 去掉可能残留的成对引号（cmd 传参常见）。 */
+function stripQuotesDeep(value) {
+  const t = String(value ?? "").trim();
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) return t.slice(1, -1);
+  return t;
+}
 app.setPath("userData", USER_DATA_DIR);
 
 /**
@@ -141,7 +191,8 @@ app.setPath("userData", USER_DATA_DIR);
 const SHOT_PROFILE_KEEP = 6;
 
 async function cleanupOldShotProfiles() {
-  if (!SHOT_MODE) return;
+  // ⚠ 只清理一次性隔离目录。--user-data 给的是「用户真实配置」，删它等于删用户数据。
+  if (!ISOLATED_USER_DATA) return;
   try {
     const entries = await readdir(SHOT_PROFILE_BASE, { withFileTypes: true }).catch(() => []);
     const dirs = [];
@@ -172,8 +223,10 @@ let api = null;
 let ai = null;
 let settingsStore = null;
 let recentStore = null;
+/** 供 --ipc-probe 调用的业务函数集合（在 registerIpc 里填充）。 */
+let probeHandlers = null;
 
-if (!SHOT_MODE) {
+if (!AUTOMATION_MODE) {
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
     // 已有实例：把命令行里的「打开某个文件」转给它，然后自己退出。
@@ -208,8 +261,8 @@ app.whenReady().then(async () => {
     if (!existsSync(WEB_INDEX)) {
       // 打包不完整时给出可执行的提示，而不是一个白窗口。
       const detail = `找不到 ${WEB_INDEX}。\n请在仓库根执行 npm run build 生成 web/dist/studio.js，或重新运行 node desktop/tools/package.mjs 打包。`;
-      if (SHOT_MODE) {
-        // ⚠ 截图模式绝不能弹模态框：无人点击 → 自检永远挂住（打包 --verify 踩过）。
+      if (AUTOMATION_MODE) {
+        // ⚠ 自动化模式绝不能弹模态框：无人点击 → 自检永远挂住（打包 --verify 踩过）。
         console.error(`[shot] 缺少前端文件：${detail.replace(/\n/g, " ")}`);
         app.exit(2);
         return;
@@ -254,17 +307,31 @@ app.whenReady().then(async () => {
     });
 
     registerIpc();
+    if (PROBE_ONLY_MODE) {
+      // 只读探针：不创建窗口，直接跑探针并退出（见 PROBE_ONLY_MODE 注释）。
+      log(`[bwe:desk] 只读探针模式（不创建窗口），userData=${USER_DATA_DIR}`);
+      await runIpcProbe(ARGS.ipcProbe);
+      return;
+    }
     await createMainWindow();
-    log(`BWE Studio 启动：repo=${REPO_ROOT} userData=${USER_DATA_DIR} shot=${SHOT_MODE}`);
+    log(
+      `BWE Studio 启动：repo=${REPO_ROOT} userData=${USER_DATA_DIR} shot=${SHOT_MODE}`
+      + (EXPLICIT_USER_DATA ? "（来自 --user-data，非隔离模式）" : "")
+    );
     if (ARGS.console) console.log(`[bwe:desk] 页面入口 ${WEB_INDEX}`);
 
     if (SHOT_MODE) await runShotMode();
+
+    // ---- 诊断探针：把模型/导入通道的真实返回打成 JSON 然后退出 ----
+    // 用途：验收时要在「真实 Electron 主进程」里看 safeStorage 加密、真实 Trae 库读取、
+    // 真实网络探测的返回，单纯跑 node 单测拿不到这些。用 --ipc-probe=<out.json> 触发。
+    if (ARGS.ipcProbe) await runIpcProbe(ARGS.ipcProbe);
   } catch (e) {
     const msg = `启动失败：${e?.stack || e?.message || e}`;
     log(msg, "bwe:crash");
     console.error(`[bwe:crash] ${msg}`);
-    // 截图模式下不弹模态框（见上方缺少前端文件处的注释）。
-    if (!SHOT_MODE) dialog.showErrorBox("BWE Studio 启动失败", msg);
+    // 自动化模式下不弹模态框（见上方缺少前端文件处的注释）。
+    if (!AUTOMATION_MODE) dialog.showErrorBox("BWE Studio 启动失败", msg);
     app.exit(1);
   }
 });
@@ -357,16 +424,19 @@ async function createMainWindow() {
   });
 
   await mainWindow.loadFile(WEB_INDEX);
-  if (!SHOT_MODE) {
+  if (!AUTOMATION_MODE) {
     if (saved.maximized) mainWindow.maximize();
     mainWindow.show();
     applyMenu(await recentStore.list());
-  } else {
+  } else if (SHOT_MODE) {
+    // 截图必须真正显示窗口（隐藏窗口的 capturePage 会拿到空白/黑帧）。
     mainWindow.show();
+  } else {
+    // --ipc-probe 不需要可见窗口，保持隐藏（避免在用户桌面上闪一下）。
   }
 
   mainWindow.on("close", () => {
-    if (SHOT_MODE) return;
+    if (AUTOMATION_MODE) return; // 自动化用的是一次性 userData，写窗口状态没意义
     void windowState.save(mainWindow);
   });
   return mainWindow;
@@ -457,7 +527,7 @@ async function handleSaveProject({ project, suggestedName, forceDialog } = {}) {
   let target = null;
 
   // 覆盖保存：上一次保存过的路径直接写（除非是「另存为」）。
-  if (!forceDialog && !SHOT_MODE) {
+  if (!forceDialog && !AUTOMATION_MODE) {
     const prev = await recentStore.list({ verify: true });
     const sameName = prev.find((r) => r.name === fileName);
     if (sameName) target = sameName.path;
@@ -554,8 +624,425 @@ function registerIpc() {
   ipcMain.handle("bwe:ai-cancel", async (_e, requestId) => ai.aiCancel(requestId));
   ipcMain.handle("bwe:ai-reset", async () => ai.aiReset());
 
+  // ---- 模型切换 / Trae 导入（三通道，字段名严格照契约）----
+
+  /**
+   * 从本机 Trae 配置导入自定义供应商。
+   *
+   * 关键设计：**导入的条目 apiKey 恒为空、needsKey: true**。
+   * Trae 的 key 是设备绑定的（AES-256-GCM，密钥服务端下发），解不开也不该去解，
+   * 所以这里只导入 baseUrl + 模型名，key 让用户自己填。
+   * 已存在的同 id 条目会被**保留其原有 key**（不覆盖），避免重复导入把用户填好的 key 冲掉。
+   */
+  async function handleImportTrae() {
+    try {
+      const imported = await importTraeConfig({ probe: true });
+      const entries = toModelEntries(imported.providers);
+      // 合并进现有清单：同 id 保留旧条目（保住已填的 key），只更新展示信息
+      const current = (await settingsStore.load()).ai?.models ?? [];
+      const byId = new Map(current.map((m) => [m.id, m]));
+      const merged = [];
+      const added = [];
+      for (const entry of entries) {
+        const existing = byId.get(entry.id);
+        if (existing) {
+          merged.push({
+            ...existing,
+            // 只刷新「来源型」字段；apiKey / encryptedApiKey 一律不动
+            label: entry.label,
+            baseUrl: entry.baseUrl,
+            model: entry.model,
+            needsKey: true,
+            source: entry.source,
+            notes: entry.notes,
+            contextWindow: entry.contextWindow || existing.contextWindow
+          });
+        } else {
+          merged.push(entry);
+          added.push(entry.id);
+        }
+      }
+      // 保留清单里原本就有、本次导入没覆盖的条目（例如用户手填的 DeepSeek）
+      for (const m of current) {
+        if (!merged.some((x) => x.id === m.id)) merged.push(m);
+      }
+      await settingsStore.save({ ai: { models: merged } });
+
+      const reachableMap = new Map();
+      for (const p of imported.providers) {
+        reachableMap.set(p.baseUrl, {
+          reachable: p.reachable,
+          reachableStatus: p.reachableStatus,
+          reachableDetail: p.reachableDetail,
+          reachableMethod: p.reachableMethod
+        });
+      }
+      return {
+        ok: imported.ok,
+        providers: imported.providers,
+        warnings: imported.warnings,
+        dbPath: imported.dbPath,
+        totalEntries: imported.totalEntries,
+        uniqueModels: imported.uniqueModels,
+        // 告诉界面这次实际写进了哪些条目（哪些是新加的、哪些已存在）
+        importedEntries: entries.map((e) => ({
+          id: e.id,
+          label: e.label,
+          baseUrl: e.baseUrl,
+          model: e.model,
+          isNew: added.includes(e.id),
+          ...(reachableMap.get(e.baseUrl) ?? {})
+        }))
+      };
+    } catch (e) {
+      // 导入失败不该影响编辑器其它功能：返回可读原因，界面提示即可。
+      return {
+        ok: false,
+        providers: [],
+        warnings: [`导入 Trae 配置时出错：${e?.message || e}`],
+        dbPath: null,
+        totalEntries: 0,
+        uniqueModels: 0,
+        importedEntries: []
+      };
+    }
+  }
+  ipcMain.handle("bwe:ai-import-trae", async () => handleImportTrae());
+
+  /**
+   * 模型清单 + 当前选中项。
+   * 界面下拉框直接吃这个；ready/needsKey 用来显示「需要填 key」的标记。
+   */
+  async function handleGetModels() {
+    try {
+      const settings = await settingsStore.load();
+      const listed = listModels(settings.ai ?? {}, "");
+      return { ok: true, models: listed.models, active: listed.active };
+    } catch (e) {
+      return { ok: false, models: [], active: "", error: e?.message || String(e) };
+    }
+  }
+  ipcMain.handle("bwe:ai-models", async () => handleGetModels());
+
+  /**
+   * 切换当前模型（可同时补填该模型的 API Key）。
+   *
+   * 三条纪律：
+   *   1. id 不存在 → 明确失败，不静默改成别的模型（否则界面显示 A、实际发给 B）；
+   *   2. 传了 apiKey 就写到**该条目**上（不同供应商用不同 key），不是顶层；
+   *   3. 保存后返回最新清单状态；AI 桥每轮都读 settings，所以下一轮直接生效。
+   */
+  async function handleSetModel(payload) {
+    try {
+      const settings = await settingsStore.load();
+      // 规则都在 modelCatalog.mjs 里（有单测）：**空串 apiKey 不清 key**，
+      // 要清得显式传 clearApiKey:true。切模型不该顺手把用户填的 key 弄丢。
+      const result = setActiveModel(settings.ai?.models ?? [], payload?.id, payload ?? {});
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: result.error,
+          models: listModels(settings.ai ?? {}).models,
+          active: settings.ai?.activeModelId ?? ""
+        };
+      }
+      await settingsStore.save({ ai: { models: result.models, activeModelId: result.active } });
+      return await respondWithModels(result.active);
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e), models: [], active: "" };
+    }
+  }
+  ipcMain.handle("bwe:ai-set-model", async (_e, payload) => handleSetModel(payload));
+
+  /**
+   * 手动添加 / 覆盖一条模型（用户想填 Trae 里没有的模型，比如 DeepSeek 官方或自己的反代）。
+   *
+   * 判重规则：同 provider + 同 baseUrl + 同 model = 同一条，**就地更新并保留原 id**
+   * （所以从 Trae 导入的条目在被手填 key 时不会变成第二条）。
+   */
+  async function handleAddModel(payload) {
+    try {
+      const settings = await settingsStore.load();
+      const result = addModel(settings.ai?.models ?? [], payload ?? {});
+      if (!result.ok) {
+        return { ok: false, error: result.error, models: listModels(settings.ai ?? {}).models, active: settings.ai?.activeModelId ?? "" };
+      }
+      // 新增后自动切到它 —— 用户刚填完模型，最可能的下一步就是用它。
+      await settingsStore.save({ ai: { models: result.models, activeModelId: result.id } });
+      const response = await respondWithModels(result.id);
+      return {
+        ...response,
+        // 把「这次操作的是哪一条」显式带上：UI 添加完通常要立刻选中它，
+        // 靠 active 也能推，但 id 更直接（active 会因"回落到第一个 ready"而变化）。
+        id: result.id,
+        created: Boolean(result.created),
+        updated: Boolean(result.updated),
+        ...(result.warning ? { warning: result.warning } : {})
+      };
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e), models: [], active: "" };
+    }
+  }
+  ipcMain.handle("bwe:ai-add-model", async (_e, payload) => handleAddModel(payload));
+
+  /**
+   * 保存后统一回一个「清单 + 当前项」的结构。
+   *
+   * 抽出来是因为 set-model / add-model 的返回体必须完全一致，
+   * 否则 UI 要写两套解析分支（迟早一套漏字段）。
+   */
+  async function respondWithModels(activeId) {
+    const loaded = await settingsStore.load();
+    const listed = listModels(loaded.ai ?? {}, activeId);
+    const activeResolved = listed.models.find((m) => m.id === listed.active);
+    return {
+      ok: true,
+      models: listed.models,
+      active: listed.active,
+      // 界面唯一的提示来源：为什么这条不能用
+      message: activeResolved?.ready ? `已切换到「${activeResolved.label}」` : activeResolved?.reason || "",
+      ready: Boolean(activeResolved?.ready)
+    };
+  }
+
+  /**
+   * 真实探测某条模型的连通性（`bwe:ai-probe-model`）。
+   *
+   * 为什么单独开一条通道而不是把网络请求塞进 `ready`：
+   *   清单里有几十个模型，逐个探测会让「打开设置」卡死；而且 `ready` 的语义是
+   *   「配置齐全」（见 provider.mjs 顶部注释）。这里做的是**用户主动点「测试」**时的
+   *   一次性真实探测：带该模型自己的 apiKey 打 `{baseUrl}/models`，3 秒超时。
+   *
+   * 三种结论都要能表达，不能硬塞进布尔：
+   *   ok=true   明确可用（端点连通且 Key 被接受）
+   *   ok=false  明确不可用（连不上 / Key 明确无效 / HTTP 错误）
+   *   ok=null   **判不出来**（例如 /models 端点权限更高而拒绝 key）——
+   *             宁可给出模糊的正确答案，也不要给出确切的错误答案。
+   */
+  async function handleProbeModel(payload) {
+    try {
+      const id = String(payload?.id ?? "").trim();
+      if (!id) {
+        return { ok: false, id: "", status: 0, reachable: false, method: "none", detail: "缺少模型 id", reason: "no-id", latencyMs: 0 };
+      }
+      const settings = await settingsStore.load();
+      const entry = (settings.ai?.models ?? []).find((m) => m.id === id);
+      if (!entry) {
+        return {
+          ok: false,
+          id,
+          status: 0,
+          reachable: false,
+          method: "none",
+          detail: `模型 id「${id}」不在清单里`,
+          reason: "not-found",
+          latencyMs: 0
+        };
+      }
+      // mock 不需要联网：直接回"可用"，但要说明它是本地演示，避免用户误以为验证了网络。
+      if (entry.provider === "mock") {
+        return {
+          ok: true,
+          id,
+          status: 0,
+          reachable: true,
+          method: "none",
+          detail: "本地演示模式，不发网络请求（无需探测）",
+          reason: "mock",
+          latencyMs: 0,
+          evidence: "mock provider 永远可用，与网络无关"
+        };
+      }
+      const result = await probeModelEndpoint(
+        { baseUrl: entry.baseUrl, apiKey: entry.apiKey || settings.ai?.apiKey || "", model: entry.model },
+        { timeoutMs: PROBE_TIMEOUT_MS }
+      );
+      return {
+        ok: result.ok,
+        id,
+        status: result.status,
+        reachable: result.reachable,
+        method: result.method,
+        detail: result.detail,
+        reason: result.reason,
+        latencyMs: result.latencyMs,
+        errorCode: result.errorCode,
+        evidence: result.evidence
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        id: String(payload?.id ?? ""),
+        status: 0,
+        reachable: false,
+        method: "none",
+        detail: `探测时出错：${e?.message || e}`,
+        reason: "error",
+        latencyMs: 0
+      };
+    }
+  }
+  ipcMain.handle("bwe:ai-probe-model", async (_e, payload) => handleProbeModel(payload));
+
+  // 供 --ipc-probe 诊断用：直接调用同一套业务函数（而不是去摸 ipcMain 的内部字段）。
+  probeHandlers = {
+    importTrae: handleImportTrae,
+    getModels: handleGetModels,
+    setModel: handleSetModel,
+    addModel: handleAddModel,
+    probeModel: handleProbeModel
+  };
+
+
   // 日志给渲染侧的「输出」面板（--console 之外第二个观察点）
   ipcMain.handle("bwe:log-tail", async () => logBuffer.slice(-200));
+}
+
+// ---------------------------------------------------------------------------
+// --ipc-probe：模型清单 / Trae 导入 / 切换模型的真实返回（验收证据）
+// ---------------------------------------------------------------------------
+
+/**
+ * 为什么需要它：这三条链路里有三样东西只有跑在真 Electron 主进程里才成立 ——
+ *   1. safeStorage 的 DPAPI 加密（Node 单测只能用假实现）；
+ *   2. 真实 Trae 的 SQLite 读取（node:sqlite + 真实库文件）；
+ *   3. 真实的网络可达性探测（HEAD→GET 降级）。
+ * 所以验收要在真进程里跑一遍并留证据，而不是只贴单测结果。
+ *
+ * 直接调业务函数而不是摸 ipcMain 的内部 handler 表 —— 后者是 Electron 私有实现，
+ * 版本一变就失效，拿它当验收依据等于把证据建在流沙上。
+ */
+/**
+ * 探针收尾：明文 key 泄漏检查 → 写 JSON → 退出。
+ * 抽出来是因为只读探针（--ipc-probe-no-import）和完整探针都要走同一段收尾，
+ * 两份拷贝迟早会在「检查项」上分叉。
+ */
+async function finishProbe(report, outFile) {
+  const target = resolve(outFile);
+  // ⑤ 安全检查：settings.json 里绝不能出现明文 key（本轮新增了「填 key」入口，必须回归这一条）。
+  try {
+    const disk = JSON.parse(await fsReadFile(settingsStore.file, "utf8"));
+    const leaks = [];
+    const walk = (node, path) => {
+      if (typeof node === "string") {
+        if (node.startsWith("sk-") && !path.endsWith("encryptedApiKey")) leaks.push(`${path}=${node.slice(0, 8)}…`);
+        return;
+      }
+      if (Array.isArray(node)) return node.forEach((v, i) => walk(v, `${path}[${i}]`));
+      if (node && typeof node === "object") {
+        for (const [k, v] of Object.entries(node)) walk(v, path ? `${path}.${k}` : k);
+      }
+    };
+    walk(disk, "");
+    report.plaintextKeyLeaks = leaks;
+    report.cryptoAvailable = report.cryptoAvailable;
+    console.log(
+      `[ipc-probe] 明文 key 泄漏检查：${leaks.length === 0 ? "通过（0 处）" : `失败（${leaks.length} 处）`}`
+    );
+    if (leaks.length) console.log(`  ${leaks.join(" | ")}`);
+  } catch (e) {
+    report.plaintextKeyLeaks = [`检查失败：${e?.message || e}`];
+  }
+
+  try {
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, JSON.stringify(report, null, 2), "utf8");
+    console.log(`\n[ipc-probe] 已写入 ${target}`);
+    console.log(`[ipc-probe] cryptoAvailable=${report.cryptoAvailable}`);
+  } catch (e) {
+    console.error(`[ipc-probe] 写文件失败：${e?.message || e}`);
+  }
+  // ⚠ 用 process.exit 而不是 app.exit：
+  //   只读探针模式（--ipc-probe-no-import）不创建窗口，此时 app.exit(0) 只把控制权交回
+  //   Electron 事件循环，而没有窗口能终结它 —— 实测进程会一直挂着（被外部 timeout 杀掉）。
+  //   此刻所有写盘（await writeFile）都已完成，process.exit(0) 是安全的。
+  process.exit(0);
+}
+
+async function runIpcProbe(outFile) {
+  const target = resolve(outFile);
+  const report = { startedAt: new Date().toISOString(), userData: USER_DATA_DIR, cryptoAvailable: null, channels: {} };
+
+  try {
+    report.cryptoAvailable = Boolean(safeStorage?.isEncryptionAvailable?.());
+  } catch {
+    report.cryptoAvailable = false;
+  }
+
+  const record = (name, payload) => {
+    report.channels[name] = payload;
+    console.log(`\n===== ${name} =====`);
+    console.log(JSON.stringify(payload, null, 2));
+  };
+
+  try {
+    // `--ipc-probe-no-import`：只读模式。
+    // 为什么需要它：验收脚本要在**同一份 --user-data 目录**上分两步跑
+    // （先截图看 DOM、再读 ai-models 字段）。若第二次探针又执行 Trae 导入，
+    // 就会把模型写进被验收的目录，条数从 3 变成 5 —— 验收数据被自己污染了。
+    const readOnlyProbe = Boolean(ARGS.ipcProbeNoImport);
+
+    // 顺序有讲究：先导入（会写 settings），再读清单，最后切模型。
+    if (readOnlyProbe) {
+      console.log("[ipc-probe] 只读模式：跳过 Trae 导入与写操作，只读现有配置");
+      record("bwe:ai-models", await probeHandlers.getModels());
+      record("bwe:ai-status", await ai.aiStatus());
+      const modelsReadOnly = report.channels["bwe:ai-models"]?.models ?? [];
+      // 探测**两条**：一条 mock、一条非 mock。
+      // 为什么必须两条：mock 分支返回的是写死的字面量（不走 probeModelEndpoint），
+      // 只探测 mock 的话，「真实探测分支的字段名被改坏」完全测不出来 ——
+      // 我实际用注入断裂验证过这个盲区（改了 reason→kind 但测试仍全绿）。
+      const mockEntry = modelsReadOnly.find((m) => m.provider === "mock");
+      const realEntry = modelsReadOnly.find((m) => m.provider !== "mock");
+      if (mockEntry) record("bwe:ai-probe-model:mock", await probeHandlers.probeModel({ id: mockEntry.id }));
+      if (realEntry) record("bwe:ai-probe-model:real", await probeHandlers.probeModel({ id: realEntry.id }));
+      await finishProbe(report, outFile);
+      return;
+    }
+
+    record("bwe:ai-import-trae", await probeHandlers.importTrae());
+    record("bwe:ai-models", await probeHandlers.getModels());
+
+    // ① 切到「第一个未就绪的模型」—— 验证「切换成功但提示缺 key」这条最容易做错的路径。
+    const models = report.channels["bwe:ai-models"]?.models ?? [];
+    const firstNotReady = models.find((m) => !m.ready) ?? models[0];
+    if (firstNotReady) record("bwe:ai-set-model", await probeHandlers.setModel({ id: firstNotReady.id }));
+    else record("bwe:ai-set-model", { skipped: "清单为空" });
+
+    // ② 手动添加一条 Trae 里没有的模型（用户可能想用 DeepSeek 官方或自己的反代）。
+    record("bwe:ai-add-model", await probeHandlers.addModel({
+      label: "DeepSeek 官方 Flash",
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-flash",
+      notes: "手动添加，用于验证 add-model 通道"
+    }));
+
+    // ③ 重复添加同一条：必须原地更新（不能多出第二条）—— 这是 id 稳定性规则的实际验证。
+    const dupId = report.channels["bwe:ai-add-model"]?.id;
+    record("bwe:ai-add-model:dup", await probeHandlers.addModel({
+      label: "DeepSeek 官方 Flash（改名）",
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-flash"
+    }));
+
+    // ④ 给某条模型填一个 key，验证「填完立刻 ready」。
+    //    用假 key 而不是真 key：这里只验证管道（加密落盘 → 解析 → ready），不消耗真额度。
+    const traeEntry = models.find((m) => m.source === "trae-import");
+    if (traeEntry) {
+      record("bwe:ai-set-model:withkey", await probeHandlers.setModel({
+        id: traeEntry.id,
+        apiKey: "sk-fake-probe-key"
+      }));
+    }
+
+    record("bwe:ai-status", await ai.aiStatus());
+  } catch (e) {
+    record("error", { message: e?.stack || e?.message || String(e) });
+  }
+
+  await finishProbe(report, outFile);
 }
 
 // ---------------------------------------------------------------------------
@@ -572,6 +1059,80 @@ function registerIpc() {
  * 用 executeJavaScript 读渲染进程里的真实 DOM：比截图更早发现问题
  * （例如主题加载了但编辑器 mount 失败时，背景色是对的、内容是空的）。
  */
+/**
+ * --probe-dom：读取渲染侧**真实 DOM 内容**（不只是计数）。
+ *
+ * 为什么需要它：`UI 骨架: xxx=1` 只能证明「有这个元素」，证明不了「里面装的内容对不对」。
+ * 「模型下拉框里真的有 N 条、且 needsKey 那条显示为需要填 key」这类断言，必须读 option
+ * 文本才做得到 —— 否则模型切换功能坏了，截图看起来一切正常。
+ *
+ * 返回结构刻意做成「通用 + 模型专用」两部分：通用部分（selects/buttons）以后可以给别的
+ * 面板复用，modelSelect 部分是验收当前功能的唯一机器可验证证据。
+ */
+async function probeDom() {
+  try {
+    const data = await mainWindow.webContents.executeJavaScript(
+      `(() => {
+        const txt = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+        const describeSelects = () =>
+          Array.from(document.querySelectorAll("select")).map((sel, i) => ({
+            index: i,
+            id: sel.id || "",
+            cls: String(sel.className || "").slice(0, 60),
+            name: sel.getAttribute("data-model-select") !== null ? "model-select" : "",
+            optionCount: sel.options.length,
+            options: Array.from(sel.options).map((o) => ({
+              value: o.value,
+              text: txt(o),
+              disabled: Boolean(o.disabled)
+            })),
+            selectedValue: sel.value
+          }));
+
+        // 模型下拉框的优选查找顺序：
+        //   1) 显式 data-model-select（B 侧接好后应加这个锚点）
+        //   2) 出现在 .ai-panel 里的 select（AI 面板内的下拉框）
+        //   3) 全窗口第一个 select（最后兜底）
+        const aiPanel = document.querySelector(".ai-panel");
+        const explicit = document.querySelector("[data-model-select]");
+        const inPanel = aiPanel ? aiPanel.querySelector("select") : null;
+        const anySelect = document.querySelector("select");
+        const modelSel = explicit || inPanel || anySelect;
+        const modelSelect = modelSel
+          ? {
+              found: true,
+              source: explicit ? "data-model-select" : (inPanel ? "ai-panel select" : "first select in document"),
+              optionCount: modelSel.options.length,
+              selectedValue: modelSel.value,
+              selectedText: txt(modelSel.options[modelSel.selectedIndex]),
+              options: Array.from(modelSel.options).map((o) => ({
+                value: o.value,
+                text: txt(o),
+                disabled: Boolean(o.disabled)
+              }))
+            }
+          : { found: false, optionCount: 0, options: [] };
+
+        // 面板里「需要填 key」「已就绪」这类状态文字，模型功能坏了这里会空
+        const panelText = txt(aiPanel).slice(0, 1200);
+
+        return {
+          selects: describeSelects(),
+          modelSelect,
+          modelSelectFound: modelSelect.found,
+          aiPanelText: panelText,
+          aiPanelPresent: Boolean(aiPanel),
+          statusText: txt(document.querySelector(".statusbar, .status-bar")).slice(0, 400)
+        };
+      })()`,
+      true
+    );
+    return data ?? {};
+  } catch (e) {
+    return { error: e?.message || String(e) };
+  }
+}
+
 async function probeUiSkeleton() {
   try {
     const data = await mainWindow.webContents.executeJavaScript(
@@ -746,6 +1307,27 @@ async function captureAndJudge(opts) {
   console.log(
     `[shot] ${tag}主题样式: cream.css ${skeleton.creamStyleLoaded ? "已加载" : "未加载"} · body 背景 ${skeleton.bodyBg ?? "?"}`
   );
+
+  // ---- DOM 内容探针（--probe-dom 时输出）----
+  // 与几何探针分开放：几何回答「元素在不在/多宽」，DOM 回答「里面装的内容对不对」。
+  if (ARGS.probeDom) {
+    const dom = await probeDom();
+    console.log(`[dom] AI 面板存在: ${dom.aiPanelPresent ? "是" : "否"} · 下拉框来源: ${dom.modelSelect?.source ?? "未找到"}`);
+    console.log(
+      `[dom] 模型下拉框: found=${dom.modelSelectFound} optionCount=${dom.modelSelect?.optionCount ?? 0} `
+      + `selected=${dom.modelSelect?.selectedValue ?? ""}`
+    );
+    for (const opt of dom.modelSelect?.options ?? []) {
+      console.log(`[dom]   option value=${opt.value} text=${opt.text}${opt.disabled ? " (disabled)" : ""}`);
+    }
+    try {
+      await mkdir(dirname(resolve(ARGS.probeDom)), { recursive: true });
+      await writeFile(resolve(ARGS.probeDom), JSON.stringify(dom, null, 2), "utf8");
+      console.log(`[dom] 已写入 ${resolve(ARGS.probeDom)}`);
+    } catch (e) {
+      console.error(`[dom] 写入 JSON 失败：${e?.message || e}`);
+    }
+  }
 
   // ---- 几何探针（--probe 或 --verify 时输出）----
   if (ARGS.probe || ARGS.verify) {

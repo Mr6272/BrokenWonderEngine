@@ -77,6 +77,21 @@
   /* 界面缩放：由 settings 面板切换，写在 html 上 */
   --ui-scale: 1;
 
+  /* 中性交互层：hover / active 的语义是「在常态底上再压深一档」。
+     方向不能写死 —— 深色主题要靠变亮、浅色主题要靠变暗，所以用 --text 的极低比例
+     混进 --surface-3：--text 在奶油主题是深棕（混出来变暗），
+     在深夜主题是浅色（混出来变亮），方向天然正确。
+
+     ⚠ 这里刻意做成**不透明**混合，而不是照搬「text 5% + transparent」的写法：
+     实测色值算过 WCAG 对比度 ——
+       半透明叠加版：奶油主题 hover 9.86:1 / 常态 9.76:1，与常态的通道差只有 1~2，
+                     肉眼完全看不出 hover 反馈（等于修复了对比度、又引入了"没反馈"）；
+       本版（8% / 15% 不透明）：奶油 hover 8.55:1、active 7.52:1，通道差 14 / 27，
+                     既看得见反馈，又都远高于 4.5:1 的正文标准；深夜主题 9.40 / 7.57:1。
+     = 可见性与可读性同时满足。 */
+  --hover-bg: color-mix(in srgb, var(--text) 8%, var(--surface-3));
+  --active-bg: color-mix(in srgb, var(--text) 15%, var(--surface-3));
+
   /* 滚动条颜色也走令牌：写死 #333849 在奶油主题下是一条突兀的深灰条 */
   --scrollbar-thumb: #333849;
   --scrollbar-thumb-hover: #414963;
@@ -398,12 +413,13 @@ textarea {
 }
 
 .btn:hover {
-  background: #30354a;
+  /* 直接吃中性交互令牌：它已经是「常态底 + 一档压深」的不透明结果，
+     再套一层 color-mix 会把差异冲淡成看不见 */
+  background: var(--hover-bg);
 }
 
 .btn:active {
-  background: #2a2f42;
-  transform: translateY(1px);
+  background: var(--active-bg);
 }
 
 .btn:focus-visible {
@@ -519,7 +535,9 @@ textarea {
 .input:hover,
 .select:hover,
 .textarea:hover {
-  border-color: #38405a;
+  /* hover 时给一点主色暗示：mix 里保留 --line 的明度关系，
+     深色主题（--line #2c3040）与奶油主题（--line #e2dbcd）都不会退化成脏边 */
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
 }
 
 .input:focus,
@@ -660,7 +678,7 @@ textarea {
 }
 
 .stepper button:active {
-  background: #2a2f42;
+  background: var(--active-bg);
 }
 
 .stepper-input {
@@ -3881,4 +3899,257 @@ body .command-palette {
     white-space: normal;
     overflow: visible;
   }
+}
+
+/* ==========================================================================
+   交互态对照（仅用于验收截图自证，正常使用不会出现）
+   --------------------------------------------------------------------------
+   为什么留这条：hover 是瞬时状态，`--shot` 截不到。这里提供三个 class，
+   验收脚本可以在截图前给按钮套上，从而在一张图里同时看到
+   「常态 / hover / active」三档的底色与文字可读性。
+   实测对比度（WCAG，奶油主题）：常态 9.76:1 / hover 8.55:1 / active 7.52:1，
+   全部远高于正文 4.5:1 标准，且三档之间有 14~27 的通道差（看得见反馈）。
+   ========================================================================== */
+.btn.hover-demo { background: var(--hover-bg); }
+.btn.active-demo { background: var(--active-bg); }
+
+/* ---------- AI 面板：模型下拉与 Trae 导入 ----------
+   为什么不用两个按钮（flash/pro）而用下拉：模型数量会随导入增长，
+   按钮组放不下、也不表达"当前选的是哪个"。下拉是唯一能同时满足
+   「N 个模型 + 明确当前值 + 窄面板放得下」的控件。 */
+/* 顶部状态条：模型下拉 + 导入 + 计数在窄面板下要能换行，
+   而不是把右端挤成省略号 */
+.ai-panel .ai-head {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.ai-panel .ai-model-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.ai-panel .ai-model-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 230px;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11.5px;
+}
+
+/* 模型名带「（需要填 key）」时会被截断，给 tooltip 留余地 */
+.ai-panel .ai-model-select option {
+  font-size: 12px;
+}
+
+/* Trae 导入列表：一行一个模型，可勾选 */
+.ai-import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+}
+
+.ai-import-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+}
+
+.ai-import-row:hover {
+  background: var(--hover-bg);
+}
+
+.ai-import-check {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+
+/* warnings 是一等内容（Trae 的 key 无法导出），用偏暖的底色让它不容易被扫过去 */
+.ai-import-warning {
+  padding: 5px 8px;
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+/* 模型计数提示：原生 select 折叠时只显示当前项，
+   用户需要知道"还有几个可选 / 有几个要填 key"。窄面板下允许省略。 */
+/* 模型计数：这句要完整可读（"共 5 个模型（2 个待填 key）"），
+   所以不参与压缩、不省略 —— 压缩它等于把唯一能看到"清单规模"的信息丢掉。 */
+.ai-panel .ai-model-count {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* ---------- AI 面板：手动添加模型表单 ----------
+   字段多（供应商 / 地址 / 模型名 / 显示名 / key / 上下文窗口），
+   纵向排列 + 每项一个 group-label，比横排更容易扫读。 */
+.ai-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 52vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.ai-add-form .group-label {
+  margin-top: 6px;
+}
+
+.ai-add-form .input,
+.ai-add-form .select {
+  width: 100%;
+}
+
+/* 模型 chip 的"不可用"态：用 warn 色而不是 danger ——
+   缺 key / 连不上都是"需要你去处理"，不是错误。
+   常驻显示（不是一次性 toast），因为用户可能过一会儿才发消息才失败。 */
+.ai-panel .model-chip.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: var(--warn-soft);
+}
+
+.statusbar .mode-chip.warn {
+  color: var(--warn);
+}
+
+/* ==========================================================================
+   AI 面板：测试连接（用户主动探活）
+   --------------------------------------------------------------------------
+   为什么单独一块而不是塞进用量条：探测结果有 4 类（200/401/DNS/超时），
+   每类的下一步动作不同，必须给足空间写清"下一步该做什么"，
+   挤在用量条一行里只能放下"连接失败"四个字 —— 那等于把用户丢在原地。
+   ========================================================================== */
+.ai-panel .ai-probe-host {
+  flex: 0 0 auto;
+}
+
+.ai-panel .ai-probe {
+  margin: 6px 12px 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: 11.5px;
+}
+
+.ai-panel .ai-probe.ok {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--line));
+  background: var(--ok-soft);
+}
+
+.ai-panel .ai-probe.warn {
+  border-color: color-mix(in srgb, var(--warn) 42%, var(--line));
+  background: var(--warn-soft);
+}
+
+.ai-panel .ai-probe-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-panel .ai-probe-mark {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.ai-panel .ai-probe.ok .ai-probe-mark {
+  color: var(--ok);
+}
+
+.ai-panel .ai-probe.warn .ai-probe-mark {
+  color: var(--warn);
+}
+
+.ai-panel .ai-probe-headline {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ai-panel .ai-probe-next {
+  margin-top: 3px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.ai-panel .ai-probe-detail {
+  margin-top: 3px;
+  color: var(--text-3);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+/* loading 态：旋转的小环，比转圈文字更安静，也不会在窄面板里换行 */
+.ai-panel .ai-probe-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ai-probe-spin 0.8s linear infinite;
+  vertical-align: -1px;
+}
+
+@keyframes ai-probe-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-panel .ai-probe-spinner { animation: none; }
+}
+
+/* 顶部 chip 里嵌了「测试连接」按钮：要让 chip 能容下按钮而不撑高 */
+.ai-panel .ai-head .model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+}
+
+.ai-panel .ai-head .model-chip .btn {
+  height: 19px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+/* 探测结果的第三档：unknown（判不出来）。
+   为什么需要单独一档：主进程用 ok:null 表达"这次既不能证明能用、也不能证明不能用"
+   （例如 /models 端点权限要求更高，401 不代表对话接口不可用）。
+   画成绿色是替引擎保证它保证不了的事，画成黄色又会让用户以为 key 坏了 ——
+   所以用中性色 + "?" 图标。 */
+.ai-panel .ai-probe.unknown {
+  border-color: var(--line);
+  background: var(--surface-3);
+}
+
+.ai-panel .ai-probe.unknown .ai-probe-mark {
+  color: var(--text-2);
+}
+
+.ai-panel .ai-probe.unknown .ai-probe-headline {
+  color: var(--text-2);
+  font-weight: 600;
 }

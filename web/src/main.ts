@@ -116,8 +116,46 @@ function boot(): void {
         m.setProblems("demo", list as never);
       });
     },
+    /** 注入演示模型清单（验收截图用，只影响内存） */
+    demoModels: () => {
+      void import("./panels/aiPanel.ts").then((m) => {
+        m.injectModelsForDemo(m.demoModelsState());
+        console.log("[AI] 已注入演示模型清单");
+      });
+    },
+    /** 模型清单诊断（验收/排查用） */
+    debugAiModels: () => {
+      void import("./panels/aiPanel.ts").then((m) => {
+        const d = m.aiPanelDebugModels();
+        console.log("[AI 模型诊断]", JSON.stringify(d, null, 2));
+      });
+    },
     /** 打开某个底部面板标签（problems / output / ai） */
     showPanelTab: (id: "problems" | "output" | "ai") => editor.openBottomTab(id),
+    /**
+     * 交互态对照（仅用于验收截图）：把画布工具条的按钮分别套上
+     * 常态 / hover / active 三档，让一张截图里能同时看到三档底色与文字可读性。
+     * 不自动执行 —— 产品界面里不该常驻一排"演示按钮"。
+     */
+    demoInteractionStates: () => {
+      const host = document.querySelector(".canvas-toolbar");
+      if (!host) return "no toolbar";
+      const mk = (cls: string, text: string) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn sm " + cls;
+        b.textContent = text;
+        return b;
+      };
+      const wrap = document.createElement("div");
+      wrap.className = "row tight demo-states";
+      wrap.style.marginLeft = "8px";
+      wrap.appendChild(mk("", "常态 Normal"));
+      wrap.appendChild(mk("hover-demo", "hover"));
+      wrap.appendChild(mk("active-demo", "active"));
+      host.appendChild(wrap);
+      return "ok";
+    },
     dump: () => ({
       hasProject: !!store.project,
       projectName: store.project?.name,

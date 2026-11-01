@@ -16,7 +16,7 @@ import { completeChat, streamChat } from "./stream.mjs";
 import { compactSession, shouldCompact, summaryInstructions } from "./compact.mjs";
 import { buildSystemPrompt, PROMPT_VERSION } from "./prefix.mjs";
 import { routeModel } from "./router.mjs";
-import { createMockStream, resolveProvider } from "./provider.mjs";
+import { createMockStream, listModels, resolveProvider } from "./provider.mjs";
 import { describeToolResult, pruneToolResult } from "./prune.mjs";
 import { emptyUsage, estimateSavings, mergeUsage } from "./usage.mjs";
 import { makeMessage, messageText } from "./session.mjs";
@@ -64,21 +64,43 @@ export function createAiBridge(opts) {
     return s ?? {};
   }
 
-  /** 当前状态：provider / 是否 ready / 模型名 / 累计用量。 */
+  /** 当前状态：provider / 是否 ready / 模型清单 / 当前活动模型 / 累计用量。 */
   async function aiStatus() {
     const settings = await readSettings();
     const ai = settings.ai ?? {};
-    const resolved = resolveProvider(ai, "flash");
+    const listed = listModels(ai, "");
+    const activeEntry = listed.models.find((m) => m.id === listed.active) ?? null;
+    // 解析「真正会发给谁」：有 activeModelId 就按 id 解析，否则回落两槽语义（向后兼容）。
+    const resolved = listed.active ? resolveProvider(ai, listed.active) : resolveProvider(ai, "flash");
     const ready = Boolean(resolved.ready);
+    // 未就绪时 provider 显示 mock（实际会走 mock 分支），但把期望的 provider 也带出来，
+    // 界面才能显示「想用 siliconflow，但缺 key」这类可操作的信息。
     const activeProvider = ready ? resolved.provider : "mock";
     return {
       provider: activeProvider,
+      // 期望用但还没就绪的供应商（界面据此提示「去填 key」）；已就绪时与 provider 相同。
+      intendedProvider: resolved.provider,
       ready,
       mode: "desktop",
       message: ready
-        ? `${activeProvider} 已就绪 · flash=${resolved.modelFlash} / pro=${resolved.modelPro}`
+        ? `${resolved.label || activeProvider}（${resolved.provider}）已就绪`
+          + ` · 模型 ${resolved.model}`
         : `${resolved.reason}。填了 Key 之后这里会切到真模型，界面不用改。`,
+      // 旧的两槽字段保留（面板可能还在读 flash/pro）
       models: { flash: resolved.modelFlash, pro: resolved.modelPro },
+      // 新：当前活动模型 id + 完整清单，面板据此渲染下拉框
+      activeModelId: listed.active,
+      activeModel: activeEntry
+        ? {
+            id: activeEntry.id,
+            label: activeEntry.label,
+            provider: activeEntry.provider,
+            model: activeEntry.model,
+            ready: activeEntry.ready,
+            needsKey: activeEntry.needsKey
+          }
+        : null,
+      modelList: listed.models,
       usage: {
         cacheHitRate: estimateSavings(sessionUsage, activeProvider).cacheHitRate,
         inputTokens: sessionUsage.inputTokens,
@@ -242,9 +264,22 @@ export function createAiBridge(opts) {
     const ai = settings.ai ?? {};
     // ---- 1. 本地路由（零 token、零网络）----
     const route = routeModel(request, { autoRoute: ai.autoRoute !== false, manualModel: ai.manualModel || "" });
-    emit({ type: "route", requestId, model: route.model, reason: route.reason, localOnly: true });
 
-    const resolved = resolveProvider(ai, route.model);
+    // 用户在下拉框里显式选了一个模型（activeModelId）→ 就用它，不再走 flash/pro 两槽。
+    // autoRoute 的语义是「没有手动指定时按复杂度选」，所以手动指定必须优先，
+    // 否则用户选了 Kimi 却在回答里看到 DeepSeek 的输出，会以为切换功能没生效。
+    const activeId = String(ai.activeModelId || "").trim();
+    const useActive = activeId && listModels(ai, activeId).models.some((m) => m.id === activeId);
+    const resolved = useActive ? resolveProvider(ai, activeId) : resolveProvider(ai, route.model);
+    emit({
+      type: "route",
+      requestId,
+      model: route.model,
+      reason: useActive
+        ? `已指定模型「${resolved.label || activeId}」(${resolved.provider})`
+        : route.reason,
+      localOnly: true
+    });
 
     // ---- 2. 压缩（如需要）----
     await maybeCompact(resolved, settings);

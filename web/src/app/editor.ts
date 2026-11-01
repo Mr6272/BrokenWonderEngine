@@ -249,6 +249,35 @@ export class Editor {
     palBtn.dataset.commandPaletteTrigger = "1";
     bar.appendChild(palBtn);
 
+    // 验收用隐形触发器（0 尺寸、不可聚焦）：让 --tap 能在截图前跑一段验收脚本。
+    // 产品上完全看不见，也不会被键盘 Tab 到。
+    const probeHook = el("button", {
+      type: "button",
+      "data-demo-interaction-states": "1",
+      "aria-hidden": "true",
+      tabindex: "-1"
+    });
+    probeHook.style.cssText = "position:absolute;left:-9999px;width:0;height:0;padding:0;border:0;opacity:0";
+    probeHook.addEventListener("click", () => {
+      const w = window as unknown as { __BWE__?: { demoInteractionStates?: () => string } };
+      w.__BWE__?.demoInteractionStates?.();
+    });
+
+    // 验收用：注入演示模型清单（让截图能看到多条模型 + needsKey 标记）
+    const modelProbe = el("button", {
+      type: "button",
+      "data-demo-models": "1",
+      "aria-hidden": "true",
+      tabindex: "-1"
+    });
+    modelProbe.style.cssText = "position:absolute;left:-9999px;width:0;height:0;padding:0;border:0;opacity:0";
+    modelProbe.addEventListener("click", () => {
+      const w = window as unknown as { __BWE__?: { demoModels?: () => void } };
+      w.__BWE__?.demoModels?.();
+    });
+    bar.appendChild(modelProbe);
+    bar.appendChild(probeHook);
+
     // 账号入口（登录 / 订阅）
     this.accountBtn = button(Session.label(), () => openAccountMenu(this.accountBtn), {
       variant: "ghost",
