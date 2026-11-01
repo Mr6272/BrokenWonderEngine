@@ -1853,6 +1853,15 @@ declare namespace bwe {
     off(fn: (info: CombatEvent) => void): boolean;
     /** 两点距离是否在射程内。 */
     inRange(a: Entity, b: Entity, range?: number): boolean;
+    /**
+     * 注册「这一格能不能站」判据，供 `hit()` 的击退使用。
+     *
+     * 不注册时击退是**直接位移**（会把人打进墙里）。注册后引擎把击退拆成 ≤4px
+     * 的小步、每步问一次这个函数：返回 `false` 的地方不会踏进去，撞墙就停在墙边。
+     *
+     * @param fn `fn(x, y) → boolean`；传 `null` 注销。
+     */
+    setKnockbackGuard(fn: ((x: number, y: number) => boolean) | null): boolean;
   };
 
   // ---- 调试 debug ---------------------------------------------------------
@@ -1893,5 +1902,66 @@ declare namespace bwe {
     actor(e: Entity, color?: string): void;
     /** 运行时统计（性能水位观察）。 */
     stats(): DebugStats;
+    /**
+     * 最近 32 条**脚本错误**（环形缓冲，满了淘汰最老的）。
+     *
+     * 每条重复错误只占一个条目、`count` 累加 —— 否则每帧抛一次的脚本会在两秒内把缓冲冲干净。
+     * `line` 取不到 Rhino 行号时为 `-1`。
+     */
+    errors(): ScriptErrorEntry[];
+    /** 清空错误缓冲（同时重置"同一脚本同一行只报一次"的日志去重表）。 */
+    clearErrors(): boolean;
+    /**
+     * 把错误缓冲写成 JSON 落盘。
+     * @param path 相对工程根的路径；省略 = `Build/diagnostics/script-errors.json`
+     */
+    dumpErrors(path?: string): boolean;
+  };
+
+  /** `bwe.debug.errors()` 的条目。 */
+  interface ScriptErrorEntry {
+    /** 脚本名（boot.json 里 `scripts[].name`）。 */
+    script: string;
+    /** 异常消息（单行化后，最长 300 字）。 */
+    message: string;
+    /** Rhino 行号；取不到为 -1。 */
+    line: number;
+    /** 同一处错误的重复次数。 */
+    count: number;
+    /** 首次发生时的帧号。 */
+    frame: number;
+  }
+
+  // ---- 性能剖析 prof ------------------------------------------------------
+
+  /** `bwe.prof.report()` 的返回。 */
+  interface ProfReport {
+    /** 已结算的帧数（样本窗口上限 2048）。 */
+    frames: number;
+    /** 整帧脚本耗时均值（ms）。 */
+    avgMs: number;
+    p50Ms: number;
+    p95Ms: number;
+    p99Ms: number;
+    maxMs: number;
+    scripts: ProfScriptStat[];
+  }
+
+  /** 单脚本的剖析统计。 */
+  interface ProfScriptStat {
+    name: string;
+    /** 该脚本单次调用耗时的 p95（ms）。 */
+    p95Ms: number;
+    /** 该脚本累计被调用次数。 */
+    calls: number;
+  }
+
+  const prof: {
+    /** 开/关按每脚本累计执行耗时（`on` 省略 = true）。默认关闭。 */
+    enable(on?: boolean): boolean;
+    /** 整帧耗时直方图 + 每脚本 p95。`frames` 为 0 表示还没采到样本。 */
+    report(): ProfReport;
+    /** 清空所有样本（开关状态保持不变）。 */
+    reset(): boolean;
   };
 }

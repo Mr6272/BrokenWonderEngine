@@ -1,0 +1,1028 @@
+/* ==========================================================================
+   BWE Studio — 「奶油软科技」主题层（cream soft-tech）
+   --------------------------------------------------------------------------
+   这一层只做两件事，**不新增业务样式**：
+     1. 覆盖 app.css 顶部的设计令牌（单一色彩来源不变：颜色仍然只在令牌层定义）；
+     2. 为 VS Code 结构类（activity-bar / sidebar / editor-area / editor-tabs /
+        panel / command-palette / ai-panel）定义观感。
+   业务类（.btn / .card / .pane / .tabs …）继续由 app.css 负责，靠令牌自动变奶油色。
+
+   加载顺序：styles/app.css 在前，本文件在后（见 web/index.html）。
+   主题切换：浏览器里默认就是奶油（本文件 :root），另外提供
+     html.theme-midnight（深夜靛蓝，沿用原深色）
+     html.theme-high-contrast（在 app.css 里定义，优先级更高，始终有效）
+
+   设计语言（为什么这么定）：
+     - 奶油软科技 = 暖白底 + 奶咖主色 + 低对比阴影 + 大圆角 + 细暖灰描边。
+       不用纯白 #fff（刺眼）、不用纯黑 #000（脏），所有「面」之间靠 1px 暖灰线分隔，
+       靠 2~6% 的暖色叠加表达层级，而不是靠加深。
+     - 「软」落在三处：圆角 8~10px、阴影低透明大扩散、hover/active 用底色变化
+       而不是加粗描边（描边变粗会让布局抖 1px）。
+     - 「科技」落在两处：状态色（成功/警告/错误/信息）保持饱和可辨；
+       所有可交互元素都有 2px 焦点环 + 2px 透明外扩，键盘操作一眼能看到焦点。
+     - 「人性化」落在两处：正文/次要/弱化三级文字对比降到 4.5:1 附近而不是拉满；
+       所有区域都能靠键盘与命令面板抵达，不依赖鼠标精确落点。
+   ========================================================================== */
+
+/* ---------------- 1. 令牌：奶油软科技 ---------------- */
+
+:root {
+  /* 滚动条：暖灰，不能是 app.css 里那个凌晨蓝 */
+  --scrollbar-thumb: #d5ccba;
+  --scrollbar-thumb-hover: #c4b9a3;
+
+  /* 表面：暖白 → 米白 → 沙色，三级层次靠 3% 明度差 + 1px 线 */
+  --bg: #f6f2ea;
+  --surface: #fdfbf6;
+  --surface-2: #f4f0e7;
+  --surface-3: #ebe6da;
+  --sunken: #f0ece3;
+  --line: #e0d9ca;
+  --line-soft: #ece6d9;
+
+  /* 文字：暖灰，三级对比分别约 11:1 / 5.6:1 / 3.2:1 */
+  --text: #3a352d;
+  --text-2: #6d6557;
+  --text-3: #9b9285;
+  /* 「反色」在奶油底上是深色，不要写成白色 */
+  --text-inverse: #fbf8f2;
+
+  /* 主色：奶咖。hover 变亮、down 变深，soft 用 12% 叠加做选中底 */
+  --accent: #8a6c48;
+  --accent-hover: #a3845c;
+  --accent-down: #705635;
+  --accent-soft: rgba(138, 108, 72, 0.12);
+
+  /* 语义色：降低明度以适配暖白底（亮色在浅底上会糊） */
+  --ok: #4a7f57;
+  --warn: #b07d22;
+  --danger: #b3504a;
+  --ok-soft: rgba(74, 127, 87, 0.12);
+  --warn-soft: rgba(176, 125, 34, 0.13);
+  --danger-soft: rgba(179, 80, 74, 0.12);
+
+  /* 画布：比面板再暖一档，让画板「陷」进去；网格线低对比，不抢图形 */
+  --canvas-bg: #f1ece1;
+  --canvas-grid: #e4ddce;
+  --canvas-grid-major: #d7cebb;
+  --canvas-axis: #c5b9a3;
+  --select: #8a6c48;
+  --hover-outline: #b07d22;
+
+  /* 模块类别色：同一族系降饱和，保证在暖白底上都可读且彼此可分 */
+  --cat-move: #4b76b5;
+  --cat-render: #8464b8;
+  --cat-detect: #4a7f57;
+  --cat-event: #b07d22;
+  --cat-combat: #b3504a;
+  --cat-dialogue: #35798c;
+  --cat-fx: #a3823a;
+  --cat-grid: #4c8f84;
+  --cat-game: #b56a48;
+
+  /* 尺度：软科技偏大圆角 */
+  --r-sm: 5px;
+  --r-md: 8px;
+  --r-lg: 10px;
+
+  /* 阴影：低透明 + 大扩散 + 暖色（纯黑阴影在奶油底上发灰发脏） */
+  --shadow-modal: 0 20px 56px rgba(84, 68, 44, 0.16), 0 2px 8px rgba(84, 68, 44, 0.08);
+  --shadow-pop: 0 8px 26px rgba(84, 68, 44, 0.13), 0 1px 3px rgba(84, 68, 44, 0.06);
+
+  /* 结构尺寸（VS Code 骨架） */
+  --activity-w: 48px;
+  --sidebar-w: 264px;
+  --editor-tab-h: 34px;
+  --panel-h: 220px;
+}
+
+/* ---------------- 2. 深夜主题（保留原深色，不再是默认） ---------------- */
+
+html.theme-midnight {
+  --bg: #12141a;
+  --surface: #1a1c24;
+  --surface-2: #212430;
+  --surface-3: #272b38;
+  --sunken: #0e1015;
+  --line: #2c3040;
+  --line-soft: #242836;
+
+  --text: #e6eaf2;
+  --text-2: #98a2b6;
+  --text-3: #646d82;
+  --text-inverse: #ffffff;
+
+  --accent: #4c8dff;
+  --accent-hover: #6ba1ff;
+  --accent-down: #3579ee;
+  --accent-soft: rgba(76, 141, 255, 0.15);
+
+  --ok: #2ecc8f;
+  --warn: #f0a92b;
+  --danger: #f0616d;
+  --ok-soft: rgba(46, 204, 143, 0.14);
+  --warn-soft: rgba(240, 169, 43, 0.14);
+  --danger-soft: rgba(240, 97, 109, 0.14);
+
+  --canvas-bg: #15171d;
+  --canvas-grid: #22252f;
+  --canvas-grid-major: #2c303d;
+  --canvas-axis: #3a4050;
+  --select: #4c8dff;
+  --hover-outline: #f0a92b;
+
+  --cat-move: #4c8dff;
+  --cat-render: #a274ff;
+  --cat-detect: #2ecc8f;
+  --cat-event: #f0a92b;
+  --cat-combat: #f0616d;
+  --cat-dialogue: #2bc4d4;
+  --cat-fx: #c9a227;
+  --cat-grid: #4fb3a5;
+  --cat-game: #e8794a;
+
+  --shadow-modal: 0 18px 48px rgba(0, 0, 0, 0.55);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------------- 3. 基础面：整体质感 ---------------- */
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  /* 奶油底上细字更容易糊，字重与字距略调 */
+  -webkit-font-smoothing: antialiased;
+  font-synthesis: none;
+}
+
+/* 奶油主题的滚动条必须换成暖灰：app.css 里写死的 #333849 在浅底上是两块黑补丁 */
+:root ::-webkit-scrollbar-thumb,
+html:not(.theme-midnight) ::-webkit-scrollbar-thumb {
+  background: #cdc4b1;
+  background-clip: content-box;
+  border-radius: 8px;
+}
+
+:root ::-webkit-scrollbar-thumb:hover,
+html:not(.theme-midnight) ::-webkit-scrollbar-thumb:hover {
+  background: #baae97;
+  background-clip: content-box;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* app.css 里 card 头用白色 1.5% 叠加（深色下面的提亮）；浅底下要反过来压一点点暖 */
+.card > header {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+/* 焦点环：2px 主色 + 2px 外扩。所有可交互元素统一，键盘用户才看得见 */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* 触屏/鼠标点击不留焦点环（只在键盘导航时出现），符合软科技的「安静」感 */
+button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ---------------- 4. VS Code 结构：活动栏 ---------------- */
+
+.activity-bar {
+  flex: 0 0 var(--activity-w);
+  width: var(--activity-w);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 0;
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
+  user-select: none;
+}
+
+.activity-bar .activity-item {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.activity-bar .activity-item:hover {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.activity-bar .activity-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 选中态左侧的 3px 指示条：比整块反色更安静，也不改变布局宽度 */
+.activity-bar .activity-item.active::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+.activity-bar .activity-item .badge {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+
+.activity-bar .activity-spacer {
+  flex: 1;
+}
+
+/* ---------------- 5. VS Code 结构：侧边栏 ---------------- */
+
+.sidebar {
+  flex: 0 0 var(--sidebar-w);
+  width: var(--sidebar-w);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.sidebar.collapsed {
+  flex: 0 0 0;
+  width: 0;
+  border-right: 0;
+}
+
+/* 侧边栏头：标题 + 右侧动作，像 VS Code 的 SECTION 头 */
+.sidebar-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-2);
+  text-transform: uppercase;
+}
+
+.sidebar-head .spacer {
+  flex: 1;
+}
+
+/* 侧边栏内的标签页：改成「分段胶囊」，比下划线更软 */
+.sidebar .tabs {
+  padding: 6px 8px;
+  gap: 4px;
+  background: transparent;
+  border-bottom: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.sidebar .tabs button {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.sidebar .tabs button:hover {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.sidebar .tabs button.active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---------------- 6. VS Code 结构：编辑区 ---------------- */
+
+.editor-area {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+}
+
+/* 顶部标签条：扁平、可拖动重排、激活项靠底部 2px 主色 + 底色 */
+.editor-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  height: var(--editor-tab-h);
+  padding: 0 6px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  user-select: none;
+}
+
+.editor-tabs::-webkit-scrollbar {
+  height: 0;
+}
+
+.editor-tabs .editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  max-width: 240px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 100ms ease;
+}
+
+.editor-tabs .editor-tab:hover {
+  background: var(--surface-3);
+}
+
+.editor-tabs .editor-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.editor-tabs .editor-tab.drag-over {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 未保存圆点：不用感叹号，避免读者把它当错误 */
+.editor-tabs .editor-tab .dirty-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: 0 0 auto;
+}
+
+.editor-tabs .editor-tab .tab-close {
+  width: 16px;
+  height: 16px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-3);
+}
+
+.editor-tabs .editor-tab:hover .tab-close,
+.editor-tabs .editor-tab.active .tab-close {
+  display: flex;
+}
+
+.editor-tabs .editor-tab .tab-close:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* 标签条右侧的空闲区：双击可「全部关闭」，也给窗口拖动留出空白 */
+.editor-tabs .tabs-spacer {
+  flex: 1;
+  min-width: 24px;
+}
+
+/* 编辑区主体（画布 / 面板宿主） */
+.editor-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* 编辑区里的画布要「贴底」，不要再套一层 8px 外边距 + 圆角卡片 */
+.editor-body .canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  border-radius: 0;
+  border: 0;
+}
+
+/* ---------------- 7. VS Code 结构：底部面板 ---------------- */
+
+.panel {
+  flex: 0 0 var(--panel-h);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-2);
+  border-top: 1px solid var(--line);
+}
+
+.panel.collapsed {
+  flex: 0 0 30px;
+}
+
+.panel.collapsed .panel-body {
+  display: none;
+}
+
+.panel-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line-soft);
+  user-select: none;
+}
+
+.panel-head .panel-tab {
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.panel-head .panel-tab:hover {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.panel-head .panel-tab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.panel-head .panel-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 「问题」计数徽标：有错误才显眼，0 错误时安静 */
+.panel-head .count-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.panel-body.flush {
+  padding: 0;
+}
+
+.panel-resizer {
+  flex: 0 0 4px;
+  cursor: row-resize;
+  background: transparent;
+}
+
+.panel-resizer:hover {
+  background: var(--accent-soft);
+}
+
+/* ---------------- 8. VS Code 结构：命令面板 ---------------- */
+
+.command-palette-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  /* 遮罩只做「把注意力移到面板」这件事，不该把整屏压成灰片：
+     1600x1000 下 0.18 + blur(2px) 会把平均亮度从 0.86 压到 0.59，
+     连底下的工程状态都看不清。0.10 + blur(1px) 足够聚焦又保留上下文。 */
+  background: rgba(58, 48, 34, 0.10);
+  backdrop-filter: blur(1px);
+}
+
+.command-palette {
+  width: min(680px, 82vw);
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-modal);
+}
+
+.command-palette .cp-input {
+  flex: 0 0 auto;
+  height: 42px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+
+.command-palette .cp-input::placeholder {
+  color: var(--text-3);
+}
+
+.command-palette .cp-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
+.command-palette .cp-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.command-palette .cp-item:hover,
+.command-palette .cp-item.active {
+  background: var(--accent-soft);
+}
+
+.command-palette .cp-item .cp-key {
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--sunken);
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.command-palette .cp-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+/* ---------------- 9. AI 助手面板 ---------------- */
+
+.ai-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--surface);
+}
+
+.ai-panel .ai-thread {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 消息气泡：用户右、助手左；助手气泡用暖色纸感，用户气泡用主色淡底 */
+.ai-msg {
+  max-width: 88%;
+  padding: 8px 11px;
+  border-radius: var(--r-md);
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-msg.user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+
+.ai-msg.assistant {
+  align-self: flex-start;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  color: var(--text);
+}
+
+.ai-msg.system {
+  align-self: center;
+  max-width: 100%;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+/* 流式光标：一个呼吸的小方块，比 ▍字符更安静 */
+.ai-msg .ai-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 12px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: ai-cursor-breathe 1.1s ease-in-out infinite;
+}
+
+@keyframes ai-cursor-breathe {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
+/* 工具调用折叠块：像一条档案条目，不是第二块气泡 */
+.ai-tool {
+  align-self: flex-start;
+  max-width: 92%;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.ai-tool > header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+.ai-tool > header .ai-tool-name {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+.ai-tool > .body {
+  padding: 0 9px 7px;
+  white-space: pre-wrap;
+  color: var(--text-3);
+}
+
+/* 底部：输入区 + 用量条 */
+.ai-panel .ai-compose {
+  flex: 0 0 auto;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface-2);
+}
+
+.ai-panel .ai-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.ai-panel .ai-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.ai-panel .ai-input {
+  flex: 1;
+  min-height: 34px;
+  max-height: 132px;
+  resize: none;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.ai-panel .ai-input:focus {
+  border-color: var(--accent);
+}
+
+/* 用量条：省 token 必须可见 —— 模型、路由理由、缓存命中率、三类 token */
+.ai-panel .ai-meter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line-soft);
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-panel .ai-meter .k {
+  color: var(--text-2);
+}
+
+/* 缓存命中率：≥80% 绿、40~80% 黄、<40% 灰。用颜色讲述「省钱」这件事 */
+.ai-panel .ai-meter .cache-hit.high { color: var(--ok); }
+.ai-panel .ai-meter .cache-hit.mid { color: var(--warn); }
+.ai-panel .ai-meter .cache-hit.low { color: var(--text-3); }
+
+/* 模型徽标：flash 冷蓝 / pro 暖紫，和路由理由同一条 */
+.ai-panel .ai-meter .model-chip {
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--sunken);
+  font-family: var(--mono);
+}
+
+.ai-panel .ai-meter .model-chip.flash { color: var(--cat-move); }
+.ai-panel .ai-meter .model-chip.pro { color: var(--cat-render); }
+
+/* ---------------- 10. 引擎可观测：问题列表 ---------------- */
+
+.problem-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.problem-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.problem-row:hover {
+  background: var(--surface-3);
+}
+
+.problem-row .sev {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.problem-row.error .sev { color: var(--danger); }
+.problem-row.warn .sev { color: var(--warn); }
+
+.problem-row .where {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.problem-row .msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+/* ---------------- 11. 软科技细节：过渡与轻动效 ----------------
+   只给「会出现在视线里的东西」加过渡（按钮、标签、气泡），
+   画布和滚动区一律不加，避免 60fps 重绘里多一层合成开销。 */
+
+.btn,
+.activity-bar .activity-item,
+.sidebar .tabs button,
+.editor-tabs .editor-tab,
+.panel-head .panel-tab,
+.command-palette .cp-item,
+.problem-row {
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+/* 降低动效偏好的用户：全部关掉 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------- 12. 小窗口适配 ----------------
+   1280x720 是最低验收尺寸。侧边栏与活动栏在这时最占地方，
+   所以窄窗口下把它们收紧，保证编辑区至少拿到 55% 宽度。 */
+
+@media (max-width: 1320px) {
+  :root {
+    --activity-w: 42px;
+    --sidebar-w: 232px;
+    --panel-h: 190px;
+  }
+
+  .editor-tabs .editor-tab {
+    padding: 0 8px;
+    max-width: 190px;
+  }
+
+  .activity-bar .activity-item {
+    width: 34px;
+    height: 34px;
+  }
+
+  .command-palette {
+    width: min(600px, 88vw);
+    max-height: 56vh;
+  }
+}
+
+/* 桌面壳的标题栏下方如果留了拖动区，这里给一条可拖拽的细带 */
+.titlebar-drag {
+  height: 0;
+  -webkit-app-region: drag;
+}
+
+/* ---------------- 13. 平台新增结构的观感补充 ----------------
+   本节只补 app.css 里新增的几个内部类：它们是 VS Code 结构的实现细节。
+   几何（宽高 / flex / gap）已经由 app.css 负责，这里只叠颜色、圆角、描边、阴影，
+   避免「几何与观感混写」导致以后调布局时改错文件。 */
+
+/* 画布工具条：与画布同一张纸，不要再用面板底色把它切成两块 */
+.canvas-toolbar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* 工具条里的分隔线用暖灰，app.css 的 --line 在奶油底上偏冷 */
+.canvas-toolbar .sep {
+  background: var(--line);
+}
+
+/* 右侧辅助栏：与侧边栏同族，但左边框要淡一档（它在画布右侧，不该切得太硬） */
+.aux-panel {
+  background: var(--surface);
+  border-left: 1px solid var(--line-soft);
+}
+
+.aux-head {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-2);
+}
+
+/* 输出面板：等宽字体在奶油底上要稍微加一点行距，否则细字会糊 */
+.output-lines {
+  line-height: 1.62;
+}
+
+.output-line .out-channel {
+  color: var(--text-3);
+}
+
+.output-line .out-text {
+  color: var(--text-2);
+}
+
+/* 成功行不宜用饱和绿（浅底上刺眼），压到 --ok */
+.output-line.ok .out-mark { color: var(--ok); }
+.output-line.warn .out-mark { color: var(--warn); }
+.output-line.error .out-mark { color: var(--danger); }
+.output-line.error .out-text { color: var(--danger); }
+
+/* AI diff 预览：像一张稿纸 —— 浅暖底 + 细描边 + 无投影，避免和代码区抢层级 */
+.ai-diff {
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+}
+
+.ai-diff-pre {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+  color: var(--text);
+  line-height: 1.55;
+}
+
+/* 状态栏里的 AI 状态：这是「省 token 可见」的常驻位置，要能一眼扫到数字 */
+.statusbar .ai-status {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 桌面壳模式徽标：网页版 vs 桌面版，颜色区分但都不抢眼 */
+.statusbar .mode-badge {
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--sunken);
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.statusbar .mode-badge.desktop {
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 问题面板行的图标列：等宽对齐，避免 1 字符宽度差把整列推歪 */
+.problem-row .sev {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分段胶囊在窄侧边栏下会有横滚条：奶油主题里它必须是暖灰，
+   否则是浅底上的一条黑线（app.css 的兜底色在奶油下不合适）。 */
+.segmented::-webkit-scrollbar-thumb {
+  background: #cdc4b1;
+  border: 1px solid transparent;
+  background-clip: content-box;
+  border-radius: 3px;
+}

@@ -1,0 +1,8 @@
+{
+  "name": "bwe-studio-desktop",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "BWE Studio 桌面壳（Electron 37，离线 vendor）"
+}

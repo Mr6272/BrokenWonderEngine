@@ -162,6 +162,51 @@ final class ScriptDebug {
             ScriptJs.put(o, "enabled", Boolean.valueOf(enabled));
             return o;
         });
+
+        // ---------- 脚本错误可观测（契约 §6） ----------
+        //
+        // 这三个方法解决「网页版 / 桌面版看不到哪个脚本第几行炸了」。
+        // 数据源是 ScriptEngine.metrics()（环形缓冲，最多 32 条），这里只做 Java → JS 转换。
+
+        // errors() → [{ script, message, line, count, frame }]
+        //
+        // ⚠ 必须返回 **JS 原生数组**：Rhino 会把 Java List 包成 Java 对象，
+        // 脚本里 .length / for(var i...) / JSON.stringify 全都拿不到元素。
+        // 现有 stats() 返回 Flex 对象（Java 侧 Scriptable），数组这里同样要 cx.newArray。
+        api.addMethod(ns, "errors", (cx, thisObj, args) -> {
+            java.util.List<ScriptMetrics.Err> snap = engine.metrics().errorSnapshot();
+            Object[] items = new Object[snap.size()];
+            for (int i = 0; i < snap.size(); i++) {
+                ScriptMetrics.Err e = snap.get(i);
+                ScriptJs.Flex o = (ScriptJs.Flex) api.newObj();
+                ScriptJs.put(o, "script", e.script);
+                ScriptJs.put(o, "message", e.message);
+                ScriptJs.put(o, "line", Double.valueOf(e.line));
+                ScriptJs.put(o, "count", Double.valueOf(e.count));
+                ScriptJs.put(o, "frame", Double.valueOf(e.frame));
+                items[i] = o;
+            }
+            return cx == null ? items : cx.newArray(scope, items);
+        });
+
+        // clearErrors() → boolean
+        api.addMethod(ns, "clearErrors", (cx, thisObj, args) -> {
+            engine.metrics().clearErrors();
+            // 顺手清掉日志侧的「同一脚本同一行只报一次」去重表：
+            // 用户点「清空」的意图是"重新观察"；留着旧 key 会让**下一次**冒出来的
+            // 同一处错误不再写日志，那就从"看不见"变成"再也不报"，更糟。
+            engine.clearReportedErrors();
+            return Boolean.TRUE;
+        });
+
+        // dumpErrors() / dumpErrors(path) → boolean
+        //
+        // 默认落盘 Build/diagnostics/script-errors.json；给了 path 就按它写。
+        // 路径解析约定与 bwe.save 一致（相对 Build 的父目录），见 ScriptMetrics.dumpErrors。
+        api.addMethod(ns, "dumpErrors", (cx, thisObj, args) -> {
+            String path = ScriptJs.str(ScriptJs.arg(args, 0), "");
+            return Boolean.valueOf(engine.metrics().dumpErrors(engine.buildRootForDiagnostics(), path));
+        });
     }
 
     /** 每帧自动绘制（由 ScriptEngine.draw 之前调用）。 */

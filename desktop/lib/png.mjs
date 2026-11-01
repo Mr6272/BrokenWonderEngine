@@ -1,0 +1,219 @@
+/**
+ * 桌面壳 · 极简 PNG 检查（截图验收用）。
+ *
+ * 验收要的不是「文件存在」，而是「截出来的东西真的是页面」。
+ * 所以这里只解 8bit RGB/RGBA 非隔行 PNG（Electron 的 capturePage 就产出这个），
+ * 算出三个可判定的数字：
+ *   - 尺寸（宽高），
+ * - 非背景像素占比：以出现次数最多的颜色为「背景」，别的都算前景；
+ *   - 不同颜色数：纯色截图会是 1，空窗口 / 白屏通常是 1~3。
+ *
+ * 不引任何解码库（离线 + 也不想为此装依赖）。解码器思路与
+ * web/tools/frame-diff.mjs 里的最小解码器一致（5 种 filter 全支持）。
+ */
+
+import zlib from "node:zlib";
+
+/** 解 PNG → {width, height, channels, rgba}。 */
+export function decodePng(buf) {
+  if (buf.length < 8 || buf.toString("hex", 0, 4) !== "89504e47") throw new Error("不是 PNG 文件");
+  let pos = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 8;
+  let colorType = 6;
+  let interlaced = 0;
+  const idat = [];
+  while (pos < buf.length) {
+    const len = buf.readUInt32BE(pos);
+    const type = buf.toString("ascii", pos + 4, pos + 8);
+    const data = buf.subarray(pos + 8, pos + 8 + len);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      interlaced = data[12];
+    } else if (type === "IDAT") {
+      idat.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    pos += 12 + len;
+  }
+  if (bitDepth !== 8) throw new Error(`只支持 8bit PNG，实际 ${bitDepth}`);
+  if (interlaced !== 0) throw new Error("不支持隔行 PNG");
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 0 ? 1 : -1;
+  if (channels < 0) throw new Error(`不支持的 colorType ${colorType}`);
+
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  const stride = width * channels;
+  const rgba = Buffer.alloc(width * height * 4);
+  const prev = Buffer.alloc(stride);
+  const cur = Buffer.alloc(stride);
+  let rp = 0;
+  for (let y = 0; y < height; y++) {
+    const filter = raw[rp++];
+    raw.copy(cur, 0, rp, rp + stride);
+    rp += stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= channels ? cur[x - channels] : 0;
+      const b = prev[x];
+      const c = x >= channels ? prev[x - channels] : 0;
+      let v = cur[x];
+      if (filter === 1) v = (v + a) & 0xff;
+      else if (filter === 2) v = (v + b) & 0xff;
+      else if (filter === 3) v = (v + ((a + b) >> 1)) & 0xff;
+      else if (filter === 4) {
+        const p = a + b - c;
+        const pa = Math.abs(p - a);
+        const pb = Math.abs(p - b);
+        const pc = Math.abs(p - c);
+        v = (v + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 0xff;
+      }
+      cur[x] = v;
+    }
+    for (let x = 0; x < width; x++) {
+      const si = x * channels;
+      const di = (y * width + x) * 4;
+      if (channels === 1) {
+        rgba[di] = rgba[di + 1] = rgba[di + 2] = cur[si];
+        rgba[di + 3] = 255;
+      } else if (channels === 3) {
+        rgba[di] = cur[si];
+        rgba[di + 1] = cur[si + 1];
+        rgba[di + 2] = cur[si + 2];
+        rgba[di + 3] = 255;
+      } else {
+        rgba[di] = cur[si];
+        rgba[di + 1] = cur[si + 1];
+        rgba[di + 2] = cur[si + 2];
+        rgba[di + 3] = cur[si + 3];
+      }
+    }
+    cur.copy(prev);
+  }
+  return { width, height, channels, rgba };
+}
+
+/**
+ * 统计截图内容。
+ *
+ * @param {Buffer} buf PNG 字节
+ * @returns {{width:number,height:number,bytes:number,uniqueColors:number,backgroundRatio:number,
+ *           foregroundRatio:number,background:string,backgroundLuminance:number,averageLuminance:number,
+ *           isDark:boolean,isEmpty:boolean}}
+ */
+export function analyzePng(buf) {
+  const { width, height, rgba } = decodePng(buf);
+  const counts = new Map();
+  // 抽样：超大截图逐像素统计也能跑，但 5 万像素足够判断「白屏 / 纯色」。
+  const step = Math.max(1, Math.floor((width * height) / 120000));
+  let total = 0;
+  let lumSum = 0;
+  // 亮度用 Rec.709 权重（人眼对绿最敏感）：判断「这是深色主题还是奶油主题」时，
+  // 直接用 RGB 平均会被深蓝（高 B 低 R/G）误导。
+  for (let i = 0; i < width * height; i += step) {
+    const o = i * 4;
+    // 量化到 5bit/通道：截图有抗锯齿与缩放，同色会略有浮动，量化后判断更稳。
+    const key = ((rgba[o] >> 3) << 10) | ((rgba[o + 1] >> 3) << 5) | (rgba[o + 2] >> 3);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    lumSum += relativeLuminance(rgba[o], rgba[o + 1], rgba[o + 2]);
+    total += 1;
+  }
+  let bgKey = 0;
+  let bgCount = 0;
+  for (const [k, v] of counts) {
+    if (v > bgCount) {
+      bgCount = v;
+      bgKey = k;
+    }
+  }
+  const bgR = ((bgKey >> 10) & 31) * 8;
+  const bgG = ((bgKey >> 5) & 31) * 8;
+  const bgB = (bgKey & 31) * 8;
+  const bg = `#${hex2(bgR)}${hex2(bgG)}${hex2(bgB)}`;
+  const backgroundLuminance = relativeLuminance(bgR, bgG, bgB);
+  const averageLuminance = total ? lumSum / total : 0;
+  const backgroundRatio = total ? bgCount / total : 0;
+  const foregroundRatio = 1 - backgroundRatio;
+  // 判定「空」：前景极少（<1.5%）或颜色数 < 8 —— 白屏、纯色、加载占位都属于这类。
+  const isEmpty = foregroundRatio < 0.015 || counts.size < 8;
+  // 判定「深色主题」：主色亮度 < 0.35（奶油主题的白底约 0.94，深蓝约 0.09）。
+  const isDark = backgroundLuminance < 0.35;
+  return {
+    width,
+    height,
+    bytes: buf.length,
+    uniqueColors: counts.size,
+    backgroundRatio,
+    foregroundRatio,
+    background: bg,
+    backgroundLuminance,
+    averageLuminance,
+    isDark,
+    partiallyTransparent: hasAlpha(rgba),
+    isEmpty
+  };
+}
+
+function hex2(v) {
+  return Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+}
+
+/** Rec.709 相对亮度（0=黑，1=白）。 */
+function relativeLuminance(r, g, b) {
+  const lin = (c) => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+function hasAlpha(rgba) {
+  // 全不透明就返回 false：capturePage 的 PNG 有时带 alpha 通道但全 255。
+  for (let i = 3; i < rgba.length; i += 4 * 97) {
+    if (rgba[i] !== 255) return true;
+  }
+  return false;
+}
+
+/** 一行可读结论（--shot 模式打到 stdout，验收直接看这行）。 */
+export function describePng(stats) {
+  const pct = (v) => `${(v * 100).toFixed(1)}%`;
+  return [
+    `尺寸 ${stats.width}x${stats.height}`,
+    `${stats.bytes} 字节`,
+    `颜色数 ${stats.uniqueColors}`,
+    `背景 ${stats.background} ${pct(stats.backgroundRatio)}`,
+    `非背景像素 ${pct(stats.foregroundRatio)}`,
+    `亮度 ${stats.backgroundLuminance.toFixed(2)}`,
+    stats.isEmpty ? "判定：空白/纯色截图" : "判定：有内容"
+  ].join(" · ");
+}
+
+/**
+ * 主题断言：主色亮度 < 0.35 判深色。
+ *
+ * 为什么用「最高频颜色」而不是平均亮度：奶油主题里大面积是浅底（~0.94），
+ * 但深色文字/描边占比不低，平均亮度会被拉低到 0.6 附近，阈值判断会飘；
+ * 而「出现次数最多的颜色」就是窗口底色，语义最直接。
+ *
+ * @returns {{theme:"cream"|"dark"|"unknown", detail:string, ok:boolean}}
+ */
+export function assertTheme(stats) {
+  if (stats.isEmpty) {
+    return { theme: "unknown", ok: false, detail: "截图空白，无法判断主题" };
+  }
+  const dark = stats.backgroundLuminance < 0.35;
+  const bg = stats.background;
+  const lum = stats.backgroundLuminance.toFixed(2);
+  if (dark) {
+    return {
+      theme: "dark",
+      ok: false,
+      detail: `主色 ${bg}（亮度 ${lum}）是深色 —— 预期是奶油主题 #f7f4ee（亮度约 0.94）。检查 web/index.html 是否加载了 styles/cream.css`
+    };
+  }
+  return { theme: "cream", ok: true, detail: `主色 ${bg}（亮度 ${lum}），浅底主题` };
+}

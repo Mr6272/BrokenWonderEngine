@@ -76,6 +76,10 @@
 
   /* 界面缩放：由 settings 面板切换，写在 html 上 */
   --ui-scale: 1;
+
+  /* 滚动条颜色也走令牌：写死 #333849 在奶油主题下是一条突兀的深灰条 */
+  --scrollbar-thumb: #333849;
+  --scrollbar-thumb-hover: #414963;
 }
 
 /* 高对比度模式 */
@@ -176,14 +180,14 @@ textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333849;
+  background: var(--scrollbar-thumb);
   border: 3px solid transparent;
   background-clip: content-box;
   border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #414963;
+  background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
 }
 
@@ -350,11 +354,18 @@ textarea {
 }
 
 .statusbar .cell {
+  flex: 0 0 auto;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
+/* 提示语是唯一允许被压缩的 cell：它最长但不承载数据，
+   压缩它才能保证坐标、AI 用量这些数字永远完整可见。 */
+/* 提示语是唯一允许被压缩的 cell：它最长但不承载数据，
+   压缩它才能保证坐标、AI 用量这些数字永远完整可见。 */
 .statusbar .hint {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: auto;
   color: var(--text-2);
   overflow: hidden;
@@ -709,16 +720,34 @@ textarea {
 }
 
 /* 分段控件 */
+/* 分段控件。
+   窄栏（侧边栏 232px）下必须能横滚：早前没写 white-space/flex，容器被外层宽度
+   约束时按钮跟着被压缩，中文就成了「全 部」「精 灵」这种逐字竖排。 */
 .segmented {
   display: inline-flex;
+  flex-wrap: nowrap;
+  max-width: 100%;
   padding: 2px;
   gap: 2px;
   border-radius: var(--r-md);
   background: var(--sunken);
   border: 1px solid var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.segmented::-webkit-scrollbar {
+  height: 5px;
+}
+
+.segmented::-webkit-scrollbar-thumb {
+  border-width: 1px;
+  border-radius: 3px;
 }
 
 .segmented button {
+  flex: 0 0 auto;
   height: 22px;
   padding: 0 10px;
   border: 0;
@@ -726,18 +755,21 @@ textarea {
   background: transparent;
   color: var(--text-2);
   font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .segmented button:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, .04);
+  /* 白叠加在奶油底上等于没有反馈，改用主色淡底 */
+  background: var(--accent-soft);
 }
 
 .segmented button.active {
-  background: var(--surface-3);
+  background: var(--surface);
   color: var(--text);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, .3);
+  /* 深色投影在浅底上是一条脏边，改用细描边表达"凸起" */
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 /* ==========================================================================
@@ -878,7 +910,7 @@ textarea {
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
-  background: rgba(255, 255, 255, .015);
+  background: var(--surface-3);
 }
 
 .card > header .spacer {
@@ -1159,7 +1191,8 @@ textarea {
 }
 
 .mod-head:hover {
-  background: rgba(255, 255, 255, .025);
+  /* 白叠加在浅底主题上不可见，统一改用主色淡底 */
+  background: var(--accent-soft);
 }
 
 .mod-head .caret {
@@ -1276,7 +1309,8 @@ textarea {
 .canvas-hud.tl {
   left: 10px;
   top: 10px;
-  background: rgba(10, 12, 16, .72);
+  /* 写死深色会在奶油主题下变成画布左上角一块黑斑；改用表面令牌 + 半透明 */
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   padding: 3px 8px;
@@ -1286,10 +1320,10 @@ textarea {
 .canvas-hud.tr {
   right: 10px;
   top: 10px;
-  background: rgba(76, 141, 255, .9);
+  background: var(--accent);
   border-radius: var(--r-sm);
   padding: 3px 8px;
-  color: #fff;
+  color: var(--text-inverse);
 }
 
 .canvas-hud.tr:empty {
@@ -1303,7 +1337,9 @@ textarea {
 .toast-host {
   position: fixed;
   left: 50%;
-  bottom: 54px;
+  /* bottom 基准要避开底部面板：面板展开时它很高，固定 54px 会压到 AI 输入框上。
+     用「面板高度 + 自身高度余量」变量化，面板折叠时自动落回低位。 */
+  bottom: 64px;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
@@ -1318,7 +1354,8 @@ textarea {
   max-width: 420px;
   padding: 9px 13px;
   border-radius: var(--r-md);
-  background: rgba(24, 27, 36, .97);
+  /* 用表面令牌而不是写死深色：奶油主题下 toast 不能是一块黑补丁 */
+  background: var(--surface);
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
   box-shadow: var(--shadow-pop);
@@ -3037,3 +3074,811 @@ textarea {
   line-height: 1.5;
 }
 
+
+/* ==========================================================================
+   VS Code 结构骨架（B 新增）
+   --------------------------------------------------------------------------
+   契约 §5.1 的 7 个类名（activity-bar / sidebar / editor-area / editor-tabs /
+   panel / statusbar / command-palette / ai-panel）的观感由 cream.css 负责；
+   这里只定义**几何**：谁占多少宽、谁 flex:1、谁可滚动。
+
+   为什么几何写在这里而不是主题层：
+     几何是功能性的（折叠、拖宽、小窗口不横滚），主题层只该改颜色和圆角。
+     哪天换主题，不该连带把布局也改坏。
+
+   小窗口纪律（1280x720 是验收下限）：
+     - 所有栏位 min-width:0 —— 否则画布的 canvas 会按内容把整条 flex 顶宽，
+       直接产生横向滚动条；
+     - 侧边栏/辅助栏给固定 flex-basis，宽度由拖拽覆盖；
+     - 编辑区永远 flex:1，是唯一"可以被压缩"的一栏。
+   ========================================================================== */
+
+/* ---------- 顶层：顶栏 + 主区 + 底部面板 + 状态栏 ---------- */
+.app-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 主区：活动栏 | 侧边栏 | 编辑区 | 辅助栏 */
+.shell-main {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* 活动栏：48px 竖条（尺寸由 cream.css 的 --activity-w 决定，这里给兜底） */
+.shell-main .activity-bar {
+  flex: 0 0 var(--activity-w, 48px);
+  width: var(--activity-w, 48px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 0;
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
+  user-select: none;
+  overflow: hidden;
+}
+
+.activity-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+}
+
+.activity-group.bottom {
+  margin-top: auto;
+}
+
+.shell-main .activity-bar .activity-item {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.shell-main .activity-bar .activity-item:hover {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.shell-main .activity-bar .activity-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.shell-main .activity-bar .activity-item .badge {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+
+/* 侧边栏 + 它的拖宽手柄：包一层，折叠时手柄一起消失 */
+.sidebar-wrap {
+  flex: 0 0 auto;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+.sidebar {
+  flex: 0 0 var(--sidebar-w, 264px);
+  width: var(--sidebar-w, 264px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+
+/* 折叠 = 宽度归零（不切 display，理由见文件头） */
+.sidebar.collapsed {
+  flex: 0 0 0 !important;
+  width: 0 !important;
+  border-right: 0;
+}
+
+.sidebar-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-body-inner {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-resizer {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.sidebar-resizer:hover {
+  background: var(--accent-soft);
+}
+
+.sidebar-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-head .spacer {
+  flex: 1;
+}
+
+.sidebar-collapse-btn {
+  padding: 0 6px !important;
+}
+
+/* ---------- 编辑区：标签条 + 主体育 ---------- */
+.editor-area {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.editor-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  height: var(--editor-tab-h, 34px);
+  padding: 0 4px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  user-select: none;
+}
+
+.editor-tabs::-webkit-scrollbar {
+  height: 0;
+}
+
+.editor-tabs .editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  max-width: 200px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.editor-tabs .editor-tab .editor-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-tabs .editor-tab:hover {
+  background: var(--surface-3);
+}
+
+.editor-tabs .editor-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.editor-tabs .editor-tab.drag-over {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.editor-tabs .editor-tab .dirty-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: 0 0 auto;
+}
+
+.editor-tabs .editor-tab .tab-close {
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: var(--text-3);
+  opacity: .7;
+}
+
+.editor-tabs .editor-tab:hover .tab-close {
+  opacity: 1;
+}
+
+.editor-tabs .editor-tab .tab-close:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.editor-tabs .tabs-spacer {
+  flex: 1;
+  min-width: 24px;
+}
+
+.editor-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* 编辑区里的画布：贴满，不套卡片外距（那是旧三栏布局的观感） */
+.editor-body .canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  border-radius: 0;
+  border: 0;
+}
+
+/* 画布标签的容器：工具条 + 画布，纵向分配 */
+.canvas-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 画布工具条：原顶部工具栏，移到画布标签内（其余标签不该看到画笔与缩放） */
+.canvas-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--toolbar-h, 42px);
+  padding: 0 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  user-select: none;
+}
+
+.canvas-toolbar::-webkit-scrollbar {
+  height: 0;
+}
+
+.canvas-toolbar .group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.canvas-toolbar .sep {
+  flex: 0 0 1px;
+  width: 1px;
+  height: 22px;
+  background: var(--line);
+}
+
+.canvas-toolbar .spacer {
+  flex: 1;
+  min-width: 6px;
+}
+
+.canvas-toolbar .btn {
+  flex: 0 0 auto;
+}
+
+/* ---------- 右侧辅助侧边栏 ---------- */
+.aux-panel {
+  flex: 0 0 var(--aux-w, 300px);
+  width: var(--aux-w, 300px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.aux-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-2);
+}
+
+.aux-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---------- 底部面板 ---------- */
+.panel {
+  flex: 0 0 var(--panel-h, 220px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-2);
+  border-top: 1px solid var(--line);
+}
+
+/* 折叠 = 只留标题条，高度归零；不切 display（理由同侧边栏） */
+.panel.collapsed {
+  flex: 0 0 30px !important;
+}
+
+.panel.collapsed .panel-body {
+  display: none;
+}
+
+.panel-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 30px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line-soft);
+  user-select: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.panel-head::-webkit-scrollbar {
+  height: 0;
+}
+
+.panel-head .panel-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.panel-head .panel-tab:hover {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.panel-head .panel-tab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.panel-head .panel-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.panel-head .count-badge {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.panel-body.flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.panel-resizer {
+  flex: 0 0 4px;
+  cursor: row-resize;
+  background: transparent;
+}
+
+.panel-resizer:hover {
+  background: var(--accent-soft);
+}
+
+/* ---------- 输出面板行 ---------- */
+.output-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.output-lines {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.output-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.output-line .out-mark {
+  flex: 0 0 12px;
+  text-align: center;
+}
+
+.output-line .out-channel {
+  flex: 0 0 auto;
+  min-width: 48px;
+  color: var(--text-3);
+}
+
+.output-line .out-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+}
+
+.output-line.ok .out-mark { color: var(--ok); }
+.output-line.warn .out-mark { color: var(--warn); }
+.output-line.error .out-mark { color: var(--danger); }
+.output-line.error .out-text { color: var(--danger); }
+
+/* ---------- AI 面板：输入区收紧 ----------
+   底部面板高度有限，ai-compose 每多占一行，对话区就少一行。
+   所以快捷按钮强制单行（放不下就横滚），用量条也强制单行。 */
+.ai-panel .ai-quick {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.ai-panel .ai-quick::-webkit-scrollbar {
+  height: 0;
+}
+
+.ai-panel .ai-quick .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.ai-panel .ai-input-row {
+  align-items: flex-end;
+}
+
+.ai-panel .ai-input {
+  min-height: 32px;
+}
+
+.ai-panel .ai-meter {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+
+.ai-panel .ai-meter::-webkit-scrollbar {
+  height: 0;
+}
+
+.ai-panel .ai-meter > * {
+  flex: 0 0 auto;
+}
+
+/* ---------- AI 面板：diff 预览 ---------- */
+/* AI 面板在底部面板里时，对话区要保住一个可读高度；
+   高度不够就整体滚，而不是把对话压成一条缝。 */
+.ai-panel .ai-thread {
+  min-height: 96px;
+}
+
+.ai-diff .body {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.ai-diff-pre {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  max-height: 220px;
+}
+
+/* ---------- 状态栏新增：AI 状态 / 模式徽标 ---------- */
+/* AI 状态两格不可压缩：省 token 可视是验收点，不能被省略号吃掉。
+   宁可压缩中间那条提示语（它信息密度最低）。 */
+.statusbar .ai-model {
+  flex: 0 0 auto;
+  min-width: 92px;
+  color: var(--text-2);
+}
+
+.statusbar .ai-usage {
+  flex: 0 0 auto;
+  min-width: 150px;
+  color: var(--text-3);
+  max-width: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+.statusbar .mode-chip {
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--sunken);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.statusbar .mode-chip.web {
+  color: var(--warn);
+}
+
+/* ---------- 命令面板：条目内部排版 ---------- */
+.command-palette .cp-title {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.command-palette .cp-group {
+  flex: 0 0 auto;
+  margin-left: 6px;
+}
+
+.command-palette .cp-key {
+  margin-left: auto;
+}
+
+.command-palette .cp-item .glyph {
+  flex: 0 0 auto;
+  opacity: .7;
+}
+
+/* ---------- 新结构里的分隔小线 ---------- */
+.divider {
+  height: 1px;
+  background: var(--line-soft);
+  margin: 8px 0;
+}
+
+/* ---------- 小窗口：1280x720 不许出现横向滚动条 ---------- */
+@media (max-width: 1320px) {
+  /* 侧边栏收窄后，分段胶囊仍要一行放得下：只压内边距与字号，不压缩文字 */
+  .segmented button {
+    padding: 0 6px;
+    font-size: 11.5px;
+  }
+
+  :root {
+    --activity-w: 42px;
+    --sidebar-w: 232px;
+    --aux-w: 268px;
+    --panel-h: 190px;
+  }
+
+  .editor-tabs .editor-tab {
+    padding: 0 7px;
+    max-width: 150px;
+  }
+
+  .canvas-toolbar {
+    padding: 0 6px;
+    gap: 4px;
+  }
+
+  .shell-main .activity-bar .activity-item {
+    width: 34px;
+    height: 34px;
+  }
+}
+
+/* 极窄（<1100）：辅助栏让位，编辑区优先；面板高度再收 */
+@media (max-width: 1100px) {
+  :root {
+    --aux-w: 236px;
+    --panel-h: 168px;
+  }
+}
+
+/* ---------- 问题面板行（几何部分；颜色跟着主题令牌走） ---------- */
+.problem-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.problem-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.problem-row:hover {
+  background: var(--surface-3);
+}
+
+.problem-row .sev {
+  flex: 0 0 14px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.problem-row.error .sev { color: var(--danger); }
+.problem-row.warn .sev { color: var(--warn); }
+.problem-row.info .sev { color: var(--text-3); }
+
+.problem-row .where {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.problem-row .msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+/* ---------- 命令面板浮层：定义处唯一属于主题层 ----------
+   遮罩的颜色与模糊**只在 cream.css 定义一处**（契约 §5：观感归主题层）。
+   这里曾经为了压过主题层的过重模糊而写了一条 `body .command-palette-mask` 覆盖，
+   主题层调轻之后已删除 —— 两份定义迟早会在调参时打架：改了一份不知道另一份还生效，
+   看哪份赢还要试特异性。后人别再加第二层遮罩定义。 */
+body .command-palette {
+  box-shadow: var(--shadow-modal);
+}
+
+/* ---------- 首启引导条（非模态） ----------
+   为什么不是模态框：第一次打开就盖一堵墙，用户看不到编辑器本身；
+   验收截图也会被挡住。这里做成右下角一条安静的提示，点「看引导」才展开。 */
+.quickstart-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 44px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 7px 8px 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.quickstart-banner .qs-ico {
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
+.quickstart-banner .qs-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 小窗口下让文案可以折行，不要被压成省略号 */
+@media (max-width: 1100px) {
+  .quickstart-banner .qs-text {
+    white-space: normal;
+    overflow: visible;
+  }
+}

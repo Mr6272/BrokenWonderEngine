@@ -480,7 +480,15 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.debug.circle", "bwe.debug.circle(x, y, r, color = \"#00ff88\")", "单次画圆", "debug"),
   d("bwe.debug.line", "bwe.debug.line(x1, y1, x2, y2, color = \"#00ff88\")", "单次画线", "debug"),
   d("bwe.debug.actor", "bwe.debug.actor(e, color = \"#00ff88\")", "画某实体的碰撞框", "debug"),
-  d("bwe.debug.stats", "bwe.debug.stats() → {actors, pendingDestroy, sceneEpoch, colliders, vehicles, spatialZones, drawCommands, enabled}", "运行时统计（性能水位观察）", "debug")
+  d("bwe.debug.stats", "bwe.debug.stats() → {actors, pendingDestroy, sceneEpoch, colliders, vehicles, spatialZones, drawCommands, enabled}", "运行时统计（性能水位观察）", "debug"),
+  d("bwe.debug.errors", "bwe.debug.errors() → [{script, message, line, count, frame}]", "最近 32 条脚本错误（环形缓冲，重复只累加 count）", "debug"),
+  d("bwe.debug.clearErrors", "bwe.debug.clearErrors() → boolean", "清空错误缓冲并重置日志去重表", "debug"),
+  d("bwe.debug.dumpErrors", "bwe.debug.dumpErrors(path = \"Build/diagnostics/script-errors.json\") → boolean", "把错误缓冲写成 JSON 落盘", "debug"),
+
+  // ===== 脚本性能剖析 =====
+  d("bwe.prof.enable", "bwe.prof.enable(on = true) → boolean", "开/关按每脚本累计执行耗时（默认关闭）", "debug"),
+  d("bwe.prof.report", "bwe.prof.report() → {frames, avgMs, p50Ms, p95Ms, p99Ms, maxMs, scripts: [{name, p95Ms, calls}]}", "整帧耗时直方图 + 每脚本 p95", "debug"),
+  d("bwe.prof.reset", "bwe.prof.reset() → boolean", "清空剖析样本（开关状态不变）", "debug")
 ];
 
 // ---------------- 查询 ----------------

@@ -221,6 +221,15 @@ final class ScriptApi {
                 ScriptDebug.install(ScriptApi.this);
             }
         });
+        // 脚本性能剖析（契约 §6 的 bwe.prof）。放最后：它只读 ScriptEngine.metrics()，
+        // 不依赖任何其它子系统；而 install 顺序决定「谁先挂到 bwe 上」，
+        // 放末尾不会打乱既有 8 个子系统的注册顺序（有确定性断言依赖那个顺序）。
+        installSafely("prof", new Runnable() {
+            @Override
+            public void run() {
+                ScriptProf.install(ScriptApi.this);
+            }
+        });
     }
 
     private void installSafely(String name, Runnable body) {

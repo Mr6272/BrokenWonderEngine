@@ -17,15 +17,45 @@ function ensureHost(): HTMLElement {
     host = document.createElement("div");
     host.className = "toast-host";
     document.body.appendChild(host);
+    // 每弹出一次都按当前面板高度重算位置：底部面板展开时 toast 要整体上移，
+    // 否则会压在 AI 输入框上（用户正在打字的地方）。
+    syncToastOffset(host);
   }
   return host;
 }
 
 const MAX_LIVE = 3;
 
+/**
+ * toast 的垂直位置跟随底部面板高度。
+ *
+ * CSS 里给了兜底基准（64px），但面板展开时它不够 —— 这里用最朴素的办法：
+ * 读一次 panel/statusbar 的 rect 写进 CSS 变量，没有面板结构（旧布局/弹窗场景）
+ * 就保持 CSS 兜底值，不会因为找不到元素而报错。
+ */
+/** 面板几何变化后重算 toast 位置（编辑器切标签/拖高面板时调用）。 */
+export function syncToastPosition(): void {
+  if (host && document.body.contains(host)) syncToastOffset(host);
+}
+
+function syncToastOffset(host: HTMLElement): void {
+  try {
+    const panel = document.querySelector(".panel") as HTMLElement | null;
+    const statusbar = document.querySelector(".statusbar") as HTMLElement | null;
+    const panelH = panel && !panel.classList.contains("collapsed") ? panel.getBoundingClientRect().height : 0;
+    const statusH = statusbar ? statusbar.getBoundingClientRect().height : 0;
+    // 面板展开时还要再让出输入区高度，避免压在输入框上
+    host.style.bottom = `${Math.round(statusH + panelH + 12)}px`;
+  } catch {
+    /* 忽略：CSS 兜底值继续生效 */
+  }
+}
+
 export function toast(text: string, kind: ToastKind = "info", ms?: number): void {
   if (!text) return;
   const h = ensureHost();
+  // 每次弹出都按"当前"面板高度重算：面板可能刚展开/折叠/被拖高过
+  syncToastOffset(h);
   while (h.childElementCount >= MAX_LIVE) {
     h.removeChild(h.firstElementChild as Node);
   }

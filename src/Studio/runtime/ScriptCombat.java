@@ -141,6 +141,14 @@ final class ScriptCombat {
         // hit(opts) → {hit, target, amount, blocked, killed}
         api.addMethod(ns, "hit", (cx, thisObj, args) -> hit(ScriptJs.arg(args, 0)));
 
+        // setKnockbackGuard(fn) —— 注册「这一格能不能站」判据（fn(x,y) → boolean）
+        //
+        // 不注册也能用：击退退回"直接位移"的老行为（老工程零变化）。
+        api.addMethod(ns, "setKnockbackGuard", (cx, thisObj, args) -> {
+            setKnockbackGuard(ScriptJs.arg(args, 0));
+            return Boolean.TRUE;
+        });
+
         // defend(e, on) / defending(e)
         api.addMethod(ns, "defend", (cx, thisObj, args) -> {
             Actor a = api.actorOf(ScriptJs.arg(args, 0));
@@ -340,8 +348,13 @@ final class ScriptCombat {
             float dy = to.y - from.y;
             float len = (float) Math.sqrt(dx * dx + dy * dy);
             if (len > 0.001f) {
-                to.x += dx / len * kb;
-                to.y += dy / len * kb;
+                // ★ 击退不能直接写 to.x/to.y。
+                //
+                // 为什么：原来这里一次性 `to.x += dx/len*kb`，完全绕过脚本自己的墙体
+                // 解算 —— 站在楼里被警察打一下，人就被推进墙里/推进楼里，观感就是
+                // "被攻击时容易卡进房子"。现在把击退交给 knockbackGuard（脚本注册的
+                // "这一格能不能站"判据）+ 分步位移：撞墙就停在墙边，不会穿进去。
+                knockback(to, dx / len * kb, dy / len * kb);
             }
         }
         boolean killed = to.hp <= 0f && before > 0f;
@@ -370,6 +383,99 @@ final class ScriptCombat {
         ScriptJs.put(result, "blocked", Boolean.valueOf(blocked));
         ScriptJs.put(result, "killed", Boolean.valueOf(killed));
         return result;
+    }
+
+    // ---------------- 击退 ----------------
+
+    /**
+     * 脚本注册的「某点能不能站」判据（{@code bwe.combat.setKnockbackGuard(fn)}）。
+     *
+     * <p>签名：{@code fn(x, y) -> boolean|null}。返回 true = 能站；false = 不能站；
+     * 返回 null / 抛异常 = 未知（此时当作"能站"，保持老工程行为完全不变）。
+     *
+     * <p><b>为什么由脚本提供</b>：谁有碰撞是"游戏规则"，引擎不该写死。开放世界模板
+     * 的墙、车、道具全在脚本自己的 WH / VC 表里，只有脚本自己问得出"这一点能不能站"。
+     * 引擎只负责把击退拆成小步、每步问一次 —— 任何调 {@code combat.hit} 的地方
+     * （警察、车辆撞人、未来的枪械）都自动获得"不会把人打进墙里"的行为。
+     */
+    private Function knockbackGuard;
+
+    /**
+     * 脚本注册击退判据。传 null / 缺省 = 注销（恢复"直接位移"的老行为）。
+     */
+    private void setKnockbackGuard(Object fnObj) {
+        knockbackGuard = ScriptJs.fnArg(fnObj);
+    }
+
+    /**
+     * 按 (dx, dy) 击退一个实体，分步 + 每步问 knockbackGuard。
+     *
+     * <p>行为约定（不改变"击退距离不大于 kb"这一既有语义）：
+     * <ul>
+     *   <li>没有 guard（老工程）→ 保持原来的直接位移，行为完全不变；</li>
+     *   <li>有 guard：按 ≤4px 分步前进，某一步落点被判"不能站"就停下；</li>
+     *   <li>分轴兜底：整步上不去时，单独试 x 轴、再单独试 y 轴（沿墙滑开比卡死自然）。</li>
+     * </ul>
+     */
+    private void knockback(Actor a, float dx, float dy) {
+        if (a == null) {
+            return;
+        }
+        Function guard = knockbackGuard;
+        if (guard == null) {
+            a.x += dx;
+            a.y += dy;
+            return;
+        }
+        float len = (float) Math.sqrt(dx * dx + dy * dy);
+        if (len < 0.001f) {
+            return;
+        }
+        int steps = Math.max(1, (int) Math.ceil(len / 4f));
+        float sx = dx / steps;
+        float sy = dy / steps;
+        float px = a.x;
+        float py = a.y;
+        for (int i = 0; i < steps; i++) {
+            if (canStand(guard, px + sx, py + sy)) {
+                px += sx;
+                py += sy;
+                continue;
+            }
+            // 整步上不去 → 分轴尝试（沿墙滑开）
+            boolean movedX = canStand(guard, px + sx, py);
+            boolean movedY = canStand(guard, px, py + sy);
+            if (movedX) {
+                px += sx;
+            }
+            if (movedY) {
+                py += sy;
+            }
+            if (!movedX && !movedY) {
+                break;
+            }
+        }
+        a.x = px;
+        a.y = py;
+    }
+
+    /** 问一次 guard；null / 异常 = 未知 → 当作"能站"（向后兼容）。 */
+    private boolean canStand(Function guard, float x, float y) {
+        Context cx = Context.getCurrentContext();
+        if (cx == null) {
+            return true;
+        }
+        try {
+            Object r = guard.call(cx, scope, scope,
+                    new Object[]{Double.valueOf(x), Double.valueOf(y)});
+            if (r == null || r == Scriptable.NOT_FOUND
+                    || r == org.mozilla.javascript.Undefined.instance) {
+                return true;
+            }
+            return ScriptJs.bool(r, true);
+        } catch (Throwable t) {
+            return true;
+        }
     }
 
     private void fireHandler(String evt, Actor from, Actor to,

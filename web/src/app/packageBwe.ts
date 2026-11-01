@@ -11,6 +11,9 @@
  */
 
 import { store } from "../core/store.ts";
+import { apiFetch, nativeHost } from "../core/host.ts";
+import { appendOutput } from "../core/output.ts";
+import { setProblems, clearProblems, type Problem } from "../core/diagnostics.ts";
 import { el, button, input } from "../core/dom.ts";
 import { I } from "../ui/icons.ts";
 import { error, info, modal, warn } from "../ui/toast.ts";
@@ -97,6 +100,39 @@ interface UploadedAssetPayload {
   error?: string;
 }
 
+/**
+ * 下载打包产物。
+ *
+ * 网页版：直接 `location.href = /api/package-bwe/download/<jobId>`，浏览器接管。
+ * 桌面版：**这条路不通** —— 页面跑在 file:// 协议下，跳转 /api 只会得到 404，
+ * 而且 Electron 不会给 file:// 页面弹下载。主进程为此暴露了 downloadFile()，
+ * 它会读本地文件并弹原生保存对话框（契约见 host.ts 的 BweHost.downloadFile）。
+ *
+ * cancelled=true 是用户主动取消，不是失败 —— 弹红条会让人以为保存坏了。
+ */
+function downloadArtifact(jobId: string, apk: boolean): void {
+  const h = nativeHost();
+  const path = apk
+    ? `/api/package-bwe/download-apk/${jobId}`
+    : `/api/package-bwe/download/${jobId}`;
+
+  if (h?.downloadFile) {
+    void h
+      .downloadFile(path)
+      .then((r) => {
+        if (r?.cancelled) return;
+        if (r?.ok === false) {
+          error(`保存失败：${r.error ?? "未知原因"}`);
+          return;
+        }
+        info(apk ? "已保存 APK" : "已保存 ZIP");
+      })
+      .catch((e: unknown) => error(`保存失败：${(e as Error)?.message ?? String(e)}`));
+    return;
+  }
+  window.location.href = path;
+}
+
 /** 工程里的 JS 脚本（lang 缺省是 yarn，不算）。 */
 function projectJsScripts(p: Project): { name: string; source: string }[] {
   const raw = (p.scripts ?? {}) as unknown as Record<
@@ -106,6 +142,34 @@ function projectJsScripts(p: Project): { name: string; source: string }[] {
   return Object.entries(raw)
     .filter(([, s]) => s && String(s.lang ?? "yarn").toLowerCase() === "js")
     .map(([key, s]) => ({ name: String(s?.name ?? key), source: String(s?.source ?? "") }));
+}
+
+/**
+ * 打包/试跑的错误与日志要能被"事后复盘"：
+ *   - 日志进「输出」面板（关掉弹窗也不丢）；
+ *   - 错误进「问题」面板（底部徽标会显示，用户不用记住弹窗里写了什么）。
+ * 这里集中成两个小函数，避免在四五个分支里各写一遍。
+ */
+function logPack(text: string, level: "info" | "ok" | "warn" | "error" = "info"): void {
+  appendOutput("打包", text, level);
+}
+
+function logRun(text: string, level: "info" | "ok" | "warn" | "error" = "info"): void {
+  appendOutput("试跑", text, level);
+}
+
+/** 把一条打包/试跑错误写进问题面板（没有源码行，点它只会跳去输出）。 */
+function reportBuildError(source: "package" | "run", message: string, label: string): void {
+  const list: Problem[] = message
+    ? [{
+        id: `${source}#0`,
+        severity: "error",
+        source,
+        sourceLabel: label,
+        message
+      }]
+    : [];
+  setProblems(source, list);
 }
 
 /**
@@ -248,14 +312,16 @@ export async function openBwePackager(): Promise<void> {
 
   let status: PackStatus | null = null;
   try {
-    const resp = await fetch("/api/package-bwe/status", { cache: "no-store" });
+    const resp = await apiFetch("/api/package-bwe/status", { cache: "no-store" });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     status = (await resp.json()) as PackStatus;
   } catch {
+    reportBuildError("package", "打包服务不可用（/api/package-bwe/status 无响应）", "打包 BWE");
+    logPack("打包服务不可用：/api/package-bwe/status 请求失败", "error");
     instructionsModal("打包服务没有启动", [
-      "「打包到 BWE」需要本地 Node 服务调用 JDK 的 jpackage。",
-      "在项目根目录运行：npm run serve",
-      "然后从 http://127.0.0.1:5273/ 打开编辑器，再点「打包到 BWE」。",
+      "「打包到 BWE」要调用 JDK 的 jpackage，需要一个本地 Node 服务。",
+      "网页版：在项目根目录运行 npm run serve，再从对应地址打开编辑器。",
+      "桌面版：主进程内已内置这套能力，出现这条说明宿主 IPC 没有接上（看「输出」面板里的错误）。",
       "",
       "如果你已经用其他端口启动，请从对应地址打开页面。",
       "没有 JDK 时，服务会显示缺少 javac / jpackage；安装 JDK 17+ 后重启服务即可。"
@@ -449,7 +515,7 @@ export async function openBwePackager(): Promise<void> {
 
       async function refreshRunStatus(): Promise<void> {
         try {
-          const resp = await fetch("/api/quick-run/status", { cache: "no-store" });
+          const resp = await apiFetch("/api/quick-run/status", { cache: "no-store" });
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = (await resp.json()) as QuickRunStatus;
           if (data.logTail) setRunLog(data.logTail);
@@ -483,6 +549,7 @@ export async function openBwePackager(): Promise<void> {
         const say = (s: string): void => {
           lines.push(s);
           setRunLog(lines);
+          logRun(s);
         };
         try {
           const jsScripts = projectJsScripts(p);
@@ -491,7 +558,7 @@ export async function openBwePackager(): Promise<void> {
             say("工程里没有 JS 脚本，直接试跑。");
           } else {
             for (const script of jsScripts) {
-              const r = await fetch("/api/js-check", {
+              const r = await apiFetch("/api/js-check", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({ source: script.source, name: script.name })
@@ -526,7 +593,7 @@ export async function openBwePackager(): Promise<void> {
           const { uploaded, packed } = await collectUploads(p, say);
           say(`素材 ${packed}/${p.assets.length} 项，请求启动 Java 运行时…`);
           runHint.textContent = "启动 Java 运行时…";
-          const resp = await fetch("/api/quick-run", {
+          const resp = await apiFetch("/api/quick-run", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ project: p, assets: uploaded, name: p.name })
@@ -544,11 +611,13 @@ export async function openBwePackager(): Promise<void> {
           stopPolling();
           runTimer = window.setInterval(() => void refreshRunStatus(), 1000);
           void refreshRunStatus();
+          clearProblems("run");
           info(`试跑已启动：PID ${data.pid}`);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           say(`✗ ${msg}`);
           error(`试跑失败：${msg}`);
+          reportBuildError("run", msg, "试跑");
           runHint.textContent = "试跑失败";
         } finally {
           runStarting = false;
@@ -562,7 +631,7 @@ export async function openBwePackager(): Promise<void> {
         stopBtn.disabled = true;
         runHint.textContent = "正在结束试跑…";
         try {
-          const resp = await fetch("/api/quick-run/stop", { method: "POST" });
+          const resp = await apiFetch("/api/quick-run/stop", { method: "POST" });
           const data = (await resp.json()) as QuickRunStatus & { stopped?: boolean };
           if (data.logTail) setRunLog(data.logTail);
           runPid = 0;
@@ -600,6 +669,8 @@ export async function openBwePackager(): Promise<void> {
           local.push(s);
           if (local.length > 120) local.splice(0, local.length - 120);
           display();
+          // 同一句同时写进「输出」：弹窗一关掉，用户还能翻回去看
+          logPack(s);
         };
         try {
           if (!p) throw new Error("工程已关闭");
@@ -620,7 +691,7 @@ export async function openBwePackager(): Promise<void> {
             console: consoleBox.checked,
             platform: plat
           });
-          const resp = await fetch("/api/package-bwe", {
+          const resp = await apiFetch("/api/package-bwe", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body
@@ -635,7 +706,7 @@ export async function openBwePackager(): Promise<void> {
           let job: PackJob | null = null;
           for (;;) {
             await delay(750);
-            const r = await fetch(`/api/package-bwe/jobs/${lastJobId}`, { cache: "no-store" });
+            const r = await apiFetch(`/api/package-bwe/jobs/${lastJobId}`, { cache: "no-store" });
             if (!r.ok) throw new Error(`读取进度失败（HTTP ${r.status}）`);
             const jd = (await r.json()) as { ok?: boolean; job?: PackJob; error?: string };
             if (!jd.job) throw new Error(jd.error || "任务状态为空");
@@ -658,12 +729,14 @@ export async function openBwePackager(): Promise<void> {
           const doneLabel = r.apkName || r.zipName || r.exeName || "产物";
           say(`打包完成：${doneLabel}（${formatBytes(r.sizeBytes)}）`);
           renderResult(r, lastJobId);
+          clearProblems("package");
           info(`打包完成：${doneLabel}`);
           startBtn.textContent = "重新打包";
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           say(`✗ ${msg}`);
           error(`打包失败：${msg}`);
+          reportBuildError("package", msg, "打包 BWE");
           startBtn.textContent = "重试打包";
         } finally {
           busy = false;
@@ -683,20 +756,24 @@ export async function openBwePackager(): Promise<void> {
         const row = el("div", { class: "row tight" });
         if (r.platform === "android" && r.apkPath) {
           row.appendChild(
-            button("下载 APK", () => {
-              window.location.href = `/api/package-bwe/download-apk/${jobId}`;
-            }, { variant: "primary", iconPath: I.import, title: "下载 Android debug APK" })
+            button("下载 APK", () => downloadArtifact(jobId, true), {
+              variant: "primary",
+              iconPath: I.import,
+              title: "下载 Android debug APK"
+            })
           );
         } else if (r.zipName) {
           row.appendChild(
-            button("下载 ZIP", () => {
-              window.location.href = `/api/package-bwe/download/${jobId}`;
-            }, { variant: "primary", iconPath: I.import, title: "下载包含 exe 的 Windows 应用包" })
+            button("下载 ZIP", () => downloadArtifact(jobId, false), {
+              variant: "primary",
+              iconPath: I.import,
+              title: "下载包含 exe 的 Windows 应用包"
+            })
           );
         }
         row.appendChild(
           button("打开输出目录", () => {
-            void fetch(`/api/package-bwe/open/${jobId}`).catch(() => {
+            void apiFetch(`/api/package-bwe/open/${jobId}`).catch(() => {
               warn("打不开资源管理器，请手动复制输出目录");
             });
           }, { size: "sm", iconPath: I.open })

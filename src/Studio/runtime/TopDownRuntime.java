@@ -1736,6 +1736,31 @@ public final class TopDownRuntime implements GLEventListener {
     }
 
     /**
+     * 为<b>全新的 GL 上下文</b>重设「每个上下文独立」的 GL 状态（<b>安卓宿主专用入口</b>）。
+     *
+     * <p><b>为什么必须有这个入口</b>：安卓的上下文重建路径是
+     * {@code BweAndroidGameView.onSurfaceCreated} → {@code AndroidRuntimeBridge.rebindGl}
+     * + {@code rebuildGpuResources()}，它<b>不会</b>再调 {@link #init(GLAutoDrawable)} ——
+     * {@code init()} 是 JOGL 的回调概念，安卓侧由 GLSurfaceView 直接把新 GL 句柄交给宿主。
+     * 于是 {@link #initGlState} 在这条路径上<b>从未重跑</b>。
+     *
+     * <p><b>为什么这一定是黑屏</b>：{@code glEnable(GL_BLEND)} 是「每个上下文独立」的状态，
+     * 新上下文不继承旧上下文的混合开关。混合关掉后 alpha 通道被忽略 ——
+     * ARGB 纹理里所有 alpha=0 的像素（文字纹理的字外区域、棋盘位图的外框、
+     * HUD 的透明底）都按<b>不透明黑</b>画出来，整屏就被这些黑块盖满。
+     * 这正是玩家说的「切后台回来 / 输入法收起后就黑屏」：不报错、不崩溃、日志干净。
+     *
+     * <p>⚠ 与桌面端 {@link #init} 的第二次调用是<b>同一件事的两条分支</b>：
+     * 修黑屏必须两边同时成立，只修桌面端会让安卓继续黑。
+     */
+    void resetGlStateForNewContext(GL2 gl) {
+        if (gl == null) {
+            return;
+        }
+        initGlState(gl);
+    }
+
+    /**
      * JOGL 的 GL 初始化回调。<b>同一进程里会被调用多次</b>（上下文丢失 → 重建）。
      *
      * <p>两次以下的语义完全不同：
@@ -2070,6 +2095,21 @@ public final class TopDownRuntime implements GLEventListener {
     /**
      * 窗口无关的帧渲染：逻辑更新 + GL 绘制 + 脚本 draw。桌面（reshape/display）与安卓
      * （GLSurfaceRenderer / JOGL Android）共用这份帧循环，只是谁在驱动谁。
+     *
+     * <p>⚠ <b>这里刻意每帧「不」下发 viewport/投影</b>。曾经加过一版
+     * {@code if (canvas == null) applyGLViewportAndProjection(gl)}，实测是<b>回归</b>：
+     * 安卓宿主每帧手里只有「当前 drawable 的 GL 句柄」，而
+     * {@link #applyGLViewportAndProjection} 用的是引擎内部的 {@code surfaceW/surfaceH} ——
+     * 这两者在尺寸切换的当口未必一致，每帧用旧值覆盖会把 {@code reshapeForAndroid}
+     * 刚下发的正确视口冲掉。
+     *
+     * <p>实测（{@code AdjustResizeShot}，2750x1236 ↔ 2750x760 ↔ 2750x1236）：
+     * <pre>
+     *   去掉这条：恢复后 diffPixels=0、pureBlack=0      （与修复前一致）
+     *   保留这条：恢复后 diffPixels=80564、pureBlack 4454→80636（HUD 三条带整片黑）
+     * </pre>
+     * 尺寸同步的职责归 {@code AndroidRuntimeBridge.resize()} → {@code reshapeForAndroid}，
+     * 不归帧循环。不要为了「保险」再加回来 —— 它会制造比它预防的更严重的黑屏。
      */
     void renderFrame(float dt, GL2 gl) {
         gl.glClear(GL2.GL_COLOR_BUFFER_BIT);
@@ -2339,15 +2379,84 @@ public final class TopDownRuntime implements GLEventListener {
             mapListH = mapH;
             mapListTile = ts;
         }
-        if (mapListId != 0) {
+        // ⚠ 没有显示列表能力时（安卓 ES 1.x 适配层）**不能**走 glCallList 分支。
+        //
+        // GL2Compat.glGenLists 会返回一个「看起来有效」的 id（自增计数器），
+        // 但 glNewList 只是把 listRecording 置真、glCallList 是彻头彻尾的空操作 ——
+        // 也就是说 buildMapList 返回的 id 非 0，却从来没有任何东西被重放。
+        // 结果：地面上那张底图（底色块 + 网格线）在安卓上**一次都没画出来**；
+        // 扫雷棋盘是另一条纹理路径，所以只有「棋盘以外」的区域变黑 ——
+        // 玩家看到的就是「整屏黑、只剩棋盘」。
+        //
+        // 修复方式不是「让适配层假装支持显示列表」，而是**问能力、走立即模式**：
+        // 适配层已经提供了 supportsDisplayLists()，这里必须真的把它用上。
+        if (mapListId != 0 && supportsDisplayLists(gl)) {
             gl.glCallList(mapListId);
             return;
         }
         drawMapImmediate(gl, mapW, mapH, ts);
     }
 
+    /**
+     * 当前 GL 后端<b>是否真的支持显示列表</b>。
+     *
+     * <p><b>为什么必须显式检测</b>：安卓的 {@code GL2Compat} 为了不改动一万多行运行时，
+     * 提供了同名的 {@code glGenLists/glNewList/glCallList}，但实现是<b>空壳</b>：
+     * <ul>
+     *   <li>{@code glGenLists} 返回一个自增计数器（看起来完全合法、且非 0）；</li>
+     *   <li>{@code glNewList/glEndList} 只翻转一个布尔标志，<b>不录制任何命令</b>；</li>
+     *   <li>{@code glCallList} 是<b>空操作</b>。</li>
+     * </ul>
+     * 于是引擎按「有缓存 → 每帧 glCallList」的路径跑，而实际上<b>一个顶点都没提交</b> ——
+     * 地图底图（地图外底色 + 地图底色 + 网格线）在安卓上从来没被画过。
+     *
+     * <p>这个缺陷一直在，但因为扫雷棋盘是<b>另一条</b>纹理路径（GridPainter 自绘 + 贴图），
+     * 棋盘本身照常显示，所以首发能跑；只有在整屏被别的黑块盖住时才暴露成「整屏黑」。
+     *
+     * <p>检测方式：适配层自己声明了 {@code supportsDisplayLists()}，用反射问它。
+     * 桌面 JOGL 的 {@code GL2} 没有这个方法 → 反射取不到 → 视为「支持」（桌面行为不变）。
+     * 安卓拿到的 {@code javax.media.opengl.GL2} 同样没有这个方法，但它的实现对象
+     * {@code GL2Compat} 有 —— 所以通过 {@code raw()} 之外再问一次实现层。
+     */
+    private boolean supportsDisplayLists(GL2 gl) {
+        if (gl == null) {
+            return false;
+        }
+        // ① 宿主的 GL 包装类自己暴露了能力查询（安卓 GL2 shim 的将来版本可能直接加）
+        try {
+            java.lang.reflect.Method m = gl.getClass().getMethod("supportsDisplayLists");
+            Object r = m.invoke(gl);
+            if (r instanceof Boolean) {
+                return (Boolean) r;
+            }
+        } catch (Throwable ignored) {
+        }
+        // ② 安卓：javax.media.opengl.GL2 只是个转发壳，真正的实现在 GL2Compat 里。
+        //    壳上有 raw()（返回 GL10），再顺着 impl 字段找到能力声明。
+        try {
+            java.lang.reflect.Field f = gl.getClass().getDeclaredField("impl");
+            f.setAccessible(true);
+            Object impl = f.get(gl);
+            if (impl != null) {
+                java.lang.reflect.Method m = impl.getClass().getMethod("supportsDisplayLists");
+                Object r = m.invoke(impl);
+                if (r instanceof Boolean) {
+                    return (Boolean) r;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        // ③ 桌面的真 JOGL GL2：没有该能力查询方法 → 它是真支持显示列表的。
+        return true;
+    }
+
     /** 把地图底图录进显示列表，返回列表 id（失败返回 0，调用方回退到立即模式）。 */
     private int buildMapList(GL2 gl, float mapW, float mapH, int ts) {
+        // 没有显示列表能力的后端（安卓 GL2Compat）**不要**申请 id：
+        // 申请到的 id 既不会录制、也不会被重放，只会让 drawMap 误判「有缓存、可以 glCallList」。
+        if (!supportsDisplayLists(gl)) {
+            return 0;
+        }
         int id = 0;
         try {
             id = gl.glGenLists(1);

@@ -270,6 +270,19 @@ final class ScriptActions {
 
     // ---------------- 查询 ----------------
 
+    /**
+     * 动作 → 鼠标键下标（{@code -2/-3/-4} = 左/中/右），键盘返回 -1。
+     *
+     * <p><b>为什么必须有这个映射</b>：{@code keyCodeOf} 把 {@code "Mouse0"} 编码成
+     * <b>负数</b>（{@code -2}），而旧实现里 {@link #isDown} 用 {@code c < 0 continue}
+     * 直接把鼠标跳过、{@link #isPressed} 又只认 {@code c >= 10000}（{@code keyCodeOf}
+     * 根本不产生这个区间）。结果：默认绑定 {@code attack: Space, Mouse0} 中的
+     * {@code Mouse0} 永久失效 —— 用鼠标左键攻击没有任何反应，而文档写着能用。
+     */
+    private static int mouseIndex(int code) {
+        return code <= -2 ? Math.max(0, Math.min(2, -code - 2)) : -1;
+    }
+
     private boolean isDown(String action) {
         if (focusLost || action == null || action.isEmpty()) {
             return false;
@@ -283,10 +296,13 @@ final class ScriptActions {
         }
         for (int i = 0; i < codes.length; i++) {
             int c = codes[i];
-            if (c < 0) {
-                continue;
-            }
-            if (c < 512 && engine.held != null && engine.held[c]) {
+            int m = mouseIndex(c);
+            if (m >= 0) {
+                if (m < engine.mouseNow.length
+                        && (engine.mouseNow[m] || engine.mousePressed[m])) {
+                    return true;
+                }
+            } else if (c >= 0 && c < 512 && engine.held != null && engine.held[c]) {
                 return true;
             }
         }
@@ -306,16 +322,12 @@ final class ScriptActions {
         }
         for (int i = 0; i < codes.length; i++) {
             int c = codes[i];
-            if (c < 0) {
-                continue;
-            }
-            // 鼠标用 engine.mousePressed，键盘用 pressed[]
-            if (c >= 10000) {
-                int idx = c - 10000;
-                if (idx >= 0 && idx < engine.mousePressed.length && engine.mousePressed[idx]) {
+            int m = mouseIndex(c);
+            if (m >= 0) {
+                if (m < engine.mousePressed.length && engine.mousePressed[m]) {
                     return true;
                 }
-            } else if (c < 512 && engine.pressed != null && engine.pressed[c]) {
+            } else if (c >= 0 && c < 512 && engine.pressed != null && engine.pressed[c]) {
                 return true;
             }
         }
@@ -335,7 +347,12 @@ final class ScriptActions {
         }
         for (int i = 0; i < codes.length; i++) {
             int c = codes[i];
-            if (c >= 0 && c < 512 && engine.released != null && engine.released[c]) {
+            int m = mouseIndex(c);
+            if (m >= 0) {
+                if (m < engine.mousePrev.length && engine.mousePrev[m] && !engine.mouseNow[m]) {
+                    return true;
+                }
+            } else if (c >= 0 && c < 512 && engine.released != null && engine.released[c]) {
                 return true;
             }
         }

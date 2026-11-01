@@ -234,6 +234,20 @@ final class ScriptEngine {
     private String currentScript = "";
     private String lastErrorLine = "";
 
+    /**
+     * 可观测性数据仓：错误环形缓冲 + 性能剖析样本。
+     *
+     * <p>为什么放这里而不是静态单例：一份运行时对应一份数据，多开窗口/多次
+     * {@code new TopDownRuntime} 的测试之间互不串味（静态单例会被上一个工程的
+     * 错误残留污染，单测断言直接失效）。
+     */
+    private final ScriptMetrics metrics = new ScriptMetrics();
+
+    /** 包内访问（ScriptProf / ScriptDebug / 测试用）。 */
+    ScriptMetrics metrics() {
+        return metrics;
+    }
+
     // ---------------- 构造 ----------------
 
     ScriptEngine(TopDownRuntime host) {
@@ -436,6 +450,7 @@ final class ScriptEngine {
             try {
                 e.hook.tick(dt);
             } catch (Throwable t) {
+                recordSwallowed((ScriptDef) null, t);
                 host.scriptLog("[脚本] 阶段钩子异常(" + e.phase + "): " + t);
             }
         }
@@ -481,6 +496,7 @@ final class ScriptEngine {
             try {
                 r.run();
             } catch (Throwable t) {
+                recordSwallowed((ScriptDef) null, t);
                 host.scriptLog("[脚本] 跨线程回调异常: " + t);
             }
         }
@@ -498,7 +514,20 @@ final class ScriptEngine {
             }
             drainPendingCalls();
             tick(cx, dt);
+            // 帧末结算剖析样本。
+            //
+            // ⚠ 结算点选在 update() 末尾（而不是整帧最后），是有意的：
+            //   · 宿主一帧的调用顺序是 update() → 模块更新 → draw()，脚本回调的主体在 update；
+            //   · draw() 里的脚本回调（draw 钩子）会在下一帧的 update 结算时被算进去 ——
+            //     因为 metrics 的累计器是跨调用累加的，下一个 endFrame 会把它带走。
+            //   两种口径（"本帧 update 内" vs "跨 update+draw"）差的是 1 帧归属，对
+            //   p50/p95/p99 这类窗口统计没有意义；而把它放在 update 末尾的好处是
+            //   无窗口自检（只调 update、不调 draw）也能采到样本。
+            metrics.endFrame();
         } catch (Throwable t) {
+            // 异常帧的累计器必须清掉，否则这段耗时会漏进下一帧的样本（读数虚高）。
+            metrics.endFrameOnError();
+            recordSwallowed((ScriptDef) null, t);
             host.scriptLog("[脚本] update 异常: " + t);
         } finally {
             Context.exit();
@@ -537,6 +566,7 @@ final class ScriptEngine {
             }
             drawCmds.clear();
         } catch (Throwable t) {
+            recordSwallowed((ScriptDef) null, t);
             host.scriptLog("[脚本] draw 异常: " + t);
         } finally {
             Context.exit();
@@ -642,6 +672,7 @@ final class ScriptEngine {
                     + (sceneScriptName.isEmpty() ? "" : "，场景脚本=" + sceneScriptName));
         } catch (Throwable t) {
             failed = true;
+            recordSwallowed((ScriptDef) null, t);
             host.scriptLog("[脚本] 引擎初始化失败: " + t);
         }
     }
@@ -680,6 +711,7 @@ final class ScriptEngine {
             }
             drainMicrotasks(cx);
         } catch (Throwable t) {
+            recordSwallowed((ScriptDef) null, t);
             host.scriptLog("[脚本] onSceneEnd 异常: " + t);
         } finally {
             if (cx != null) {
@@ -829,6 +861,7 @@ final class ScriptEngine {
                 try {
                     simHooks.get(i).tick(frameDt);
                 } catch (Throwable t) {
+                    recordSwallowed("simHooks[" + i + "]", t);
                     host.scriptLog("[脚本] 模拟异常(" + i + "): " + t);
                 }
             }
@@ -1229,16 +1262,25 @@ final class ScriptEngine {
             return null;
         } finally {
             currentScript = prev;
-            slowCheck(def, t0);
+            // 先算出耗时，再交给剖析/慢调用检查 —— 这样「记录本身」不会被算进样本
+            // （否则剖析开销会随帧耗时一起反馈给自己，读数会虚高）。
+            long elapsed = System.nanoTime() - t0;
+            metrics.recordCall(def != null ? def.name : currentScript, elapsed);
+            slowCheckElapsed(def, elapsed);
         }
     }
 
     /** 一次调用超出 250ms：告警一次（契约 §4 的无限循环保护）。 */
     private void slowCheck(ScriptDef def, long startNanos) {
+        slowCheckElapsed(def, System.nanoTime() - startNanos);
+    }
+
+    /** 与 {@link #slowCheck} 同义，但耗时已由调用方算好（剖析已经用过同一段时间）。 */
+    private void slowCheckElapsed(ScriptDef def, long elapsedNanos) {
         if (def == null) {
             return;
         }
-        long ms = (System.nanoTime() - startNanos) / 1_000_000L;
+        long ms = elapsedNanos / 1_000_000L;
         if (ms > 250 && !def.slowWarned) {
             def.slowWarned = true;
             host.scriptLog("[脚本] " + def.name + " 单帧执行超过 250ms（" + ms + "ms），可能存在死循环");
@@ -1260,7 +1302,9 @@ final class ScriptEngine {
             return;
         }
         String name = def != null ? def.name : (currentScript == null || currentScript.isEmpty() ? "?" : currentScript);
-        int line = 0;
+        // 行号取不到时用 -1（契约 §6 明确要求 -1，而不是 0）：
+        // 0 会被 UI 误当成"第 0 行"显示，-1 才是"未知"的通用约定。
+        int line = -1;
         String msg = null;
         if (t instanceof RhinoException) {
             RhinoException re = (RhinoException) t;
@@ -1285,6 +1329,11 @@ final class ScriptEngine {
         } else {
             msg = t.toString();
         }
+        // ① 先进环形缓冲：**必须早于下面的去重返回**，否则"同一处重复抛 N 次"
+        // 就只剩一条 count=1，编辑器看不到"这条在反复炸"（这是可观测性的核心诉求）。
+        // 缓冲内部按 script+line+message 去重自增 count，所以这里多调也不会爆内存。
+        metrics.recordError(name, oneLine(msg), line, frame);
+        // ② 日志侧保持原有语义：同一脚本同一行只 print 一次，避免每帧刷屏。
         String key = name + ":" + line;
         if (!reportedErrors.add(key)) {
             return;
@@ -1308,6 +1357,64 @@ final class ScriptEngine {
     /** 自检/调试用：最近一条脚本错误行（格式已按契约拼好）。 */
     String lastErrorLineForTest() {
         return lastErrorLine;
+    }
+
+    /**
+     * 把一处「被吞掉的异常」登记进可观测性缓冲，<b>但不写日志</b>。
+     *
+     * <p>这是本轮的关键纪律：原 {@code catch (Throwable)} 的既有行为必须**一个字不变**
+     * （原来 print 什么就还 print 什么，原来不 print 的就还不 print），
+     * 只额外做一次 O(1) 摊还的入队。否则会凭空多出日志行，
+     * 打乱现有测试按行计数的断言（{@code ScriptSelfTest} 就按行数断言错误去重）。
+     *
+     * <p>与 {@link #reportError} 的分工：{@code reportError} 负责「脚本执行出错」的完整语义
+     * （拼契约格式日志 + 去重 + 入队）；本方法只负责入队，给那些"本来就静默吞掉"的位置用。
+     */
+    void recordSwallowed(ScriptDef def, Throwable t) {
+        if (t == null) {
+            return;
+        }
+        String name = def != null ? def.name
+                : (currentScript == null || currentScript.isEmpty() ? "?" : currentScript);
+        int line = t instanceof RhinoException ? ((RhinoException) t).lineNumber() : -1;
+        String msg = t instanceof RhinoException ? ((RhinoException) t).details() : t.toString();
+        metrics.recordError(name, oneLine(msg), line, frame);
+    }
+
+    /** 同上，但脚本名直接给（宿主侧子系统的异常没有 ScriptDef 上下文）。 */
+    void recordSwallowed(String scriptName, Throwable t) {
+        if (t == null) {
+            return;
+        }
+        int line = t instanceof RhinoException ? ((RhinoException) t).lineNumber() : -1;
+        String msg = t instanceof RhinoException ? ((RhinoException) t).details() : t.toString();
+        metrics.recordError(scriptName == null || scriptName.isEmpty() ? "?" : scriptName,
+                oneLine(msg), line, frame);
+    }
+
+    /**
+     * 清空日志侧的「同一脚本同一行只报一次」去重表（{@code bwe.debug.clearErrors} 联动）。
+     *
+     * <p>为什么必须联动：用户清空错误列表的意图是「从现在开始重新观察」。
+     * 如果只清环形缓冲、留着去重表，那么下次同一处再抛异常时日志不会再写，
+     * 脚本侧 {@code bwe.debug.errors()} 也不会再收到 —— 等于清空一次就永久失声。
+     */
+    void clearReportedErrors() {
+        reportedErrors.clear();
+    }
+
+    /**
+     * 诊断文件的根目录 = Build 的父目录（工程根）。
+     *
+     * <p>与 {@code bwe.save} 的沙箱口径一致：脚本看到的相对路径都相对工程根，
+     * 而不是相对 Build（Build 是生成物目录，往里面写用户文件不符合直觉）。
+     */
+    java.io.File buildRootForDiagnostics() {
+        if (buildDir == null) {
+            return new java.io.File(".");
+        }
+        java.io.File parent = buildDir.getParentFile();
+        return parent == null ? buildDir : parent;
     }
 
     // ---------------- 日志 ----------------
@@ -1607,12 +1714,15 @@ final class ScriptEngine {
                 }
             }
         });
+        // 剖析开关是**工程级**的（用户在测帧耗时，切场景不该把测量关掉），
+        // 所以这里刻意不清 bwe.prof 的状态 —— 只保留这条注释说明为什么它不在清单里。
     }
 
     private void clearOne(String name, Runnable body) {
         try {
             body.run();
         } catch (Throwable t) {
+            recordSwallowed(name, t);
             host.scriptLog("[脚本] " + name + " 场景清理失败: " + t);
         }
     }
@@ -1649,6 +1759,7 @@ final class ScriptEngine {
             }
             drainMicrotasks(cx);
         } catch (Throwable t) {
+            recordSwallowed((ScriptDef) null, t);
             host.scriptLog("[脚本] 场景重载异常: " + t);
         } finally {
             if (cx != null) {
@@ -1690,7 +1801,8 @@ final class ScriptEngine {
                 Texture tex = null;
                 try {
                     tex = host.firstTextureForName(at.assetName);
-                } catch (Throwable ignored) {
+                } catch (Throwable t) {
+                    recordSwallowed("drawAttachments", t);
                 }
                 if (tex == null) {
                     continue;

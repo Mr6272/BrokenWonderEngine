@@ -17,6 +17,8 @@ import { el, input, button, segmented } from "../core/dom.ts";
 import { I } from "../ui/icons.ts";
 import { ok, warn } from "../ui/toast.ts";
 import { store } from "../core/store.ts";
+import { apiFetch } from "../core/host.ts";
+import { setProblems, clearProblems, type Problem } from "../core/diagnostics.ts";
 import {
   defaultScriptFile,
   scriptLang,
@@ -54,14 +56,14 @@ function projectScope(): string {
 async function postOpenInVscode(name: string, source: string, lang: ScriptLang, line = 1): Promise<void> {
   let payload: { ok?: boolean; file?: string; error?: string; hint?: string };
   try {
-    const resp = await fetch("/api/open-in-vscode", {
+    const resp = await apiFetch("/api/open-in-vscode", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name, source, lang, line, project: projectScope() })
     });
     payload = (await resp.json()) as typeof payload;
   } catch {
-    warn("需要本地服务：先运行 npm run serve，再点「VS Code 打开」");
+    warn("这个能力需要本地服务（网页版 npm run serve / 桌面版主进程 IPC）");
     return;
   }
   if (payload.ok && payload.file) {
@@ -81,7 +83,7 @@ async function postOpenInVscode(name: string, source: string, lang: ScriptLang, 
 
 async function fetchMirror(name: string, lang: ScriptLang): Promise<MirrorInfo | null> {
   try {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/api/script-file?name=${encodeURIComponent(name)}&lang=${lang}` +
         `&project=${encodeURIComponent(projectScope())}`,
       { cache: "no-store" }
@@ -132,17 +134,75 @@ const SERVER_RETRY_MS = 20000;
 /** API 速查是否展开。 */
 let apiOpen = true;
 
+/**
+ * 当前面板里「跳到第 N 行」的实现。
+ *
+ * 为什么不直接在面板之间传 textarea：底部「问题」面板与剧本面板是两个独立树，
+ * 互相持有引用的代价（生命周期、重渲染后失效）比一个回调大得多。
+ * 面板渲染时把自己跳行的能力登记进来，卸载/重渲染时替换；问题面板只发事件。
+ */
+let jumpToLineHook: ((line: number) => void) | null = null;
+
+window.addEventListener("bwe:script-goto-line", (e) => {
+  const line = Number((e as CustomEvent<{ line?: number }>).detail?.line);
+  if (!Number.isFinite(line)) return;
+  jumpToLineHook?.(line);
+});
+
 // ============================================================================
 // 面板入口
 // ============================================================================
 
-export function renderScriptPanel(host: HTMLElement): void {
+/**
+ * 剧本面板拆成两半，因为 VS Code 结构里"列表在侧边栏、编辑器在编辑区"：
+ *   - renderScriptList：语言切换 + 脚本列表（侧边栏）
+ *   - renderScriptEditor：源码编辑器 + 检查结果（编辑区标签）
+ *   - renderScriptPanel：两者合一（保留给"只放一个面板"的旧布局/弹窗场景）
+ *
+ * 拆开的好处：切脚本不再重建整棵编辑器树，点一下列表只重建编辑区，
+ * 反过来在编辑器里敲字也不会重画列表（原来的合并版每敲一个字都可能整面板重画）。
+ */
+export function renderScriptList(host: HTMLElement): void {
+  host.replaceChildren();
+  const wrap = el("div", { class: "col" });
+  wrap.style.padding = "10px";
+  renderScriptListBody(wrap, host);
+  host.appendChild(wrap);
+}
+
+export function renderScriptEditor(host: HTMLElement): void {
   host.replaceChildren();
   // 每次重渲染都重建 VS Code 轮询，避免旧面板的 interval 越积越多
   stopMirrorPoll();
   const wrap = el("div", { class: "col" });
   wrap.style.padding = "10px";
+  renderScriptEditorBody(wrap, host);
+  host.appendChild(wrap);
+}
 
+export function renderScriptPanel(host: HTMLElement): void {
+  host.replaceChildren();
+  stopMirrorPoll();
+  const wrap = el("div", { class: "col" });
+  wrap.style.padding = "10px";
+  renderScriptListBody(wrap, host);
+  wrap.appendChild(el("div", { class: "divider" }));
+  renderScriptEditorBody(wrap, host);
+  host.appendChild(wrap);
+}
+
+/**
+ * 重渲染入口：拆开之后要按需重画 —— 侧边栏只画列表、编辑区只画编辑器。
+ * 原来两个函数各自调用 renderScriptPanel(host)，在这套结构下会把另一半也重建，
+ * 于是"点脚本 → 整棵树重画"，白白多出一倍 DOM 开销。
+ */
+function refreshScriptUi(): void {
+  window.dispatchEvent(new CustomEvent("bwe:refresh-script-ui"));
+}
+
+// ---------------- 列表（侧边栏） ----------------
+
+function renderScriptListBody(wrap: HTMLElement, host: HTMLElement): void {
   // ---- 头部：标题 + 新建 ----
   const head = el("div", { class: "row" });
   head.appendChild(el("div", { class: "group-label" }, "剧本 Scripts"));
@@ -167,7 +227,7 @@ export function renderScriptPanel(host: HTMLElement): void {
       if (v === currentLang) return;
       currentLang = v;
       currentScript = scriptNamesOfLang(store.project, v)[0] ?? "";
-      renderScriptPanel(host);
+      refreshScriptUi();
     }
   );
   wrap.appendChild(langSwitch);
@@ -212,7 +272,7 @@ export function renderScriptPanel(host: HTMLElement): void {
           () => {
             currentLang = other;
             currentScript = otherNames[0];
-            renderScriptPanel(host);
+            refreshScriptUi();
           },
           { size: "sm", variant: "ghost" }
         )
@@ -242,20 +302,43 @@ export function renderScriptPanel(host: HTMLElement): void {
     item.appendChild(grow);
     item.addEventListener("click", () => {
       currentScript = n;
-      renderScriptPanel(host);
+      refreshScriptUi();
     });
     list.appendChild(item);
   }
   wrap.appendChild(list);
 
-  const script = store.project.scripts[currentScript];
+  // ---- 下面是编辑区那一半 ----
+}
+
+// ---------------- 编辑器（编辑区） ----------------
+
+function renderScriptEditorBody(wrap: HTMLElement, host: HTMLElement): void {
+  void host;
+  const p = store.project;
+  if (!p) {
+    wrap.appendChild(el("div", { class: "hint" }, "还没有打开工程"));
+    return;
+  }
+  if (!scriptNamesOfLang(p, currentLang).length) {
+    wrap.appendChild(el("div", { class: "hint" }, currentLang === "js" ? "这个工程还没有 JS 脚本。" : "这个工程还没有 Yarn 剧本。"));
+    return;
+  }
+  if (!currentScript || !p.scripts[currentScript]) {
+    currentScript = scriptNamesOfLang(p, currentLang)[0] ?? "";
+  }
+  const script = p.scripts[currentScript];
   if (!script) {
-    host.appendChild(wrap);
+    wrap.appendChild(el("div", { class: "hint" }, "选一段脚本开始编辑"));
     return;
   }
 
-  if (currentLang === "js") renderJsEditor(wrap, script, () => renderScriptPanel(host));
-  else renderYarnEditor(wrap, script, () => renderScriptPanel(host));
+  // 告诉外壳「现在在编哪段脚本」：AI 面板据此挑上下文，
+  // 不清空 hook —— 剧本面板重渲染时下面会重新登记，旧闭包指向已经丢弃的 textarea 也无害。
+  window.dispatchEvent(new CustomEvent("bwe:script-focus", { detail: { name: currentScript, lang: currentLang } }));
+
+  if (currentLang === "js") renderJsEditor(wrap, script, refreshScriptUi);
+  else renderYarnEditor(wrap, script, refreshScriptUi);
 
   host.appendChild(wrap);
 }
@@ -284,7 +367,7 @@ function renderVsCodeBar(
       size: "sm",
       variant: "outline",
       iconPath: I.open,
-      title: "把脚本写到 web/.build/scripts/ 并用本机 VS Code 打开（需要 npm run serve）"
+      title: "把脚本写到 web/.build/scripts/ 并用本机 VS Code 打开（网页版需要 npm run serve）"
     })
   );
 
@@ -499,6 +582,7 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
     if (!src.trim()) {
       checkState.textContent = "空脚本，没有可检查的内容";
       diagBox.replaceChildren();
+      clearProblems(`js:${script.name || currentScript}`);
       return;
     }
     checkState.textContent = "检查中…";
@@ -509,6 +593,9 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
   }
 
   function renderDiags(diags: Diag[], fromServer: boolean): void {
+    // 同步进「问题」面板：底部面板统一展示所有来源，用户不用为每条诊断
+    // 在左栏和底部之间来回找。key 用 语言:脚本名 固定，重复检查不会堆叠。
+    publishScriptProblems("js", script.name || currentScript, diags);
     diagBox.replaceChildren();
     const errors = diags.filter((d) => d.severity === "error").length;
     const warns = diags.filter((d) => d.severity === "warn").length;
@@ -538,6 +625,8 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
       diagBox.appendChild(row);
     }
   }
+
+  jumpToLineHook = (line: number) => jumpToLine(line);
 
   function jumpToLine(line: number): void {
     const src = ta.value;
@@ -633,7 +722,7 @@ async function requestServerCheck(name: string, source: string, force: boolean):
   const ctrl = new AbortController();
   const timeout = window.setTimeout(() => ctrl.abort(), 2500);
   try {
-    const resp = await fetch("/api/js-check", {
+    const resp = await apiFetch("/api/js-check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source, name }),
@@ -941,6 +1030,14 @@ function renderYarnEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () =
   wrap.appendChild(varHead);
   wrap.appendChild(varBox);
 
+  jumpToLineHook = (line: number) => {
+    const pos = lineOffset(script.source, Math.max(1, Math.round(line)));
+    ta.focus();
+    ta.setSelectionRange(pos, Math.min(pos + 60, script.source.length));
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+    ta.scrollTop = Math.max(0, (line - 1) * lh - ta.clientHeight / 2 + lh / 2);
+  };
+
   let timer = 0;
   function scheduleCheck(): void {
     window.clearTimeout(timer);
@@ -951,6 +1048,16 @@ function renderYarnEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () =
     // 面板可能在工程被替换后还持有旧引用，这里再确认一次
     if (!script) return;
     const r = analyzeYarn(script.source);
+    // 同样同步进「问题」面板：Yarn 的检查是本地静态规则，不需要服务端
+    publishScriptProblems(
+      "yarn",
+      script.name || currentScript,
+      r.checks.map((c) => ({
+        line: c.line,
+        severity: c.error ? "error" : "warn",
+        message: c.message
+      }))
+    );
     resultBox.replaceChildren();
     if (!r.checks.length) {
       resultBox.appendChild(el("div", { class: "hint", style: { color: "var(--ok)" } }, "没有问题，这段剧本可以直接跑。"));
@@ -1030,6 +1137,36 @@ function renderYarnEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () =
  * 这里只改「应该显示什么」并广播事件；真正切页由编辑器外壳负责，
  * 面板之间不必互相持有引用。
  */
+/**
+ * 把一份诊断写进「问题」中心。
+ *
+ * 两个语言的检查器都走这里：key 固定为 `语言:脚本名`，所以同一份脚本
+ * 反复检查只覆盖、不堆叠；没有错误时把这一组清掉，徽标才会真的归零。
+ */
+function publishScriptProblems(
+  lang: ScriptLang,
+  name: string,
+  diags: { line: number; col?: number; severity: "error" | "warn" | "info"; message: string }[]
+): void {
+  const key = `${lang}:${name}`;
+  if (!diags.length) {
+    clearProblems(key);
+    return;
+  }
+  const list: Problem[] = diags.map((d, i) => ({
+    id: `${key}#${i}`,
+    severity: d.severity,
+    source: lang === "js" ? "js" : "yarn",
+    sourceLabel: `剧本 · ${name}`,
+    scriptName: name,
+    scriptLang: lang,
+    line: d.line,
+    col: d.col,
+    message: d.message
+  }));
+  setProblems(key, list);
+}
+
 export function requestOpenScriptPanel(lang?: ScriptLang, name?: string): void {
   if (name && store.project?.scripts[name]) {
     currentScript = name;

@@ -425,4 +425,27 @@ final class ScriptTextInput {
         }
         return sb.toString();
     }
+
+    /**
+     * 诊断：每个输入框的归一化矩形（0~1）。
+     *
+     * <p>用来回答「我点的地方到底有没有落在框上」：日志里同时给出触摸点的归一化坐标
+     * 与每个框的 {@code nx/ny/nw/nh}，一比就知道是命中失败还是别的问题。
+     */
+    String describeRects() {
+        StringBuilder sb = new StringBuilder();
+        for (Field f : fields) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(f.id).append("=[")
+                    .append(fmt(f.nx)).append(',').append(fmt(f.ny)).append(' ')
+                    .append(fmt(f.nw)).append('x').append(fmt(f.nh)).append(']');
+        }
+        return sb.toString();
+    }
+
+    private static String fmt(float v) {
+        return String.valueOf(Math.round(v * 10000f) / 10000f);
+    }
 }

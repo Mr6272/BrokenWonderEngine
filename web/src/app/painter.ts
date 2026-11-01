@@ -11,6 +11,7 @@
 import type { AssetEntry, Project, SceneObject, SceneModel } from "../core/model.ts";
 import { scenePixelSize, totalFrames, uiSafeArea, visibleFrames } from "../core/model.ts";
 import { loadFrame } from "../data/assets.ts";
+import { canvasPalette } from "../ui/palette.ts";
 
 export interface PaintCtx {
   project: Project;
@@ -202,15 +203,17 @@ export function paintUiFrame(
   const zoom = pctx.zoom;
 
   g.save();
-  // 设计分辨率底板：比编辑器背景亮一点，明确「这是画面区域」
-  g.fillStyle = "#11131a";
+  // 设计分辨率底板：比编辑器背景再深一档，明确「这是画面区域」
+  // 颜色来自主题色板（Canvas 2D 不认 CSS 变量，见 ui/palette.ts 的说明）
+  g.fillStyle = canvasPalette().uiPlate;
   g.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
 
   if (pctx.showGrid && zoom > 0.15) {
     // 8px 参考网格：UI 里 8 的倍数是通用节奏（间距 8/16/24），比 32 更有用。
     const step = 8;
     g.lineWidth = 1;
-    g.strokeStyle = "rgba(255,255,255,0.05)";
+    // 浅底主题下白色叠加等于不可见，网格颜色必须跟着主题走
+    g.strokeStyle = canvasPalette().uiGrid;
     g.beginPath();
     for (let x = 0; x <= size.w; x += step * (zoom < 0.5 ? 8 : 2)) {
       const p0 = toScreen(x, 0);
@@ -266,7 +269,7 @@ export function paintGrid(
 
   // 地图底板：与画布背景区分开，让"地图之外"一眼可辨
   g.save();
-  g.fillStyle = "#191c23";
+  g.fillStyle = canvasPalette().plate;
   g.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
   g.restore();
 
@@ -275,7 +278,7 @@ export function paintGrid(
     g.save();
     g.lineWidth = 1;
     // 细网格
-    g.strokeStyle = "#22252f";
+    g.strokeStyle = canvasPalette().grid;
     g.beginPath();
     for (let x = 0; x <= scene.widthTiles; x += step) {
       const p0 = toScreen(x * t, 0);
@@ -291,7 +294,7 @@ export function paintGrid(
     }
     g.stroke();
     // 每 8 格一根主线，便于目测距离
-    g.strokeStyle = "#2c303d";
+    g.strokeStyle = canvasPalette().gridMajor;
     g.beginPath();
     for (let x = 0; x <= scene.widthTiles; x += 8) {
       const p0 = toScreen(x * t, 0);
@@ -437,20 +440,20 @@ export function paintObject(
     const tw = g.measureText(label).width;
     const lx = centered.x - tw / 2;
     const ly = top + h + 13;
-    g.fillStyle = "rgba(8,10,14,0.72)";
+    g.fillStyle = canvasPalette().labelPlate;
     roundRect(g, lx - 4, ly - 11, tw + 8, 15, 4);
     g.fill();
-    g.fillStyle = "#c4cddb";
+    g.fillStyle = canvasPalette().labelText;
     g.fillText(label, lx, ly);
   }
   const badge = o.modules.filter((m) => m.enabled).length;
   if (badge > 0 && zoom > 0.5) {
     const bx = left + w - 16;
     const by = top - 3;
-    g.fillStyle = "#4c8dff";
+    g.fillStyle = canvasPalette().badgeBg;
     roundRect(g, bx, by, 17, 14, 7);
     g.fill();
-    g.fillStyle = "#fff";
+    g.fillStyle = canvasPalette().badgeText;
     g.font = '700 10px "Microsoft YaHei UI", sans-serif';
     const t = String(badge);
     g.fillText(t, bx + 8.5 - g.measureText(t).width / 2, by + 10.5);
@@ -486,11 +489,11 @@ function paintPlaceholder(
   g.fillStyle = hexA(color, 0.88);
   roundRect(g, left, top, w, h, Math.min(8, Math.min(w, h) * 0.22));
   g.fill();
-  g.strokeStyle = "rgba(0,0,0,0.35)";
+  g.strokeStyle = canvasPalette().placeholderStroke;
   g.lineWidth = 1.2;
   g.stroke();
   if (zoom > 0.5) {
-    g.fillStyle = "rgba(255,255,255,0.92)";
+    g.fillStyle = canvasPalette().placeholderText;
     g.font = '11px "Microsoft YaHei UI", sans-serif';
     const t = kindShort(o.kind);
     g.fillText(t, left + w / 2 - g.measureText(t).width / 2, top + h / 2 + 4);

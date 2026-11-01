@@ -204,28 +204,34 @@ public final class ScriptFieldsTest {
         // ------------- 性能：100x100 -------------
         buildPerf(new File(root, "perf"));
         Perf perf = runPerf(new File(root, "perf"));
-        // ⚠ 用**均值**做纪律判据，峰值只做宽松兜底 —— 不能用 max 判定。
+        // ⚠ 判据用**中位数 + p99**，不用 max，也不用单帧均值判死。
         //
-        // 原断言是 max < 2ms，但典型实测数据是 avg=0.071ms / max=3.2ms：
-        // 那 3.2ms 是单帧的 JIT/GC/系统抢占抖动，不是算法退步
-        // （单独连跑多次都全绿，和其它套件并行跑时就会抖到 2~4ms）。
-        // 用 max 判定的后果是「机器忙时随机红灯」——这会让人开始怀疑代码，
-        // 最后就变成"改断言让它绿"，那才是真的质量滑坡。
-        // 现在的判据：
-        //   均值 < 0.5ms  —— 算法本身的天花板（真正的性能纪律）
-        //   峰值 < 12ms   —— 只抓真正的退化（O(n²) / 死循环），不抓抖动
-        check("100x100 材质场 tick 均值 < 0.5ms（算法天花板）", perf.avgMs < 0.5,
-                "avg=" + fmt(perf.avgMs) + "ms");
-        check("100x100 材质场无长卡顿（峰值 < 12ms，抓 O(n²)/死循环退化）",
-                perf.maxMs < 12.0,
-                "max=" + fmt(perf.maxMs) + "ms rawMax(含预热)=" + fmt(perf.rawMaxMs)
-                        + "ms cells=" + perf.peakBurning);
+        // 历史（两次踩坑，值得留着）：
+        //   1.0 版：断言 max < 2ms。典型实测 avg=0.071ms / max=3.2ms —— 那个 3.2ms 是单帧的
+        //           JIT/GC/系统抢占抖动，不是算法退步（单独连跑多次全绿，和其它套件并行
+        //           跑时就抖到 2~4ms）。用 max 判定的后果是「机器忙时随机红灯」，
+        //           最后只能靠"改断言让它绿"，那才是真的质量滑坡。
+        //   2.0 版：改成 avg < 0.5ms + max < 12ms。avg 能挡住算法退化，但它把
+        //           「少数几帧抖动」摊平后看不出尾部的真实恶化 —— 尾延迟恰恰是玩家能感知的。
+        //   3.0 版（现在）：p50 < 0.5ms 且 p99 < 2.0ms。
+        //     · p50 是**算法成本**：稳定、不受个别抖动影响，容器退化成 O(n²) 时它立刻涨；
+        //     · p99 是**尾延迟**：允许 1% 的帧被系统抢占（有界容忍），但只要有 1% 以上的帧
+        //       真的超过了 2ms，就说明不是抖动而是真实的长卡顿，必须报警。
+        //     阈值来自实测（本机 200 帧稳态：p50≈0.08ms / p99≈0.5ms），取 0.5 / 2.0 留了
+        //     6 倍 / 4 倍余量 —— 既不会误报，也足以抓住 10 倍级退化。
+        check("100x100 材质场 tick p50 < 0.5ms（算法成本，不受抖动影响）", perf.p50Ms < 0.5,
+                "p50=" + fmt(perf.p50Ms) + "ms");
+        check("100x100 材质场 tick p99 < 2.0ms（尾延迟：只容忍 1% 的帧被抢占）",
+                perf.p99Ms < 2.0,
+                "p99=" + fmt(perf.p99Ms) + "ms p95=" + fmt(perf.p95Ms)
+                        + "ms max=" + fmt(perf.maxMs) + "ms cells=" + perf.peakBurning);
         check("性能工程确实形成了大规模燃烧（活跃格 > 1500）", perf.peakBurning > 1500,
                 "peakBurning=" + perf.peakBurning);
 
         // 报告数字（不影响断言）
-        perfLine = "[perf] 100x100 草地场 tick：max(稳态)=" + fmt(perf.maxMs)
-                + "ms rawMax(含预热)=" + fmt(perf.rawMaxMs)
+        perfLine = "[perf] 100x100 草地场 tick：p50=" + fmt(perf.p50Ms)
+                + "ms p95=" + fmt(perf.p95Ms) + "ms p99=" + fmt(perf.p99Ms)
+                + "ms max(稳态)=" + fmt(perf.maxMs) + "ms rawMax(含预热)=" + fmt(perf.rawMaxMs)
                 + "ms avg=" + fmt(perf.avgMs) + "ms frames=" + perf.frames
                 + " peakBurning=" + perf.peakBurning
                 + " totalBurned=" + perf.totalBurned
@@ -376,6 +382,10 @@ public final class ScriptFieldsTest {
     private static final class Perf {
         double maxMs;
         double avgMs;
+        /** 中位数与 p95/p99：稳态帧的百分位（见断言处为什么用它们代替 max）。 */
+        double p50Ms;
+        double p95Ms;
+        double p99Ms;
         /** 含 JIT 预热帧的原始峰值（只报告，不参与断言）。 */
         double rawMaxMs;
         int frames;
@@ -434,6 +444,21 @@ public final class ScriptFieldsTest {
         p.rawMaxMs = rawMax;
         p.avgMs = n == 0 ? 0 : sum / n;
         p.frames = n;
+        // 百分位用「稳态帧（跳过 PERF_WARMUP）的排序快照」算，与 ScriptMetrics.percentile
+        // 同一套口径（下标取整 ⇒ p50 ≤ p95 ≤ p99 ≤ max 恒成立）。
+        double[] stat = new double[n];
+        int kk = 0;
+        for (int i = PERF_WARMUP; i < 200; i++) {
+            if (ms[i] > 0d) {
+                stat[kk++] = ms[i];
+            }
+        }
+        double[] trimmed = new double[kk];
+        System.arraycopy(stat, 0, trimmed, 0, kk);
+        java.util.Arrays.sort(trimmed);
+        p.p50Ms = percentile(trimmed, 0.50);
+        p.p95Ms = percentile(trimmed, 0.95);
+        p.p99Ms = percentile(trimmed, 0.99);
         p.peakBurning = peak;
         p.totalBurned = ScriptFields.burnedCount();
         p.maxFrame = maxFrame;
@@ -461,8 +486,28 @@ public final class ScriptFieldsTest {
         return p;
     }
 
-    private static int countBurning(ScriptEngine engine) {
-        ScriptWorld w = engine.world;
+    /**
+     * 百分位（下标取整，不做插值）。
+     *
+     * <p>取整而不是插值：保证 {@code p50 ≤ p95 ≤ p99 ≤ max} 恒成立（下标单调 ⇒ 值单调），
+     * 而插值在样本少时会算出比 max 还大的数，断言就成了笑话。
+     * 口径与 {@link ScriptMetrics#percentile} 一致。
+     */
+    private static double percentile(double[] sorted, double p) {
+        if (sorted.length == 0) {
+            return 0d;
+        }
+        int idx = (int) Math.round(p * (sorted.length - 1));
+        if (idx < 0) {
+            idx = 0;
+        }
+        if (idx >= sorted.length) {
+            idx = sorted.length - 1;
+        }
+        return sorted[idx];
+    }
+
+    private static int countBurning(ScriptEngine engine) {        ScriptWorld w = engine.world;
         int n = 0;
         for (int cy = 0; cy < w.rows; cy++) {
             for (int cx = 0; cx < w.cols; cx++) {

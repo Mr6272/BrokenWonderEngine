@@ -50,3 +50,24 @@ web/.build/
 /.tmp_rel8
 /.tmp_rel8
 /android
+
+# 桌面壳（Electron）离线 vendor：318MB 二进制，脚本 desktop/tools/fetch-electron.mjs 可重建
+/desktop/vendor/
+# 桌面打包产物
+/desktop/dist/
+# 桌面截图 / 抓帧中间产物
+/.tmp_desk/
+
+# 历史遗留的临时构建/取证目录（本轮清理时确认只是中间产物）
+/.tmp_device/
+/.tmp_droid/
+/.tmp_verify/
+/.tmp_now.hash.txt
+/.tmp_fin.hash.txt
+/.tmp_perf.hash.txt
+/.tmp_pf3.hash.txt
+
+# UI 逻辑测试的中间产物（verify:ui 的 esbuild 输出）
+/.tmp_ui/
+# 各类一次性探针/取证目录
+/.tmp_desk_v/

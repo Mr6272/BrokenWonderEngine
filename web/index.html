@@ -1,15 +1,19 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="theme-cream">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BWE Studio — 俯视角 RPG 编辑器</title>
+  <!-- 样式顺序不能改：app.css 定义设计令牌与业务组件（含 VS Code 结构的几何），
+       cream.css 只覆盖令牌与结构类观感（契约 §5）。
+       反过来的话 cream 的令牌会被 app.css 覆盖，主题失效。 -->
   <link rel="stylesheet" href="styles/app.css">
+  <link rel="stylesheet" href="styles/cream.css">
 </head>
 
 <body>
-  <!-- 整个编辑器由 app/Editor.ts 挂载到这个根节点上；
+  <!-- 整个编辑器由 app/editor.ts 挂载到这个根节点上；
        首页只保留最少的静态骨架，避免 JS 出错时页面完全空白 -->
   <div id="root" class="app-root">
     <div class="boot-screen">

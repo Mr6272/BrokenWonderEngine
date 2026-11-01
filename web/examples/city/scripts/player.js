@@ -74,13 +74,39 @@ var P_HAS_CITY = (typeof CITY !== "undefined") && !!CITY && !!CITY.walls;
 // ---------------------------------------------------------------------------
 var WH = { cell: 64, map: {}, walls: [], stamp: 0, marks: [] };
 
-function buildWallHash(walls) {
+/**
+ * 把「墙体 + 地面实体道具」合并成一张阻挡表。
+ *
+ * 为什么合并而不是新开一套查询：玩家的移动解算（resolveMove）、脱困（unstick）、
+ * 视线（pathBlocked）、上下车选点（pickExitPoint）全部
+ * 走 WH —— 合并进来 = 这些路径一次性全部获得道具碰撞，不用逐处改。
+ *
+ * 为什么必须合并道具：CITY.solids 是树/路灯/长椅/交通灯/雕塑/喷泉这些「看起来
+ * 是实体」的物件。原来它们的 AABB 压根不在任何碰撞表里，玩家可以直接穿过树干；
+ * 而 props.solid 这个字段在整个引擎里没有任何代码读取，指望它没有意义。
+ *
+ * 表格式：[x, y, w, h, level, buildingIndex]，level = -1 表示「任何层都挡」。
+ * 道具只存在于地面层，所以给 -1 即可（它们本来就只画在地面层）。
+ */
+function buildWallHash(walls, solids) {
   WH.map = {};
-  WH.walls = walls || [];
+  WH.walls = [];
   WH.marks = [];
-  for (var i = 0; i < WH.walls.length; i++) {
-    var w = WH.walls[i];
+  var src = walls || [];
+  var i;
+  for (i = 0; i < src.length; i++) {
+    WH.walls.push(src[i]);
     WH.marks.push(0);
+  }
+  var extra = solids || [];
+  for (i = 0; i < extra.length; i++) {
+    var s = extra[i];
+    // 只补 level；建筑下标不参与碰撞判定，填 -1 即可
+    WH.walls.push([s[0], s[1], s[2], s[3], -1, -1]);
+    WH.marks.push(0);
+  }
+  for (i = 0; i < WH.walls.length; i++) {
+    var w = WH.walls[i];
     var cx0 = Math.floor(w[0] / WH.cell), cy0 = Math.floor(w[1] / WH.cell);
     var cx1 = Math.floor((w[0] + w[2]) / WH.cell), cy1 = Math.floor((w[1] + w[3]) / WH.cell);
     for (var cy = cy0; cy <= cy1; cy++) {
@@ -146,9 +172,65 @@ function circleHitsWall(x, y, r, level) {
   return -1;
 }
 
-/** 人物脚底盒（12×8，中心 (x, y+8)）撞墙？ */
+/**
+ * 车辆碰撞：车是「会移动的实体」，所以不能像树那样一次性塞进静态墙表
+ * （车开走了墙还在 = 玩家撞空气）。这里每帧按车的<b>当前</b>位置生成旋转矩形，
+ * 再在碰撞查询里逐个精确判定。
+ *
+ * 规则：
+ *   - 只在地面层生效（G.level === 0），上楼/车内不参与；
+ *   - 排除玩家自己正在驾驶的车（否则下车前一步就被自己卡住）；
+ *   - 用车的实际 halfW/halfH（货车 36×17、轿车 32×16 —— 见 carSpawnOpts），
+ *     不写死数字，否则换车型就会穿模。
+ */
+var VC = { list: [], stamp: 0 };
+
+/** 刷新「有碰撞的车」清单（每帧一次，由 tick 调用）。 */
+function refreshCarSolids() {
+  VC.list = [];
+  if (G.level !== 0) return;
+  var cars;
+  try { cars = bwe.world.findAll({ tag: "vehicle" }); } catch (e) { cars = null; }
+  if (!cars) return;
+  var mine = G.car || G.taxi;
+  for (var i = 0; i < cars.length; i++) {
+    var c = cars[i];
+    if (!c || !c.alive || c.visible === false) continue;
+    if (c === mine) continue;
+    var sz = null;
+    try { sz = c.size; } catch (e2) { sz = null; }
+    if (!sz || !(sz.w > 0) || !(sz.h > 0)) continue;
+    var h = 0;
+    try { h = bwe.vehicle.heading(c) * Math.PI / 180; } catch (e3) { h = 0; }
+    VC.list.push({ e: c, x: c.x, y: c.y, hw: sz.w / 2, hh: sz.h / 2, h: h });
+  }
+}
+
+/** 盒子（中心 x,y，半宽 hw，半高 hh）与车位矩形相交？（车按朝向做 OBB） */
+function boxHitsCar(x, y, hw, hh) {
+  for (var i = 0; i < VC.list.length; i++) {
+    var c = VC.list[i];
+    if (Math.abs(c.x - x) > 120 || Math.abs(c.y - y) > 120) continue;
+    // 把盒子中心变换到车的局部坐标，再做 AABB（车的 4 个角投影的保守近似）
+    var dx = x - c.x, dy = y - c.y;
+    var ch = Math.cos(c.h), sh = Math.sin(c.h);
+    var lx = dx * ch + dy * sh;
+    var ly = -dx * sh + dy * ch;
+    // 盒子在车局部系的半尺寸（同样做保守投影：|cos|*hw + |sin|*hh）
+    var ehw = Math.abs(ch) * hw + Math.abs(sh) * hh;
+    var ehh = Math.abs(sh) * hw + Math.abs(ch) * hh;
+    if (Math.abs(lx) < c.hw + ehw && Math.abs(ly) < c.hh + ehh) return true;
+  }
+  return false;
+}
+
+/** 人物脚底盒（12×8，中心 (x, y+8)）撞墙或撞车？ */
 function footHits(x, y, level) {
-  return boxHitsWall(x, y + PCFG.footOffY, PCFG.footHalfW, PCFG.footHalfH, level) >= 0;
+  if (boxHitsWall(x, y + PCFG.footOffY, PCFG.footHalfW, PCFG.footHalfH, level) >= 0) return true;
+  if (level === 0 && VC.list.length) {
+    return boxHitsCar(x, y + PCFG.footOffY, PCFG.footHalfW, PCFG.footHalfH);
+  }
+  return false;
 }
 
 /**
@@ -229,6 +311,22 @@ function rectHas(r, x, y, m) {
   return x >= r[0] - m && x <= r[0] + r[2] + m && y >= r[1] - m && y <= r[1] + r[3] + m;
 }
 
+/**
+ * 身体盒（脚底矩形，与人一起移动）是否还与这个建筑有重叠？
+ *
+ * 用来判断「人是不是真的走出去了」。只看中心点的话，人半个身子还在门里、
+ * 中心刚过界的那一帧就会判定成"已离开" —— 表现为室内物件提前消失。
+ */
+function bodyTouches(b, x, y, shrink) {
+  var r = b.inner;
+  if (!r) return false;
+  var s = shrink || 0;
+  var bx0 = x - PCFG.footHalfW + s, bx1 = x + PCFG.footHalfW - s;
+  var by0 = y + PCFG.footOffY - PCFG.footHalfH + s, by1 = y + PCFG.footOffY + PCFG.footHalfH - s;
+  // 身体盒与 inner 的相交测试（矩形 vs 矩形）
+  return bx1 > r[0] && bx0 < r[0] + r[2] && by1 > r[1] && by0 < r[1] + r[3];
+}
+
 /** 点所在建筑（在 inner 内才算；m = 外扩边距）。 */
 function bldAt(x, y, m) {
   for (var i = 0; i < BLD.list.length; i++) {
@@ -287,7 +385,21 @@ function syncLevel() {
     if (bb) setLevel(sl, bb.id, "同步");
   }
   var hb = G.level >= 1 ? BLD.byId[G.bld] : bldAt(p.x, p.y, 0);
+  // ★ 「人在不在楼里」= 身体盒是否还和这栋楼的 inner 有重叠，而不是中心点在不在。
+  //
+  // 原来只判 `bldAt(p.x, p.y, 0)`（中心点），于是人半个身子还在门里、中心刚跨过
+  // 内墙线的那一帧就被判成"已离开 → 室内物件立刻消失"，观感非常突然。
+  // 现在要求身体盒「整体」离开 inner（bodyTouches=false）才算离开；
+  // 进门方向仍用中心点（避免"贴着外墙走"就误判进楼）。
   var newBld = hb ? hb.id : "";
+  if (G.level === 0 && !newBld && G.bld) {
+    var curB = BLD.byId[G.bld];
+    if (curB && bodyTouches(curB, p.x, p.y, 0)) {
+      // 身体还有一部分在楼里 → 仍算在楼内（室内继续显示）
+      newBld = curB.id;
+      hb = curB;
+    }
+  }
   if (G.level === 0 && newBld !== G.bld) {
     var oldB = G.bld;
     G.bld = newBld;
@@ -418,7 +530,7 @@ function onStart(ctx) {
   p.hpMax = 100000;
   p.hp = 100000;
   p.layer = 3;
-  buildWallHash(P_HAS_CITY ? CITY.walls : []);
+  buildWallHash(P_HAS_CITY ? CITY.walls : [], P_HAS_CITY ? CITY.solids : []);
   indexBuildings();
   indexInterior();
   if (P_HAS_CITY && CITY.playerSpawn && footHits(p.x, p.y, 0)) {
@@ -428,6 +540,20 @@ function onStart(ctx) {
   p.setPos(u.x, u.y);
   G.visKey = "";
   refreshInteriorVisibility();
+  refreshCarSolids();
+
+  // ★ 把「这一格能不能站」交给引擎的击退逻辑。
+  //
+  // 为什么必须注册：bwe.combat.hit 的击退原来直接写 x/y，绕过这里所有碰撞解算。
+  // 警察一拳把人打进墙里 / 打进楼里，就是这条路径造成的。注册之后引擎会把击退
+  // 拆成 ≤4px 的小步、每步问一次这里 —— 撞墙就停在墙边，任何调 combat.hit 的
+  // 地方（警察、车撞人、未来武器）都自动免疫"被打进墙里"。
+  try {
+    bwe.combat.setKnockbackGuard(function (x, y) {
+      if (G.level >= 1) return true;          // 楼上由 clampInner 兜底，这里不管
+      return !footHits(x, y, 0);
+    });
+  } catch (eKb) { /* 旧引擎没有这个 API：退化成原行为 */ }
 
   p.on("damage", function (amount, from) {
     if (G.dead) return;
@@ -451,6 +577,8 @@ function onStart(ctx) {
   });
 
   bwe.on("draw", drawHud);
+  // 挥击弧 / 命中火花画在世界里（HUD 之后画，保证盖在角色上面）
+  bwe.on("draw", drawFx);
 
   bwe.camera.follow(p, { smooth: 0.18, lookAhead: 8 });
   try { bwe.camera.setZoom(G.zoom); } catch (e1) { /* ignore */ }
@@ -476,6 +604,9 @@ function tick(dt) {
     if (G.hitFlash <= 0) G.player.clearColor();
   }
   tickExitLock(dt);
+  tickFx(dt);
+  // 车的碰撞体跟着车走：必须在移动之前刷新，否则这一帧用的是上一帧的车位
+  refreshCarSolids();
   if (G.dead) {
     tickRespawn(dt);
     easeZoom(dt);
@@ -727,16 +858,81 @@ function enterCar(car) {
   bwe.world.emit("player_vehicle", { vehicle: car, inside: true });
 }
 
-/** 车身三圆（沿车头方向前/中/后）撞墙？ */
-function carHitsWall(car) {
+/**
+ * 车身矩形（按当前朝向旋转）压到墙/道具？返回 1 = 压到，-1 = 干净。
+ *
+ * <p>只接受"车"这一个参数；假想落点的版本叫 carBoxHitsWallAt（分开命名是为了
+ * 让编辑器的脚本类型检查看得懂 —— 可选形参在这里会被判成"少传参数"）。
+ */
+function carBoxHitsWall(car) {
+  return carBoxHitsWallAt(car, car.x, car.y);
+}
+
+/**
+ * 车身矩形压在给定中心的墙？返回 1 = 压到，-1 = 干净。
+ *
+ * @param car 车辆实体（只用来取朝向与尺寸）
+ * @param x 假想车身中心 X
+ * @param y 假想车身中心 Y
+ */
+function carBoxHitsWallAt(car, x, y) {
   var h = bwe.vehicle.heading(car) * Math.PI / 180;
-  var fx = Math.cos(h), fy = Math.sin(h);
+  var ch = Math.cos(h), sh = Math.sin(h);
   var hh = carHalf(car);
-  var r = Math.max(10, hh.h - 2);
-  var off = Math.max(0, hh.w - r);
-  var o = [-off, 0, off];
-  for (var i = 0; i < 3; i++) {
-    if (circleHitsWall(car.x + fx * o[i], car.y + fy * o[i], r, 0) >= 0) return true;
+  var cx = x, cy = y;
+  // 车身四角（车局部系 → 世界系）
+  var pts = [];
+  for (var sx = -1; sx <= 1; sx += 2) {
+    for (var sy = -1; sy <= 1; sy += 2) {
+      pts.push([cx + ch * hh.w * sx - sh * hh.h * sy,
+                cy + sh * hh.w * sx + ch * hh.h * sy]);
+    }
+  }
+  // 用 OBB 的四个角分别做「点 vs 墙」判定 + 每条边中点：廉价且足够精确
+  var px, py, i;
+  // 1) 角点
+  for (i = 0; i < 4; i++) {
+    px = pts[i][0]; py = pts[i][1];
+    if (circleHitsWall(px, py, 1, 0) >= 0) return 1;
+  }
+  // 2) 四条边中点 + 3) 长边 1/4、3/4 处（车头最容易"顶进去"的地方）
+  var frac = [0.5, 0.25, 0.75];
+  var f, corners = [[0, 1], [1, 3], [3, 2], [2, 0]];
+  for (f = 0; f < frac.length; f++) {
+    for (i = 0; i < 4; i++) {
+      var a1 = pts[corners[i][0]], a2 = pts[corners[i][1]];
+      px = a1[0] + (a2[0] - a1[0]) * frac[f];
+      py = a1[1] + (a2[1] - a1[1]) * frac[f];
+      if (circleHitsWall(px, py, 1, 0) >= 0) return 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * 把车挪到「不压任何墙」的最近合法位置。
+ *
+ * <p>撞墙后必须真的退出去，否则会出现「车顶在墙上、速度被清零」的死锁：
+ * 引擎每帧把它往前推一点，脚本又把它拉回来，位置一点不变，转向也因为没有
+ * 速度而不生效 → 车永久卡住（实测 30°/45°/60° 入射角都能卡死 5 秒不动）。
+ *
+ * <p>搜索策略：沿「车头反方向」由近到远试探，找到第一个干净的落点；
+ * 找不到再试左右两侧（贴墙侧滑）。只退不回旋，所以玩家看到的是"被墙弹开一点"。
+ */
+function carUnstick(car) {
+  var h = bwe.vehicle.heading(car) * Math.PI / 180;
+  var bx = -Math.cos(h), by = -Math.sin(h);
+  var lx = -by, ly = bx;                    // 车身侧向
+  var dirs = [[bx, by], [lx, ly], [-lx, -ly]];
+  for (var k = 0; k < dirs.length; k++) {
+    for (var d = 2; d <= 80; d += 2) {
+      var nx = car.x + dirs[k][0] * d;
+      var ny = car.y + dirs[k][1] * d;
+      if (carBoxHitsWallAt(car, nx, ny) < 0) {
+        car.setPos(nx, ny);
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -749,14 +945,24 @@ function tickDriving(dt) {
     finishExit(car, false);
     return;
   }
-  // 撞墙：回到上一个安全位置并清速度（每帧）
-  if (carHitsWall(car)) {
-    car.setPos(G.lastCarX, G.lastCarY);
-    setCarSpeed(car, 0);
+  // ★ 撞墙处理：**沿远离墙的方向退出到合法位置**，只做轻度减速，不锁速度。
+  //
+  // 上一版是「回退到 lastCar + setSpeed(0)」。三个问题：
+  //   1) lastCarX/Y 在贴着墙的那一帧就被更新了（else 分支），回退 = 原地不动；
+  //   2) 速度归零后，manualStep 的转向要求 |speed|>0.01，方向盘完全失效 →
+  //      车头能转、位置永远不动 = 永久卡死（实测 30°/45°/60° 各卡 5 秒）；
+  //   3) setSpeed 是"锁定一帧"的硬控制 API，每帧都锁会和油门闸门打架，
+  //      脱困瞬间速度会跳（实测 247px/s，车贴着墙窜一下）。
+  // 现在只做位置修正 + 只在确实过快时点一脚刹车，松手能自然滑走。
+  if (carBoxHitsWall(car) >= 0) {
+    if (carUnstick(car)) {
+      if (Math.abs(bwe.vehicle.speed(car)) > 90) {
+        setCarSpeed(car, 90);
+      }
+    } else {
+      setCarSpeed(car, 0);
+    }
     noteWallBlock("车辆");
-  } else {
-    G.lastCarX = car.x;
-    G.lastCarY = car.y;
   }
   if (bwe.actions.pressed("interact") || bwe.actions.pressed("enter_vehicle")) {
     exitCar();
@@ -949,6 +1155,98 @@ function tickTaxi(dt) {
 // ---------------------------------------------------------------------------
 // 战斗
 // ---------------------------------------------------------------------------
+
+/**
+ * 挥击/射击的可见反馈。
+ *
+ * 为什么必须有：原来的 doAttack() 只管扣血和派事件，**屏幕上什么都看不到** ——
+ * 玩家按攻击键之后没有任何响应，主观感受就是"主角没有攻击"。反馈三件套：
+ *   1. 挥击弧（近战半圆扫一下；远程画一道枪线）
+ *   2. 命中点火花（打中才出）
+ *   3. 玩家自身前冲一点（后坐感）
+ *
+ * 全部用 bwe.draw 的世界坐标立即模式，不创建实体、不进存档、零 GC 压力。
+ */
+var FX = { flaps: [], sparks: [] };
+
+/** 朝某个方向画一次挥击。 */
+function fxSwing(cx, cy, ang, range, ranged) {
+  if (ranged) {
+    FX.flaps.push({ kind: "line", x: cx, y: cy, a: ang, len: range, t: 0, life: 0.12 });
+  } else {
+    FX.flaps.push({ kind: "arc", x: cx, y: cy, a: ang, len: range, t: 0, life: 0.18 });
+  }
+  if (FX.flaps.length > 12) FX.flaps.shift();
+}
+
+/** 命中火花。 */
+function fxSpark(x, y) {
+  FX.sparks.push({ x: x, y: y, t: 0, life: 0.22 });
+  if (FX.sparks.length > 24) FX.sparks.shift();
+}
+
+function tickFx(dt) {
+  var i;
+  for (i = FX.flaps.length - 1; i >= 0; i--) {
+    FX.flaps[i].t += dt;
+    if (FX.flaps[i].t >= FX.flaps[i].life) FX.flaps.splice(i, 1);
+  }
+  for (i = FX.sparks.length - 1; i >= 0; i--) {
+    FX.sparks[i].t += dt;
+    if (FX.sparks[i].t >= FX.sparks[i].life) FX.sparks.splice(i, 1);
+  }
+}
+
+/** 世界层绘制（由 show/game 的 draw 事件调用）。 */
+function drawFx() {
+  // 空列表直接返回：这是每帧都会走的热路径，没有特效时连 draw.world 的
+  // 闭包都不要建（实测建闭包 + 空循环会把 90 帧均值从 7ms 拖到 15~30ms）。
+  if (!FX.flaps.length && !FX.sparks.length) return;
+  var d = bwe.draw;
+  if (!d) return;
+  var i;
+  d.world(function () {
+    for (i = 0; i < FX.flaps.length; i++) {
+      var f = FX.flaps[i];
+      var k = 1 - f.t / f.life;          // 1 → 0
+      var alpha = 0.85 * k;
+      if (f.kind === "line") {
+        var ex = f.x + Math.cos(f.a) * f.len;
+        var ey = f.y + Math.sin(f.a) * f.len;
+        d.line(f.x, f.y, ex, ey, { color: "#ffe9a0", width: 2, alpha: alpha });
+      } else {
+        // 半圆扫击：用 5 段折线近似（NanoVG 的 arc 没暴露，折线够用且便宜）
+        var spread = Math.PI * 0.55;
+        var seg = 6;
+        var base = f.a - spread / 2;
+        var r = f.len * (0.55 + 0.45 * (1 - k));   // 扫出去的同时略放大
+        for (var s = 0; s < seg; s++) {
+          var a0 = base + spread * (s / seg);
+          var a1 = base + spread * ((s + 1) / seg);
+          d.line(f.x + Math.cos(a0) * r, f.y + Math.sin(a0) * r,
+                 f.x + Math.cos(a1) * r, f.y + Math.sin(a1) * r,
+                 { color: "#fff3c4", width: 3, alpha: alpha });
+        }
+      }
+    }
+    for (i = 0; i < FX.sparks.length; i++) {
+      var sp = FX.sparks[i];
+      var k2 = 1 - sp.t / sp.life;
+      d.circle(sp.x, sp.y, 4 + (1 - k2) * 10, { fill: "#ffd060", alpha: 0.9 * k2 });
+      d.circle(sp.x, sp.y, 2 + (1 - k2) * 5, { fill: "#ffffff", alpha: 0.9 * k2 });
+    }
+  });
+}
+
+/** 玩家朝向（度 → 弧度），复用 4 向帧方向。 */
+function playerAngle() {
+  // G.dir: 0 下 / 1 左 / 2 右 / 3 上（与图集行一致），Y 向下
+  if (G.dir === 1) return Math.PI;
+  if (G.dir === 3) return -Math.PI / 2;
+  if (G.dir === 0) return Math.PI / 2;
+  return 0;
+}
+
 function doAttack() {
   if (G.defending || G.attackCd > 0) return;
   var w = bwe.combat.params(G.weapon) || bwe.combat.params("fist");
@@ -965,6 +1263,11 @@ function doAttack() {
   }
   G.attackCd = w.cooldown || 0.4;
   var p = G.player;
+  // ★ 先出反馈，再算命中：玩家按下那一帧必须立刻有响应，
+  // 不能等"有没有打中"算完才画（空挥也要有挥击弧）。
+  var ang = playerAngle();
+  var ranged = !w.melee;
+  fxSwing(p.x, p.y + 8, ang, ranged ? w.range : Math.min(w.range, 44), ranged);
   var hits = bwe.collision.overlapCircle(p.x, p.y, w.range);
   var target = null, bd = 1e9;
   for (var i = 0; i < hits.length; i++) {
@@ -983,6 +1286,7 @@ function doAttack() {
     bwe.world.emit("player_attack", { x: p.x, y: p.y, weapon: G.weapon, hit: false });
     return;
   }
+  fxSpark(target.x, target.y);
   var r = bwe.combat.hit({ from: p, to: target, weapon: G.weapon, knockback: 12 });
   bwe.world.emit("player_attack", { x: p.x, y: p.y, weapon: G.weapon, hit: true, target: target });
   if (r && r.killed) bwe.log("[玩家] 击杀 " + target.name);

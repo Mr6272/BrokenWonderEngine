@@ -105,7 +105,30 @@ go.AddAbility(renderer);                   // 统一入口：OnInit -> OnAdded -
 对象类型通过 `SceneObjReg.register(type, factory)` 注册，`Map.build` 里按类型实例化。
 `Data/ui_layout.json` 与 `Data/DialogueData.json` 分别为 UI 布局与对话数据。
 
-### BWE Studio（Web 编辑器）
+### BWE Studio（Web 编辑器 + Windows 桌面客户端）
+
+**桌面版（推荐）**：不需要 `npm run serve`，双击 EXE 即可用，内置 AI 助手。
+
+```powershell
+node desktop/tools/fetch-electron.mjs   # 首次：离线重建 Electron 运行时（不联网）
+npm run build                           # 构建前端 bundle
+npm run desk                            # 启动桌面版
+npm run desk:pack                       # 打包出 desktop/dist/win-unpacked/BWE Studio.exe
+npm run desk:verify                     # 打包并自检（双尺寸 1600x1000 / 1280x720）
+```
+
+- 桌面版把网页版原来的 8 个 `/api/*` 能力搬进了 Electron 主进程，所以**不再需要本地 node 服务**；
+  网页版行为不变（`serve.mjs` 仍可照旧跑）。
+- 界面按 VS Code 结构重排（活动栏 / 侧边栏 / 多标签编辑区 / 底部面板 / 状态栏 / `Ctrl+Shift+P` 命令面板），
+  默认主题是**奶油软科技**（`web/styles/cream.css`），另提供 `theme-midnight` 与 `theme-high-contrast`。
+- AI 助手面板按 deepx / DeepSeek Harness 的思路做省 token：本地零 token 路由、稳定前缀缓存、
+  工具按需注入、结果剪枝、分层压缩、无损续接；面板底部实时显示**缓存命中率与三类 token**。
+  没有 API Key 时走本地 mock 演示模式（面板仍可用，不假装调通）。
+- 完整交付说明见 [`docs/_fragments/desktop-report.md`](docs/_fragments/desktop-report.md)，
+  接口契约见 [`docs/desktop-migration.md`](docs/desktop-migration.md)，
+  桌面壳细节与全部命令行参数见 [`desktop/README.md`](desktop/README.md)。
+
+**网页版**：
 
 ```powershell
 npm install

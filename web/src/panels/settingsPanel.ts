@@ -6,6 +6,7 @@
  */
 
 import { store } from "../core/store.ts";
+import { invalidateCanvasPalette } from "../ui/palette.ts";
 import { Session, PLANS } from "../account/session.ts";
 import { el, input, button, select, fieldRow } from "../core/dom.ts";
 import { I } from "../ui/icons.ts";
@@ -174,15 +175,25 @@ export function renderSettingsPanel(host: HTMLElement): void {
 
   const themeSel = select(
     [
-      { value: "default", label: "默认主题" },
+      { value: "default", label: "奶油软科技（默认）" },
+      { value: "midnight", label: "深夜靛蓝" },
       { value: "high-contrast", label: "高对比度" }
     ],
-    document.documentElement.classList.contains("theme-high-contrast") ? "high-contrast" : "default",
+    document.documentElement.classList.contains("theme-high-contrast")
+      ? "high-contrast"
+      : document.documentElement.classList.contains("theme-midnight")
+        ? "midnight"
+        : "default",
     {
       onChange: (v) => {
-        document.documentElement.classList.remove("theme-high-contrast");
-        if (v === "high-contrast") document.documentElement.classList.add("theme-high-contrast");
+        const rootEl = document.documentElement;
+        rootEl.classList.remove("theme-high-contrast", "theme-midnight");
+        if (v === "high-contrast") rootEl.classList.add("theme-high-contrast");
+        else if (v === "midnight") rootEl.classList.add("theme-midnight");
         try { localStorage.setItem("bwe.theme", v); } catch { /* ignore */ }
+        // 画布颜色不经过 CSS 自动更新（Canvas 2D 不认 var()），切主题后必须让缓存失效
+        invalidateCanvasPalette();
+        window.dispatchEvent(new CustomEvent("bwe:repaint"));
       }
     }
   );

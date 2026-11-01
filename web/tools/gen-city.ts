@@ -62,12 +62,115 @@ function loadAssets(): AssetTable {
   return table;
 }
 
+/**
+ * 「人可以穿过去」的标签白名单 —— 这些 PROP 即使在地面层也不登记为阻挡。
+ *
+ * <p>地毯/贴花/标线/斑马线/路缘/地面/门洞都是纯装饰或地面提示，挡人会让
+ * 人行横道和店门口变得卡顿；拾取物要能走上去捡。
+ */
+const SOLID_EXCLUDE = ["rug", "decal", "mark", "zebra", "curb", "ground", "door", "pickup", "link", "stairs", "floor", "roof", "furniture", "interior"];
+
+/**
+ * 剔除「压住行人路网节点」的阻挡矩形。
+ *
+ * <p>为什么必须剔：行人路径是预计算的图（节点 + 边），节点位置算好之后才生成道具。
+ * 道具一旦登记为阻挡又正好盖住节点，行人就会走到那里永久卡死 —— 实测加 solids
+ * 前 crossings=14、加完掉到 0。
+ *
+ * <p>只影响「挡不挡人」，不影响绘制：道具照常画，只是不参与碰撞。
+ */
+function filterWalkBlocking(
+  solids: number[][],
+  nodes: { x: number; y: number }[],
+  edges: { a: number; b: number }[],
+): number[][] {
+  if (!nodes || !nodes.length) return solids;
+  const pad = 6;
+  const out: number[][] = [];
+  for (const s of solids) {
+    let blocked = false;
+    // 1) 节点本身
+    for (const n of nodes) {
+      if (n.x >= s[0] - pad && n.x <= s[0] + s[2] + pad && n.y >= s[1] - pad && n.y <= s[1] + s[3] + pad) {
+        blocked = true;
+        break;
+      }
+    }
+    // 2) 边的中段（按 8px 采样）：道具挡在路中间同样会让行人卡死
+    if (!blocked && edges && edges.length) {
+      for (const e of edges) {
+        const a = nodes[e.a], b2 = nodes[e.b];
+        if (!a || !b2) continue;
+        // 边长超过 2*tile 的粗筛：只看包围盒可能相交的边
+        const bx0 = Math.min(a.x, b2.x) - pad, bx1 = Math.max(a.x, b2.x) + pad;
+        const by0 = Math.min(a.y, b2.y) - pad, by1 = Math.max(a.y, b2.y) + pad;
+        if (s[0] > bx1 || s[0] + s[2] < bx0 || s[1] > by1 || s[1] + s[3] < by0) continue;
+        const d = Math.hypot(b2.x - a.x, b2.y - a.y);
+        const n = Math.max(1, Math.ceil(d / 8));
+        for (let t = 0; t <= n; t++) {
+          const x = a.x + (b2.x - a.x) * t / n;
+          const y = a.y + (b2.y - a.y) * t / n;
+          if (x >= s[0] - pad && x <= s[0] + s[2] + pad && y >= s[1] - pad && y <= s[1] + s[3] + pad) {
+            blocked = true;
+            break;
+          }
+        }
+        if (blocked) break;
+      }
+    }
+    if (!blocked) out.push(s);
+  }
+  return out;
+}
+
 class Builder {
   objects: SceneObject[] = [];
   layerIds: string[];
   assets: AssetTable;
   missing = new Set<string>();
+  /**
+   * 阻挡矩形表：[x, y, w, h]（左上角 + 尺寸），只在<b>地面层</b>生效。
+   *
+   * <p>为什么要单独一张表：场景物件（树/路灯/长椅/消防栓/雕塑/喷泉…）原本
+   * `props.solid = "0"` 且**整个引擎没有任何代码读它** —— 于是玩家可以直接穿过
+   * 树干、穿过停在路边的车。这里把这些「看起来是实体」的物件按包围盒收进
+   * `CITY.solids`，由 player.js 的碰撞查询统一消费。
+   */
+  solids: number[][] = [];
   constructor(assets: AssetTable, layerIds: string[]) { this.assets = assets; this.layerIds = layerIds; }
+
+  /**
+   * 行人路网节点（由 buildCity 在路网建好后注入）。
+   *
+   * <p>用途：登记阻挡时跳过「压住步行节点」的道具。行人路径是一张预计算的图，
+   * 节点先算好，被道具盖住就必然卡死 —— 实测加 solids 前 crossings=14、
+   * 加完掉到 0，就是 34 个节点被交通灯压住造成的。
+   *
+   * <p>只跳过<b>登记</b>，道具本身照常绘制 —— 视觉不变，只是"这里不挡人"。
+   */
+  walkNodes: { x: number; y: number }[] = [];
+
+  setWalkNodes(nodes: { x: number; y: number }[]): void {
+    this.walkNodes = nodes || [];
+  }
+
+  /** 该矩形是否压住了行人路网节点（pad 给行人留一点身位）。 */
+  private blocksWalkNode(x: number, y: number, w: number, h: number): boolean {
+    const pad = 6;
+    for (const n of this.walkNodes) {
+      if (n.x >= x - pad && n.x <= x + w + pad && n.y >= y - pad && n.y <= y + h + pad) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 登记一个阻挡矩形（世界坐标，左上角 + 尺寸）。 */
+  solid(x: number, y: number, w: number, h: number): void {
+    if (w <= 0 || h <= 0) return;
+    if (this.blocksWalkNode(x, y, w, h)) return;
+    this.solids.push([Math.round(x), Math.round(y), Math.round(w), Math.round(h)]);
+  }
   add(
     key: string, name: string, kind: "TILE" | "PROP" | "ZONE" | "ACTOR",
     cx: number, cy: number, w: number, h: number,
@@ -87,6 +190,18 @@ class Builder {
       o.scaleX = w / (a.cellW || a.width); o.scaleY = h / (a.cellH || a.height);
       if (a.name.indexOf("tile-") === 0 && o.tags.indexOf("tile") < 0) o.tags.push("tile");
     } else if (key) this.missing.add(key);
+    // ★ 实体物件自动登记为阻挡：只有「地面层的道具」才算，楼板/家具/屋顶/贴花不算。
+    //
+    // 判据是标签 + 层号，不是 asset 名（asset 名会变，标签是稳定的语义）：
+    //   - 必须是 PROP（地块 TILE / 区域 ZONE 不挡路）
+    //   - 必须在地面层（L_PROPS）；建筑内部（L_BUILD）由 CITY.walls 负责，不重复登记
+    //   - 排除「人可以踩上去/穿过去」的东西：地毯、贴花、标线、斑马线、路缘、地面、门
+    const isProp = kind === "PROP";
+    const onGroundLayer = layer === L_PROPS;
+    const passable = tags.some((t) => SOLID_EXCLUDE.indexOf(t) >= 0);
+    if (isProp && onGroundLayer && !passable) {
+      this.solid(cx - w / 2, cy - h / 2, w, h);
+    }
     this.objects.push(o);
     return o;
   }
@@ -207,8 +322,8 @@ const BDEFS: BDef[] = [
   { name: "圣玛利亚医院", kind: "hospital", district: "civic", tx: 18, ty: 38, tw: 14, th: 10, floors: 2, door: "E" },
   { name: "24 小时便利店", kind: "shop", district: "civic", tx: 17, ty: 51, tw: 5, th: 5, floors: 1, door: "E" },
   { name: "枫叶巷 8 号", kind: "house", district: "residential", tx: 12, ty: 13, tw: 9, th: 6, floors: 2, door: "N", roof: "red", hedges: true },
-  { name: "枫叶巷 9 号", kind: "house", district: "residential", tx: 28, ty: 13, tw: 9, th: 6, floors: 1, door: "N", roof: "blue", hedges: true },
-  { name: "枫叶巷 3 号", kind: "house", district: "residential", tx: 11, ty: 21, tw: 10, th: 6, floors: 2, door: "S", roof: "brown", hedges: true },
+  { name: "枫叶巷 9 号", kind: "house", district: "residential", tx: 23, ty: 13, tw: 9, th: 6, floors: 1, door: "N", roof: "blue", hedges: true },
+  { name: "枫叶巷 3 号", kind: "house", district: "residential", tx: 12, ty: 21, tw: 10, th: 6, floors: 2, door: "S", roof: "brown", hedges: true },
   { name: "枫叶巷 4 号", kind: "house", district: "residential", tx: 22, ty: 21, tw: 10, th: 6, floors: 1, door: "S", roof: "red", hedges: true },
   { name: "自由大厦", kind: "tower", district: "downtown", tx: 44, ty: 13, tw: 11, th: 13, floors: 5, door: "S", roof: "tower" },
   { name: "港湾金融中心", kind: "tower", district: "downtown", tx: 56, ty: 13, tw: 5, th: 9, floors: 4, door: "E", roof: "tower" },
@@ -217,24 +332,24 @@ const BDEFS: BDef[] = [
   { name: "东湾路 1 号", kind: "house", district: "residential", tx: 89, ty: 23, tw: 7, th: 4, floors: 1, door: "W", roof: "red" },
   { name: "东湾路 2 号", kind: "house", district: "residential", tx: 118, ty: 23, tw: 6, th: 4, floors: 1, door: "S", roof: "blue" },
   { name: "正好商品杂货", kind: "shop", district: "shopping", tx: 42, ty: 38, tw: 6, th: 8, floors: 1, door: "N" },
-  { name: "星光唱片", kind: "cafe", district: "shopping", tx: 49, ty: 38, tw: 5, th: 7, floors: 2, door: "N" },
+  { name: "星光唱片", kind: "cafe", district: "shopping", tx: 50, ty: 38, tw: 5, th: 7, floors: 2, door: "N" },
   { name: "李记精品", kind: "shop", district: "shopping", tx: 55, ty: 38, tw: 6, th: 8, floors: 2, door: "N" },
-  { name: "巷口咖啡", kind: "cafe", district: "shopping", tx: 42, ty: 49, tw: 7, th: 8, floors: 1, door: "S" },
+  { name: "巷口咖啡", kind: "cafe", district: "shopping", tx: 42, ty: 49, tw: 6, th: 8, floors: 1, door: "S" },
   { name: "巷角书店", kind: "shop", district: "shopping", tx: 50, ty: 50, tw: 5, th: 7, floors: 1, door: "S" },
   { name: "画廊咖啡", kind: "cafe", district: "shopping", tx: 56, ty: 50, tw: 5, th: 7, floors: 1, door: "E" },
   { name: "码头塔写字楼", kind: "tower", district: "downtown", tx: 66, ty: 38, tw: 10, th: 10, floors: 4, door: "N", roof: "tower" },
   { name: "创意园写字楼", kind: "tower", district: "downtown", tx: 71, ty: 49, tw: 6, th: 8, floors: 3, door: "E", roof: "tower" },
-  { name: "港货物站", kind: "shop", district: "shopping", tx: 87, ty: 38, tw: 7, th: 8, floors: 1, door: "N" },
+  { name: "港货物站", kind: "shop", district: "shopping", tx: 88, ty: 38, tw: 7, th: 8, floors: 1, door: "N" },
   { name: "服装屋", kind: "shop", district: "shopping", tx: 95, ty: 38, tw: 5, th: 7, floors: 1, door: "N" },
   { name: "海浪咖啡", kind: "cafe", district: "shopping", tx: 101, ty: 38, tw: 6, th: 7, floors: 1, door: "N" },
-  { name: "五金店", kind: "shop", district: "shopping", tx: 87, ty: 49, tw: 7, th: 8, floors: 1, door: "W" },
+  { name: "五金店", kind: "shop", district: "shopping", tx: 88, ty: 49, tw: 7, th: 8, floors: 1, door: "W" },
   { name: "面包烘焙", kind: "cafe", district: "shopping", tx: 95, ty: 49, tw: 6, th: 7, floors: 1, door: "S" },
   { name: "东岸街 1 号", kind: "house", district: "residential", tx: 117, ty: 40, tw: 8, th: 6, floors: 2, door: "W", hedges: true },
   { name: "东岸街 2 号", kind: "house", district: "residential", tx: 117, ty: 49, tw: 7, th: 5, floors: 1, door: "W", hedges: true },
-  { name: "市场街 1 号", kind: "house", district: "residential", tx: 11, ty: 63, tw: 9, th: 6, floors: 1, door: "N", hedges: true },
+  { name: "市场街 1 号", kind: "house", district: "residential", tx: 12, ty: 63, tw: 9, th: 6, floors: 1, door: "N", hedges: true },
   { name: "市场街 2 号", kind: "house", district: "residential", tx: 12, ty: 74, tw: 8, th: 6, floors: 2, door: "S", hedges: true },
   { name: "市场街 3 号", kind: "house", district: "residential", tx: 23, ty: 64, tw: 8, th: 7, floors: 1, door: "N", hedges: true },
-  { name: "市场街 4 号", kind: "apartment", district: "residential", tx: 102, ty: 78, tw: 8, th: 6, floors: 1, door: "N", hedges: true },
+  { name: "市场街 4 号", kind: "apartment", district: "residential", tx: 102, ty: 82, tw: 8, th: 6, floors: 1, door: "N", hedges: true },
   { name: "忠犬咖啡", kind: "cafe", district: "shopping", tx: 42, ty: 62, tw: 7, th: 8, floors: 1, door: "S" },
   { name: "书报亭", kind: "shop", district: "shopping", tx: 50, ty: 62, tw: 6, th: 7, floors: 1, door: "S" },
   { name: "花艺馆", kind: "shop", district: "shopping", tx: 57, ty: 62, tw: 6, th: 8, floors: 2, door: "S" },
@@ -924,6 +1039,10 @@ function buildCity(seed: number): BuildResult {
   walkLine("v", 49 * TILE, 12 * TILE, 28 * TILE, 0);
 
   // 街面 Props：路灯 / 行道树 / 消防栓 / 长椅
+  //
+  // ★ 先把已建好的步行节点交给 Builder：之后登记阻挡时会跳过压住节点的道具，
+  // 否则行人走到交通灯/路灯跟前就永久卡死（斑马线再也过不去）。
+  b.setWalkNodes(walk.nodes);
   const usedProps: Rect[] = [];
   function propFree(r: Rect): boolean {
     for (const def of BDEFS) {
@@ -1192,6 +1311,14 @@ function buildCity(seed: number): BuildResult {
     },
     pois: walkPOIs,
     carSpawns, parking, lights,
+    // 阻挡矩形表（树/路灯/长椅/消防栓/雕塑/喷泉…）：player.js 与 world.js 的
+    // 碰撞查询消费它。没有这一项的老 CITY 数据 → 退化成"只有墙有碰撞"。
+    // ★ 统一过滤一次：把压住行人路网节点的阻挡剔除。
+    //
+    // 交通灯/路灯在第 618 行就创建了（那时步行节点还没建好），所以不能只靠
+    // Builder.solid 里的即时判断 —— 必须在全部道具与全部节点都就绪之后再过一遍。
+    // 不剔的后果是行人走到那里永久卡死、斑马线统计 crossings 直接归零。
+    solids: filterWalkBlocking(b.solids, walk.nodes),
   };
   CITY.roads = junctions.map((j) => ({ key: j.key, x: Math.round(j.x), y: Math.round(j.y) }));
 
@@ -1205,7 +1332,35 @@ function buildCity(seed: number): BuildResult {
   for (const b2 of buildings) {
     for (const b3 of buildings) {
       if (b2 === b3) continue;
-      if (overlap(b2.outer as unknown as Rect, b3.outer as unknown as Rect, 4)) errs.push("建筑重叠:" + b2.id + "/" + b3.id);
+      // pad=0：只拦"真的互相压进去"。相邻楼贴边（gap=0）是合法布局，
+      // 原来的 pad=4 会把一长排沿街店铺全判成重叠 —— 那批 8 条报错就是这么来的。
+      if (overlap(b2.outer as unknown as Rect, b3.outer as unknown as Rect, 0)) errs.push("建筑重叠:" + b2.id + "/" + b3.id);
+    }
+  }
+  // ★ 建筑不许压到马路（含人行道）。
+  //
+  // 为什么必须在生成器里硬拦：建筑的 tx/ty 是手写的常量，改一个数字就可能把楼
+  // 摆到车道或人行道上 —— 表现为「房子盖在马路上」。
+  // 只靠肉眼看 .bwproj 是看不出来的（楼和路都是同色块），所以这里把判定前移，
+  // 让下一次 `npm run gen:city` / `verify:openworld` 就直接失败。
+  for (const b2 of buildings) {
+    const o = b2.outer as unknown as Rect;
+    for (const r of ROADS) {
+      const carriage = carriageOf(r);
+      if (overlap(o, carriage, 0)) {
+        errs.push("建筑压车道:" + b2.id + "(" + b2.name + ")/" + r.id + " " + r.name);
+      }
+      const bw = WALK_W[r.cls];
+      if (bw > 0) {
+        const walks: Rect[] = r.dir === "v"
+          ? [[carriage[0] - bw, carriage[1], bw, carriage[3]], [carriage[0] + carriage[2], carriage[1], bw, carriage[3]]]
+          : [[carriage[0], carriage[1] - bw, carriage[2], bw], [carriage[0], carriage[1] + carriage[3], carriage[2], bw]];
+        for (const wr of walks) {
+          if (overlap(o, wr, 0)) {
+            errs.push("建筑压人行道:" + b2.id + "(" + b2.name + ")/" + r.id + " " + r.name);
+          }
+        }
+      }
     }
   }
   for (const p2 of walkPOIs) {

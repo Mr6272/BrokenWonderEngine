@@ -123,14 +123,27 @@ function updatePlayerState() {
 }
 
 // ---------------------------------------------------------------- 墙体（只看 0 层，NPC/警察兜底碰撞）
-var WALLS = { cell: 64, map: {}, ok: false };
+var WALLS = { cell: 64, map: {}, ok: false, rects: [] };
 function wallKey(cx, cy) { return cy * 4096 + cx; }
 function buildWalls() {
-  WALLS.map = {}; WALLS.ok = false;
+  WALLS.map = {}; WALLS.ok = false; WALLS.rects = [];
   if (!hasCity() || !CITY.walls) return;
-  var ws = CITY.walls, c = WALLS.cell;
-  for (var i = 0; i < ws.length; i++) {
-    var w = ws[i];
+  // ★ 行人只用「墙」，不用地面道具。
+  //
+  // 为什么不能和玩家共用 CITY.solids：行人路径是 gen-city 预先算好的一张图，
+  // 路上的树干/长椅会把边堵死 → 行人永久卡在原地、斑马线再也不去（实测
+  // crossings 从 14 掉到 0）。行人的绕障能力（A* 只在节点上重算）没有
+  // 玩家那么细，只能靠"不透支路径图"这个前提。
+  //
+  // 玩家的碰撞走 player.js 自己的 WH 表（含 solids），所以视觉上仍然是
+  // "玩家撞得过不去、行人绕开走" —— 两者不冲突。
+  var ws = CITY.walls, i;
+  var merged = [];
+  for (i = 0; i < ws.length; i++) merged.push(ws[i]);
+  WALLS.rects = merged;
+  var c = WALLS.cell;
+  for (var m = 0; m < merged.length; m++) {
+    var w = merged[m];
     if (w[4] !== -1 && w[4] !== 0) continue;
     var x0 = Math.floor(w[0] / c), x1 = Math.floor((w[0] + w[2]) / c);
     var y0 = Math.floor(w[1] / c), y1 = Math.floor((w[1] + w[3]) / c);
@@ -139,16 +152,16 @@ function buildWalls() {
         var k = wallKey(cx, cy);
         var b = WALLS.map[k];
         if (!b) { b = []; WALLS.map[k] = b; }
-        b.push(i);
+        b.push(m);
       }
     }
   }
   WALLS.ok = true;
 }
-/** 以 (x,y) 为中心、半宽 hw 半高 hh 的盒子是否压到 0 层墙。 */
+/** 以 (x,y) 为中心、半宽 hw 半高 hh 的盒子是否压到 0 层墙 / 地面道具。 */
 function wallHit(x, y, hw, hh) {
   if (!WALLS.ok) return false;
-  var c = WALLS.cell, ws = CITY.walls;
+  var c = WALLS.cell, ws = WALLS.rects;
   var x0 = Math.floor((x - hw) / c), x1 = Math.floor((x + hw) / c);
   var y0 = Math.floor((y - hh) / c), y1 = Math.floor((y + hh) / c);
   for (var cy = y0; cy <= y1; cy++) {

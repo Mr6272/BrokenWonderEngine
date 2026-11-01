@@ -9,7 +9,7 @@
  * 任何一步失败都不能留下白屏：出错时给出可点的提示，并退回空工程继续可用。
  */
 
-import { Editor, showQuickStart } from "./app/editor.ts";
+import { Editor, showQuickStart, showQuickStartBanner } from "./app/editor.ts";
 import { bootstrapProject, startAutoSave, armStartupGuard } from "./app/project.ts";
 import { createProject } from "./core/model.ts";
 import { store } from "./core/store.ts";
@@ -20,6 +20,8 @@ function applySavedThemeAndScale(): void {
     const theme = localStorage.getItem("bwe.theme");
     if (theme === "high-contrast") {
       document.documentElement.classList.add("theme-high-contrast");
+    } else if (theme === "midnight") {
+      document.documentElement.classList.add("theme-midnight");
     }
     const scale = localStorage.getItem("bwe.uiScale");
     if (scale) document.body.style.zoom = `${Number(scale) / 100}`;
@@ -104,9 +106,18 @@ function boot(): void {
   }, 2500);
 
   // 调试出口：出问题时用户可以在控制台直接看状态，也方便我远程定位
+  // 调试/验收出口：出问题时可以在控制台直接看状态，也能让截图脚本注入诊断数据
   (window as unknown as Record<string, unknown>).__BWE__ = {
     store,
     editor,
+    /** 注入一组诊断（验收/排查用，正常使用时没人调） */
+    injectProblems: (list: unknown[]) => {
+      void import("./core/diagnostics.ts").then((m) => {
+        m.setProblems("demo", list as never);
+      });
+    },
+    /** 打开某个底部面板标签（problems / output / ai） */
+    showPanelTab: (id: "problems" | "output" | "ai") => editor.openBottomTab(id),
     dump: () => ({
       hasProject: !!store.project,
       projectName: store.project?.name,
@@ -123,9 +134,11 @@ function boot(): void {
 
   // 第一次打开的人给一张引导卡，但只弹一次，之后不再打扰
   try {
+    // 首次打开**不再弹模态框**：模态会盖住整个编辑器（验收截图被挡、老用户也得先关一次）。
+    // 改成右下角一条可关闭的引导条，点它才展开完整引导。
     if (!localStorage.getItem("bwe.seenQuickStart")) {
       window.setTimeout(() => {
-        showQuickStart();
+        showQuickStartBanner();
         localStorage.setItem("bwe.seenQuickStart", "1");
       }, 600);
     }

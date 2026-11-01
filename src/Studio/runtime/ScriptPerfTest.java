@@ -284,9 +284,13 @@ public final class ScriptPerfTest {
         final double fieldsMin = min(fieldMs);
         final double fieldsMax = max(fieldMs);
         final double fieldsAvg = avg(fieldMs);
+        final double fieldsP50 = percentile(fieldMs, 0.50);
+        final double fieldsP95 = percentile(fieldMs, 0.95);
         final double physicsMin = min(physicsMs);
         final double physicsMax = max(physicsMs);
         final double physicsAvg = avg(physicsMs);
+        final double physicsP50 = percentile(physicsMs, 0.50);
+        final double physicsP95 = percentile(physicsMs, 0.95);
         final double aiMs = ScriptAi.averageTickMs(engine);
 
         // ---- world tick：ScriptWorld 无官方打点 → 隔离测量（如实标注）----
@@ -301,8 +305,12 @@ public final class ScriptPerfTest {
 
         emit("B", updateMs, 0d, allocPerFrame, textures);
         PERF_EXTRA.append("PERFX scene=B fieldsMs=").append(fmt(fieldsAvg))
+                .append(" fieldsP50Ms=").append(fmt(fieldsP50))
+                .append(" fieldsP95Ms=").append(fmt(fieldsP95))
                 .append(" fieldsMaxMs=").append(fmt(fieldsMax))
                 .append(" physicsMs=").append(fmt(physicsAvg))
+                .append(" physicsP50Ms=").append(fmt(physicsP50))
+                .append(" physicsP95Ms=").append(fmt(physicsP95))
                 .append(" physicsMaxMs=").append(fmt(physicsMax))
                 .append(" aiMs=").append(fmt(aiMs))
                 .append(" worldTickMs=").append(fmt(worldMs))
@@ -316,12 +324,29 @@ public final class ScriptPerfTest {
                 + "worldTickMs 为隔离测量（ScriptWorld 无官方打点），与 update 内真实占比不完全等价\n");
 
         // ---------------- 断言 ----------------
-        check("B：fields tick 稳态均值 < 4ms", fieldsAvg >= 0 && fieldsAvg < 4.0,
-                String.format(java.util.Locale.ROOT, "avg=%.3f max=%.3f",
+        // ⚠ 用 p50 + p95 而不是单看 avg / max（与 ScriptFieldsTest 同一套去抖纪律）：
+        //   · avg 会把「少数几帧的长卡顿」摊平 —— 60 帧里 1 帧 15ms 也拉不动 0.18ms 的均值，
+        //     于是 O(n²) 恶化到"偶尔卡一下"的阶段时，avg 断言仍然是绿的；
+        //   · max 又会被纯抖动打红（本机实测 fieldsMaxMs=15.3 / physicsMaxMs=15.6，
+        //     均值只有 0.18 / 1.51 —— 那是并行跑其它套件时的系统抢占，不是算法退步）。
+        //   p50 是算法成本（稳、不受抖动影响），p95 是尾延迟（允许 5% 的帧被抢占，
+        //   但真出现 5% 以上的长卡顿就说明有问题）。阈值取实测值的 2~3 倍留余量。
+        check("B：fields tick p50 < 1ms（算法成本）", fieldsP50 >= 0 && fieldsP50 < 1.0,
+                String.format(java.util.Locale.ROOT, "p50=%.3f p95=%.3f avg=%.3f max=%.3f",
+                        Double.valueOf(fieldsP50), Double.valueOf(fieldsP95),
                         Double.valueOf(fieldsAvg), Double.valueOf(fieldsMax)));
-        check("B：physics tick 稳态均值 < 4ms", physicsAvg >= 0 && physicsAvg < 4.0,
-                String.format(java.util.Locale.ROOT, "avg=%.3f max=%.3f",
+        check("B：fields tick p95 < 4ms（尾延迟，允许 5% 帧被抢占）",
+                fieldsP95 >= 0 && fieldsP95 < 4.0,
+                String.format(java.util.Locale.ROOT, "p95=%.3f max=%.3f",
+                        Double.valueOf(fieldsP95), Double.valueOf(fieldsMax)));
+        check("B：physics tick p50 < 4ms（算法成本）", physicsP50 >= 0 && physicsP50 < 4.0,
+                String.format(java.util.Locale.ROOT, "p50=%.3f p95=%.3f avg=%.3f max=%.3f",
+                        Double.valueOf(physicsP50), Double.valueOf(physicsP95),
                         Double.valueOf(physicsAvg), Double.valueOf(physicsMax)));
+        check("B：physics tick p95 < 8ms（尾延迟：200 刚体步进有 GC 抖动，容忍度放宽）",
+                physicsP95 >= 0 && physicsP95 < 8.0,
+                String.format(java.util.Locale.ROOT, "p95=%.3f max=%.3f",
+                        Double.valueOf(physicsP95), Double.valueOf(physicsMax)));
         check("B：AI 感知 40 AI < 2ms/帧", aiMs >= 0 && aiMs < 2.0,
                 String.format(java.util.Locale.ROOT, "%.3fms", Double.valueOf(aiMs)));
         check("B：update 总耗时 < 12ms", updateMs > 0 && updateMs < 12.0,
@@ -1139,6 +1164,24 @@ public final class ScriptPerfTest {
             sum += d;
         }
         return sum / v.length;
+    }
+
+    private static double percentile(double[] v, double p) {
+        if (v.length == 0) {
+            return 0d;
+        }
+        double[] sorted = new double[v.length];
+        System.arraycopy(v, 0, sorted, 0, v.length);
+        java.util.Arrays.sort(sorted);
+        // 下标取整（不插值）：保证 p50 ≤ p95 ≤ max 恒成立，且不会被少数尖刺拉偏。
+        int idx = (int) Math.round(p * (sorted.length - 1));
+        if (idx < 0) {
+            idx = 0;
+        }
+        if (idx >= sorted.length) {
+            idx = sorted.length - 1;
+        }
+        return sorted[idx];
     }
 
     private static String fmt(double v) {

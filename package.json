@@ -1,8 +1,8 @@
 {
   "name": "bwe-studio",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "BWE Studio —— 完全俯视角 RPG 可视化编辑器（Web 版）",
+  "description": "BWE Studio —— 完全俯视角 RPG 可视化编辑器（Web 版 + Windows 桌面版）",
   "type": "module",
   "scripts": {
     "build": "esbuild web/src/main.ts --bundle --outfile=web/dist/studio.js --format=esm --loader:.bwproj=json --log-level=warning",
@@ -13,14 +13,22 @@
     "typecheck": "tsc --noEmit -p web/tsconfig.json",
     "check:java8": "node web/tools/check-java8.mjs",
     "check": "npm run typecheck && npm run check:java8",
-    "gen:city": "esbuild web/tools/gen-city.ts --bundle --platform=node --format=esm --outfile=web/.build/gen-city.mjs --log-level=warning && node web/.build/gen-city.mjs",
+    "gen:city": "esbuild web/tools/gen-city.ts --bundle --platform=node --format=esm --loader:.bwproj=json --outfile=web/.build/gen-city.mjs --log-level=warning && node web/.build/gen-city.mjs",
     "check:scripts": "node web/tools/check-scripts.mjs",
     "verify:apidocs": "node web/tools/verify-apidocs.mjs --strict",
     "verify:openworld": "node web/tools/verify-openworld.mjs",
     "verify:roundtrip": "node web/tools/verify-editor-roundtrip.mjs",
     "verify:uiscene": "node web/tools/verify-ui-scene.mjs",
     "bench:openworld": "node web/tools/bench-openworld.mjs --json docs/bench-openworld.json",
-    "verify:all": "npm run verify:apidocs && npm run typecheck && npm run check:scripts && npm run verify:openworld && npm run verify:roundtrip && npm run verify:uiscene"
+    "verify:all": "npm run verify:apidocs && npm run typecheck && npm run check:scripts && npm run verify:openworld && npm run verify:roundtrip && npm run verify:uiscene",
+    "verify:apidocs:soft": "node web/tools/verify-apidocs.mjs",
+    "verify:ui": "esbuild web/tools/ui-checks/verify-ui-logic.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/verify.mjs --log-level=warning && node .tmp_ui/verify.mjs",
+    "verify:desktop": "node desktop/tools/package.mjs --verify",
+    "desk": "node desktop/main.mjs",
+    "desk:shot": "node desktop/main.mjs --shot=.tmp_desk/shot.png --size=1600x1000",
+    "desk:pack": "node desktop/tools/package.mjs",
+    "desk:verify": "node desktop/tools/package.mjs --verify",
+    "desk:test": "node desktop/test/prefix.test.mjs && node desktop/test/router.test.mjs && node desktop/test/session.test.mjs && node desktop/test/usage.test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

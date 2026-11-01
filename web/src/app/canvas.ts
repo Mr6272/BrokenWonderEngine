@@ -18,6 +18,7 @@
 import type { SceneObject } from "../core/model.ts";
 import { isUiScene, objectFromPrefab, scenePixelSize } from "../core/model.ts";
 import { store } from "../core/store.ts";
+import { canvasPalette, invalidateCanvasPalette } from "../ui/palette.ts";
 import { contextMenu, type MenuItem } from "../ui/toast.ts";
 import { clamp } from "../core/dom.ts";
 import { loadFrame } from "../data/assets.ts";
@@ -310,9 +311,10 @@ export class CanvasView {
 
     const cw = this.canvas.clientWidth;
     const ch = this.canvas.clientHeight;
-    // 直接写死颜色：getComputedStyle 读自定义属性在部分浏览器返回未解析的字符串，
-    // 会让 fillStyle 失效变成黑色，这类"静默失效"最难查，索性不依赖它。
-    g.fillStyle = "#15171d";
+    // 画布底色来自主题令牌（浅/深两套主题都要能画），由 ui/palette.ts 统一解析 + 缓存
+    // —— 每个绘制函数各自 getComputedStyle 会让每帧多出十几次样式重算。
+    const pal = canvasPalette();
+    g.fillStyle = pal.bg;
     g.fillRect(0, 0, cw, ch);
 
     const scene = store.scene;
@@ -440,7 +442,7 @@ export class CanvasView {
       if (!targetScene) continue;
       const s = this.worldToScreen(portal.x, portal.y - (sizeOf(portal, store.project!).h / 2) - 6);
       g.save();
-      g.fillStyle = "#f0a92b";
+      g.fillStyle = canvasPalette().hover;
       g.font = '11px "Microsoft YaHei UI", sans-serif';
       g.textAlign = "center";
       g.fillText(`→ ${targetScene}`, s.x, s.y);
@@ -467,7 +469,12 @@ export class CanvasView {
     const x = topRight.x - s;
     const y = topRight.y - s - 1;
     g.save();
-    g.fillStyle = linked ? "#8b7cf6" : "rgba(140,150,170,0.55)";
+    // 预制体链接角标：紫色=已链接、灰色=模板已删；浅底主题下紫色要深一点才看得清
+    g.fillStyle = linked
+      ? (document.documentElement.classList.contains("theme-midnight") || document.documentElement.classList.contains("theme-high-contrast")
+          ? "#8b7cf6"
+          : "#7a5fbf")
+      : canvasPalette().text3;
     g.strokeStyle = "rgba(8,10,14,0.8)";
     g.lineWidth = 1;
     g.fillRect(x, y, s, s);
@@ -517,10 +524,13 @@ export class CanvasView {
     const chh = this.canvas.clientHeight;
     g.save();
     g.textAlign = "center";
-    g.fillStyle = "#8a94a6";
+    // 空状态文字也必须跟着主题：深色主题用浅灰，奶油主题用暖灰，
+    // 写死颜色会在某一套主题下变成"看不见的字"。
+    const pal = canvasPalette();
+    g.fillStyle = pal.text2;
     g.font = '600 15px "Microsoft YaHei UI", sans-serif';
     g.fillText(title, cw / 2, chh / 2 - 6);
-    g.fillStyle = "#5f6879";
+    g.fillStyle = pal.text3;
     g.font = '12px "Microsoft YaHei UI", sans-serif';
     g.fillText(sub, cw / 2, chh / 2 + 18);
     g.restore();
