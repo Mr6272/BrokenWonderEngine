@@ -43,6 +43,7 @@ import {
 import { error, info, modal, ok, warn } from "../ui/toast.ts";
 import { renderSessionSwitcher } from "./aiSessions.ts";
 import { presentError, type ErrorPresentation } from "./aiErrorView.ts";
+import { answerNotices, type AnswerNotice } from "./aiAnswerNotice.ts";
 import { keyBrokenViewOf } from "./keyBrokenView.ts";
 
 // ============================================================================
@@ -224,6 +225,23 @@ interface ChatTurn {
   errorRaw?: string;
   /** 是否可重试（决定要不要给重试按钮） */
   recoverable?: boolean;
+  /**
+   * 这条回答「为什么可能不完整」的结构化说明（工具预算耗尽 / max_tokens 截断）。
+   *
+   * 存在这里而不是直接 append 到 DOM：`renderThread()` 是整树重建，
+   * 只拼 DOM 的提示会在下一次重绘（切会话、窗口 resize 后重画）时消失 ——
+   * 那正是「用户看不到解释」的老问题。
+   * 字段缺省/判定不出来时保持 `undefined`，renderThread **完全不渲染**（不出空条）。
+   */
+  notices?: AnswerNotice[];
+  /**
+   * 「这一轮为什么什么都没产出」的一句话说明（正文为空且没有任何结构化提示时）。
+   *
+   * 同样是**数据层**字段而不是 DOM 追加：这条解释的全部价值在于
+   * 「用户回头还能看到为什么」，拼进 DOM 的提示会在下一次 renderThread 时消失，
+   * 等于只闪了一下就没了。
+   */
+  note?: string;
 }
 
 interface PendingEdit {
@@ -426,9 +444,40 @@ function handleAiEvent(ev: AiEvent): void {
       return;
     }
     case "done": {
+      // **为什么可能没交付**：主进程把「工具预算耗尽」「max_tokens 截断」放进了
+      // `done.extra`（可能缺省 —— 老宿主/分两批落地）。判定全部收在纯函数里，
+      // 这里只负责把结果挂到**当前这一轮**助手回合上（`live` 就是 `send()` 推入的
+      // 那个流式回合）。不能追加到 DOM：renderThread 会整树重建，提示会消失。
+      // 也不能挂到 `thread` 末尾 —— done 是流式结束那一刻，末尾可能已经是
+      // 用户后来的新消息，挂错对象会让提示看起来属于另一轮。
+      const extra = (ev as unknown as { extra?: unknown }).extra;
+      const notices = answerNotices(extra);
+      // **正文为空 = 这轮什么都没产出**（典型：模型连续调坏工具直到轮次耗尽）。
+      // 用户此刻的处境是「AI 说了半句、没了、也没有任何解释」——
+      // 沉默的失败比报错更让人困惑，必须明确说明 + 给出口。
+      // 已有结构化提示条时不重复说同一件事（提示条已经讲了原因与下一步）。
+      const produced = (String(ev.text ?? "") + String(live?.text ?? "")).trim();
       if (live) {
         live.text = ev.text || live.text;
         live.streaming = false;
+        live.notices = notices.length ? notices : undefined;
+        // 存进回合（不是直接 append 到 DOM）：这条解释必须在下一次重绘后还在。
+        if (!produced && !notices.length) {
+          live.note = "这轮没有产出答复（可能工具连续失败，或模型轮次耗尽）。可以重试，或换个问法。";
+        }
+      } else if (produced) {
+        // **兜底：没有可写入的流式回合时，不要把 done 的正文丢掉。**
+        // `liveAssistantTurn()` 只在「最后一轮是助手」时返回对象；正常路径下 send()
+        // 一定先 push 了助手回合，所以这里是纯防御。但真要发生（例如未来宿主允许
+        // 在 replaceThread 之后还发 done），静默丢弃的后果就是用户报了的那件事：
+        // 模型明明说了话，界面上什么都没有。宁可补一条回合，也不要吞掉正文。
+        turns.push({
+          role: "assistant",
+          text: ev.text,
+          tools: [],
+          streaming: false,
+          notices: notices.length ? notices : undefined
+        });
       }
       lastUsage = ev.usage;
       lastCacheHit = ev.cacheHitRate;
@@ -436,17 +485,8 @@ function handleAiEvent(ev: AiEvent): void {
       currentRequest = "";
       endThinking();
       pendingEdit = extractCodeBlock(ev.text);
+      // 一次重绘画完：正文 + 提示条 + 无产出说明都已写进数据层
       hooks?.renderThread();
-      // **正文为空 = 这轮什么都没产出**（典型：模型连续调坏工具直到轮次耗尽）。
-      // 用户此刻的处境是「AI 说了半句、没了、也没有任何解释」——
-      // 沉默的失败比报错更让人困惑，必须明确说明 + 给出口（重试）。
-      const produced = (String(ev.text ?? "") + String(live?.text ?? "")).trim();
-      if (!produced) {
-        hooks?.appendSystemNote(
-          "这轮没有产出答复（可能工具连续失败，或模型轮次耗尽）。可以重试，或换个问法。",
-          () => hooks?.retryLastUserMessage()
-        );
-      }
       hooks?.renderThinking?.();
       hooks?.updateMeter();
       return;
@@ -1803,7 +1843,11 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       const hasText = String(t.text ?? "").trim().length > 0;
       const hasTools = Array.isArray(t.tools) && t.tools.length > 0;
       const hasError = Boolean(t.error);
-      if (!hasText && !hasTools && !hasError && !t.streaming) continue;
+      // 提示条也是内容：正文为空但这轮有「为什么没交付」的说明时，
+      // 整条回合必须留下（否则最该看到的那句话会被这个跳过条件吃掉）。
+      const hasNotices = Array.isArray(t.notices) && t.notices.length > 0;
+      const hasNote = Boolean(t.note);
+      if (!hasText && !hasTools && !hasError && !hasNotices && !hasNote && !t.streaming) continue;
 
       if (hasText || t.streaming) {
         const bubble = el("div", { class: "ai-msg assistant" });
@@ -1812,6 +1856,13 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
         thread.appendChild(bubble);
       }
       for (const tool of t.tools) thread.appendChild(toolBlock(tool));
+      // **「为什么可能没交付」的提示条放在助手内容下方**（不是上方）：
+      // 用户先读回答本身，再读「这段回答为什么不完整」的解释，
+      // 顺序反过来会让人以为整轮都失败了。
+      if (hasNotices) for (const n of t.notices!) thread.appendChild(answerNoticeBlock(n));
+      // 一条泛化的系统说明（正文为空且没有结构化提示时才产生，见 done 分支）。
+      // 带「重试」：这时用户的唯一出口就是重发上一句（正文为空，没有可读的东西）。
+      if (hasNote) thread.appendChild(noteBlock(t.note!, () => retryLastUserMessage()));
       // 错误用**独立的结构化气泡**（人话在上、技术详情折叠、request_id 可复制）
       if (t.error) thread.appendChild(errorBubble(t.error, t.errorRaw, t.recoverable));
     }
@@ -1939,6 +1990,27 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
   }
 
   /**
+   * 「回答为什么不完整」的提示条（工具预算用完 / max_tokens 截断）。
+   *
+   * 视觉必须是**警告**而不是**错误**：
+   *   · 这两种情况都不是崩溃 —— 回答确实产出了，只是证据不足/被切断；
+   *   · 画成红叉会让人以为整轮失败，于是去点「重试」（重试也解决不了
+   *     「预算用完了」这件事，只有拆小问题才有用）。
+   * 所以复用系统提示条的 warn 系配色（`--warn` / `--warn-soft`），
+   * 并且**正文一起显示**（标题只说结论，用户需要的是「用了多少」和「下一步做什么」）。
+   */
+  function answerNoticeBlock(n: AnswerNotice): HTMLElement {
+    const box = el("div", { class: "ai-notice" });
+    box.dataset.aiNotice = n.kind;
+    const head = el("header");
+    head.appendChild(svg(I.warn, 13));
+    head.appendChild(el("span", { class: "ai-notice-title" }, n.title));
+    box.appendChild(head);
+    box.appendChild(el("div", { class: "ai-notice-detail" }, n.detail));
+    return box;
+  }
+
+  /**
    * 错误气泡（结构化）。
    *
    * 起因：用户截图里 400 的原始 JSON 原样挂在对话区，占一大块且完全看不懂，
@@ -2006,14 +2078,14 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
   }
 
   /**
-   * 在对话区插一条系统提示。
+   * 系统提示条（纯构造，不做 DOM 追加）。
    *
-   * 用途：`done` 但正文为空 / 出错可重试 —— 这两种都是**"AI 什么都没说就停了"**
-   * 的场景。沉默的失败比报错更让人困惑，所以必须明确告诉用户发生了什么、能做什么。
+   * 用途：`done` 但正文为空 —— 「AI 什么都没说就停了」。沉默的失败比报错更让人困惑，
+   * 所以必须明确告诉用户发生了什么、能做什么。
    *
    * @param retryLast 给了就渲染「重试」按钮（重发上一条用户消息）
    */
-  function appendSystemNote(text: string, retryLast?: () => void): void {
+  function noteBlock(text: string, retryLast?: () => void): HTMLElement {
     const box = el("div", { class: "ai-note" });
     box.dataset.aiNote = "1";
     box.appendChild(svg(I.info, 13));
@@ -2029,8 +2101,12 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       btn.dataset.aiRetry = "1";
       box.appendChild(btn);
     }
-    // 插到最后一个助手回合之后（没有助手回合就追加到末尾）
-    thread.appendChild(box);
+    return box;
+  }
+
+  /** 把系统提示条追加到对话区末尾（一次性用途；要跨重绘留存请写 `turn.note`）。 */
+  function appendSystemNote(text: string, retryLast?: () => void): void {
+    thread.appendChild(noteBlock(text, retryLast));
     thread.scrollTop = thread.scrollHeight;
   }
 
@@ -2792,6 +2868,53 @@ export function demoEmptyDone(): void {
     cacheHitRate: 0,
     savedUsdApprox: 0
   } as AiEvent);
+}
+
+/**
+ * 验收出口：构造「回答不完整」的一轮 —— 工具预算耗尽 / max_tokens 截断。
+ *
+ * 为什么必须走 `handleAiEvent` 而不是直接拼 DOM：
+ *   直接拼 DOM 只能证明"样式画得出来"；走真实事件路径才能证明
+ *   「主进程发来 `done.extra` 后，UI 确实把这条解释挂在**这一轮**助手消息下方」。
+ *   用户报的「跑两下就寄了、没交付任何东西」看的正是这个位置。
+ *
+ * @param kind budget = 只预算耗尽；truncated = 只截断；both = 两者（顺序必须是截断在前）
+ * @param withText 附带一段正文，证明提示条在正文**下方**而不是替换正文
+ */
+export function demoAnswerNotices(kind: "budget" | "truncated" | "both" = "both", withText = true): void {
+  const rid = `__demo_notice_${kind}__`;
+  turns.length = 0;   // 从干净状态开始，证据才清楚
+  turns.push({ role: "user", text: "审一遍当前场景，把能修的都修掉", tools: [], streaming: false });
+  turns.push({ role: "assistant", text: "", tools: [], streaming: true });
+  currentRequest = rid;
+  const body = withText
+    ? "场景里有两处图层排序问题，我先把结论列出来：1) HUD 图的 z 值低于背景，会被盖住；2) 碰撞体比可见图片大一圈。"
+    : "";
+  if (body) handleAiEvent({ type: "delta", requestId: rid, text: body } as AiEvent);
+  const extra: Record<string, unknown> = {};
+  if (kind === "budget" || kind === "both") {
+    extra.toolBudget = {
+      roundsUsed: 8,
+      roundsMax: 8,
+      callsUsed: 12,
+      callsMax: 12,
+      budgetExhausted: true,
+      elapsedMs: 41500
+    };
+  }
+  if (kind === "truncated" || kind === "both") {
+    extra.truncated = true;
+    extra.autoContinued = 2;   // 与主进程真实语义一致：续写 2 次仍被截断
+  }
+  handleAiEvent({
+    type: "done",
+    requestId: rid,
+    text: body,
+    usage: { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reason: "no-usage" },
+    cacheHitRate: 0,
+    savedUsdApprox: 0,
+    extra
+  } as unknown as AiEvent);
 }
 
 

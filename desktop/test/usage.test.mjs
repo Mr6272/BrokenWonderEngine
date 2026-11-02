@@ -133,39 +133,70 @@ test("unknown provider 走 DeepSeek 兜底价（不抛错）", () => {
 
 // ---------------- 剪枝 + toolCache ----------------
 
-test("≤600 字符不剪枝，原样返回", () => {
-  const text = "短内容".repeat(50);
+test(`≤${PRUNE_LIMIT} 字符不剪枝，原样返回（ReadFile 默认一次读 400 行，必须能整段落进上下文）`, () => {
+  const text = "短内容".repeat(Math.floor(PRUNE_LIMIT / 3));
   const p = pruneToolResult(text);
   assert.equal(p.pruned, false, `${text.length} 字符不该剪`);
   assert.equal(p.text, text);
   assert.ok(p.fullSha1.length === 40, "sha1 长度应为 40");
 });
 
-test(">600 字符剪成「头部 + 统计」，且带 toolCache 键", () => {
-  const text = Array.from({ length: 200 }, (_, i) => `第 ${i} 行：这是一段会撑爆上下文的长文本`).join("\n");
-  assert.ok(text.length > PRUNE_LIMIT);
+test("真实规模的 400 行代码不会被剪枝（旧 600 上限会把 200 行代码削成 15 行）", () => {
+  // 这是用户实测那轮对话的复盘：ReadFile 读 1408 行的 player.js，旧上限只留下头 480 字符，
+  // 模型永远看不到要改的 refreshCarSolids / resolveMove / unstick 段，只能反复重读。
+  //
+  // 样本按真实代码密度取（每行 ~35 字符 → 400 行 ≈ 14K），并断言**不剪枝**；
+  // 若哪天有人把上限调回几百字符，这条会立刻红。
+  const text = Array.from({ length: 400 }, (_, i) => `    // 第 ${i + 1} 行：${"x".repeat(20)}`).join("\n");
+  assert.ok(text.length > 600, "样本必须远大于旧的 600 上限（否则测不出回归）");
+  const p = pruneToolResult(text);
+  assert.equal(
+    p.pruned,
+    false,
+    `400 行代码（${text.length} 字符）不该被剪枝 —— 剪了就重演「模型看不到要改的代码」`
+  );
+  assert.equal(p.text, text, "必须原样交给模型");
+});
+
+test(`>${PRUNE_LIMIT} 字符才剪成「头部 + 统计」，且给出可执行的续读方式`, () => {
+  const text = Array.from({ length: 2000 }, (_, i) => `第 ${i} 行：这是一段会撑爆上下文的长文本`).join("\n");
+  assert.ok(text.length > PRUNE_LIMIT, "样本必须超过剪枝上限");
   const p = pruneToolResult(text);
   assert.equal(p.pruned, true);
-  assert.ok(p.text.length < text.length / 2, `剪枝后应显著变短：${p.text.length} vs ${text.length}`);
-  assert.ok(p.text.includes("已剪枝"), p.text);
+  assert.ok(p.text.length < text.length, `剪枝后应变短：${p.text.length} vs ${text.length}`);
+  assert.ok(p.text.includes("已剪枝"), p.text.slice(-200));
   assert.ok(p.text.includes(p.fullSha1), "剪枝文本里必须带 sha1，方便回头取原文");
   assert.ok(p.text.includes(String(text.length)), "必须写原文长度");
   assert.ok(p.text.startsWith(text.slice(0, 40)), "必须保留头部（模型主要看开头）");
+  // ⚠ 提示里必须是**模型能真的做到的动作**：旧文案写的 "全文在 toolCache/<sha>.txt"
+  //   是主进程本地路径，模型只能去 ReadFile 那条路径然后连续失败（实测踩到）。
+  assert.ok(
+    p.text.includes("ReadToolResult"),
+    `必须告诉模型用 ReadToolResult 续读，实际尾部：${p.text.slice(-160)}`
+  );
+  assert.ok(
+    !/全文在 toolCache/.test(p.text),
+    "不能再用「全文在 toolCache/...」这种模型取不到的路径"
+  );
 });
 
 test("剪枝不切断半行", () => {
-  const text = Array.from({ length: 100 }, (_, i) => `line-${i}-${"x".repeat(60)}`).join("\n");
+  // 每行 ~60 字符 → 500 行 ≈ 30K，必然被剪；且行都很长（能检验"最后一行是否被切半"）。
+  const text = Array.from({ length: 500 }, (_, i) => `line-${i}-${"x".repeat(50)}`).join("\n");
+  assert.ok(text.length > PRUNE_LIMIT, `样本必须超过剪枝上限（${PRUNE_LIMIT}），实际 ${text.length}`);
   const p = pruneToolResult(text);
-  const headPart = p.text.split("…（已剪枝")[0];
-  // 头部最后一行要么完整，要么干脆没有这一行；不能出现「半个 line-NN」。
+  assert.equal(p.pruned, true, "样本必须真的被剪枝（否则这条用例测的是死分支）");
+  // 注意：剪枝文本 = 头部 + 统计行；统计行自身含「…（已剪枝」，所以按它切分头部。
+  const headPart = p.text.split("\n…（已剪枝")[0];
   const lastLine = headPart.split("\n").pop();
-  assert.ok(lastLine.length > 0, "头部不应为空");
-  assert.ok(/x{10,}$|line-\d+/.test(lastLine) || lastLine === "", `不应切断半行：${lastLine.slice(-20)}`);
+  assert.ok(lastLine.length > 0, `头部不应为空（切分失败？尾部：${p.text.slice(-80)}）`);
+  assert.ok(/x{10,}$|line-\d+/.test(lastLine), `不应切断半行：${lastLine.slice(-20)}`);
 });
 
 test("meta 统计写进剪枝摘要", () => {
-  const text = "x".repeat(1000);
+  const text = "x".repeat(PRUNE_LIMIT * 2);
   const p = pruneToolResult(text, { meta: { matches: 3, tool: "SearchApi" } });
+  assert.equal(p.pruned, true);
   assert.ok(p.text.includes("matches=3"), p.text.slice(-200));
   assert.ok(p.text.includes("tool=SearchApi"));
 });
@@ -192,8 +223,9 @@ test("toolCache：同一内容只落一份，可按 sha1 取回", async () => {
 });
 
 test("describeToolResult：一句话说清「读了多少、剪没剪」", () => {
-  const text = "x".repeat(5000);
+  const text = "x".repeat(PRUNE_LIMIT * 2);
   const p = pruneToolResult(text);
+  assert.equal(p.pruned, true);
   const line = describeToolResult("ReadFile", "world.js", p, false);
   assert.ok(line.includes("ReadFile"));
   assert.ok(line.includes("world.js"));

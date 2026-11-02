@@ -4788,6 +4788,46 @@ body .command-palette {
   min-width: 0;
 }
 
+/* ---------- 回答完整性提示条（工具预算用完 / max_tokens 截断） ----------
+   为什么复用 ai-note 的 warn 系配色、但另起一个 class：
+     · 这两种不是错误（回答产出了，只是不完整），不能画成红叉；
+     · 又必须比 ai-note 的一行字更醒目 —— 它是「为什么没交付」的**唯一解释**，
+       用户不看这句就只会以为 AI 挂了。
+   版式：标题一行（⚠ + 结论）+ 正文一段（用量/下一步），复用既有 --warn 令牌，
+   不新增颜色变量、不重排既有布局。 */
+.ai-panel .ai-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 12px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.ai-panel .ai-notice header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+}
+
+.ai-panel .ai-notice-title {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.ai-panel .ai-notice-detail {
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
 /* ==========================================================================
    错误气泡（结构化）：人话在上，技术详情折叠，request_id 可复制
    --------------------------------------------------------------------------

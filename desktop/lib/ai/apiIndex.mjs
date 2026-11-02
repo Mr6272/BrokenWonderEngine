@@ -52,6 +52,8 @@ const GROUP_LABELS = {
 export function createApiIndex(apiDocsPath) {
   let docs = null;
   let loadError = null;
+  /** 最近一次 search 的统计（render 用来提示「只取最相关 N 条」）。 */
+  let lastQueryMeta = null;
 
   async function ensure() {
     if (docs) return docs;
@@ -85,30 +87,76 @@ export function createApiIndex(apiDocsPath) {
       const list = await ensure();
       const words = String(query ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
       if (!words.length) return [];
+      /**
+       * 匹配语义：**按命中率排序的 OR，而不是 AND**。
+       *
+       * ⚠ 原来要求 `words.every(...)` —— 每个词都必须在同一条文档里出现。
+       * 但模型（尤其思考模型）很自然会写一整句检索意图：
+       *   SearchApi("physics collision car vehicle move") / "world findAll emit on"
+       * 这 5 个词没有任何一条文档能同时含，结果是 **0 条**。
+       * 实测用户那轮对话里 SearchApi 被调了 6 次、6 次全 0 —— 模型据此得出
+       * 「这些 API 都不存在」，然后开始编造 API 名，最后什么都没交付。
+       *
+       * 正确做法：命中越多词、命中在名字里、词越少见 → 排越前；
+       * 一个词都不命中的文档才排除。这样"长句子"退化成"取最相关的几条"，而不会空。
+       */
       const scored = [];
       for (const doc of list) {
+        const name = doc.name.toLowerCase();
         const hay = `${doc.name} ${doc.signature} ${doc.desc} ${GROUP_LABELS[doc.group] ?? ""} ${doc.group}`.toLowerCase();
-        if (!words.every((w) => hay.includes(w))) continue;
-        // 名字整词命中排前面，其次名字前缀，再其次说明命中。
-        let score = 0;
         const q = words.join(" ");
-        if (doc.name.toLowerCase() === q) score += 100;
-        if (doc.name.toLowerCase().includes(words[0])) score += 40;
-        if (words.every((w) => doc.name.toLowerCase().includes(w))) score += 20;
+
+        let hits = 0;
+        let nameHits = 0;
+        let score = 0;
+        for (const w of words) {
+          if (!hay.includes(w)) continue;
+          hits += 1;
+          if (name.includes(w)) {
+            nameHits += 1;
+            score += 30;
+          }
+          // 越少见的词越有区分度：命中在对应字段里的权重由字段位置粗略体现。
+          if (doc.desc.toLowerCase().includes(w)) score += 1;
+          if (`${doc.group} ${GROUP_LABELS[doc.group] ?? ""}`.toLowerCase().includes(w)) score += 4;
+        }
+        if (hits === 0) continue;
+
+        // 命中率是第一排序因子：5 个词命中 4 个，必须排在命中 1 个的前面。
+        const coverage = hits / words.length;
+        score += coverage * 80;
+        if (name === q) score += 100;
+        if (name.includes(q)) score += 40;
         if (doc.phase2) score -= 3; // Phase 2 占位 API 排后面（现在调用不会有行为）
-        scored.push({ doc, score });
+        scored.push({ doc, score, hits, coverage });
       }
-      scored.sort((a, b) => b.score - a.score || a.doc.name.localeCompare(b.doc.name));
-      return scored.slice(0, Math.max(0, Math.min(limit, 5))).map((x) => x.doc);
+      scored.sort(
+        (a, b) =>
+          b.hits - a.hits
+          || b.score - a.score
+          || a.doc.name.localeCompare(b.doc.name)
+      );
+      const top = scored.slice(0, Math.max(0, Math.min(limit, 5))).map((x) => x.doc);
+      lastQueryMeta = { query, words, total: list.length, matched: scored.length, hits: top.length };
+      return top;
     },
 
-    /** 把命中的几条渲染成给模型看的紧凑文本（省 token：不要 JSON 缩进）。 */
     async render(query, limit = 5) {
       const hits = await this.search(query, limit);
+      const total = (await ensure()).length;
       if (!hits.length) {
-        return `未找到匹配「${query}」的 API。可能名字不完整，换用更短的关键词（例如只要 "camera" 或 "world"）。`;
+        // 空结果也要给出**可执行的下一步**，而不是只报"没找到"。
+        // 模型收到"没找到"最容易的反应就是编造 API 名 —— 必须堵住这条路。
+        return `未找到匹配「${query}」的 API（库里共 ${total} 条）。`
+          + "可能关键词太具体或拼写不同。**请改用 1~2 个短词重试**（例如 \"physics\" / \"collision\" / \"world\"），"
+          + "仍然查不到就说明该 API 不存在，**不要凭空编造 API 名**。";
       }
-      const lines = [`SearchApi("${query}") → ${hits.length} 条（库内共 ${(await ensure()).length} 条���：`];
+      // 命中不完整的提示：长 query 常只命中一部分词，模型需要知道"这不是全部匹配"。
+      const meta = lastQueryMeta;
+      const partial = meta && meta.matched > hits.length
+        ? `，共 ${meta.matched} 条相关，取最相关 ${hits.length} 条`
+        : "";
+      const lines = [`SearchApi("${query}") → ${hits.length} 条（库内共 ${total} 条${partial}）：`];
       for (const h of hits) {
         lines.push(`· ${h.signature}`);
         lines.push(`  ${h.desc}${h.phase2 ? "（Phase 2 占位，当前运行时可能无行为）" : ""}`);

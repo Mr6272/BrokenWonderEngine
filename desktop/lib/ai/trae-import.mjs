@@ -307,7 +307,7 @@ export async function importTraeConfig(options = {}) {
  */
 export function toModelEntries(providers, opts = {}) {
   const prefix = opts.prefix ?? "trae";
-  const defaultMaxTokens = opts.defaultMaxTokens ?? 4096;
+  const defaultMaxTokens = opts.defaultMaxTokens ?? 16384;
   const entries = [];
   for (const p of providers) {
     for (const m of p.models) {

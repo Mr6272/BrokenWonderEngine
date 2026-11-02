@@ -74,3 +74,7 @@ web/.build/
 
 # 一次性脚本/探针的文本产物（不要入库）
 /.tmp_*.txt
+
+# AI 修复轮的临时验证目录（harness 的基线快照与证据日志，不入库）
+/.tmp_ai/
+/.tmp_ai_lead_smoke.mjs

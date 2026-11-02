@@ -367,7 +367,7 @@ app.whenReady().then(async () => {
     // 缺了不会报错、也不影响界面，直到用户在真实对话里触发了那个工具才炸 ——
     // 而那时错误发生在对话中途，表现为「AI 中断自己」，极难定位。
     //（历史缺陷：sceneDigest 没接上，SceneDigest 工具每次必抛错）
-    checkToolDependencies({ apiIndex, toolCache });
+    checkToolDependencies({ apiIndex, toolCache, bridge: ai });
 
     registerIpc();
     if (PROBE_ONLY_MODE) {
@@ -673,19 +673,24 @@ async function switchToConversation(id) {
  * 所以这里只检查"构造时必需"的依赖，并提示 sceneDigest 是按请求传递的 ——
  * 避免后人又去启动时闭包一个函数（那正是历史缺陷的形态）。
  */
-function checkToolDependencies({ apiIndex, toolCache } = {}) {
+function checkToolDependencies({ apiIndex, toolCache, bridge } = {}) {
   const warnings = [];
   // apiIndex：构造时必需（SearchApi 工具依赖它）
   if (!apiIndex || typeof apiIndex.render !== "function") {
     warnings.push("apiIndex 缺失或不可用 → SearchApi 工具会失败");
   }
-  // toolCache：非必需（只影响剪枝缓存），但缺了会每次都重复读
-  if (!toolCache || typeof toolCache.put !== "function") {
-    warnings.push("toolCache 缺失 → 工具结果不会被缓存（不影响正确性，只影响性能）");
+  // ⚠ toolCache 不能再说成「只影响性能」：剪枝提示承诺了「可用 ReadToolResult 续读」，
+  // 这条承诺必须真的有通路（内存表或磁盘缓存），否则被剪掉的原文就是**信息黑洞**。
+  // 本机实测踩过：createToolRunner 从未收到 toolCache，而提示照写 → 模型照做 → 拿到「没配置」→
+  // 连续重试 → 轮次耗尽 → 什么都没交付。这类「提示承诺 vs 实际接线」的断裂只能靠集中自检查证。
+  if (bridge && typeof bridge.toolWiringReport === "function") {
+    warnings.push(...bridge.toolWiringReport());
+  } else if (!toolCache || typeof toolCache.put !== "function") {
+    warnings.push("toolCache 缺失，且 bridge 未提供 toolWiringReport → 无法确认剪枝续读是否可达");
   }
   if (warnings.length === 0) {
     log(
-      "工具依赖自检通过（SceneDigest 走 request.context.sceneDigest 按请求注入，非启动闭包）",
+      "工具依赖自检通过（SceneDigest 走 request.context.sceneDigest 按请求注入；剪枝续读通路可达）",
       "bwe:ai"
     );
   } else {

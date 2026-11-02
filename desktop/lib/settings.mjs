@@ -42,7 +42,12 @@ export function defaultSettings() {
       // 可增删的模型清单。每条可带自己的 apiKey（内存）/ encryptedApiKey（磁盘）。
       models: [],
       contextWindow: 128000,
-      maxTokens: 4096
+      /**
+       * 输出预算上限。取 16384 而不是原来的 4096：
+       * 思考模型的 reasoning_content 与正文**共享**这个预算，4096 常在"想完"后就所剩无几，
+       * 正文被截断（用户看到的「答半句就没了」）。见 provider.mjs DEFAULT_MAX_TOKENS 的注释。
+       */
+      maxTokens: 16384
     },
     editor: { theme: "cream", uiScale: 1, autoSave: true },
     // 记录 key 是否明文存的（见文件头注释）

@@ -14,7 +14,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, relative, resolve, sep } from "node:path";
 
-/** OpenAI 兼容的工具定义（只有这三个，顺序固定 → 前缀稳定）。 */
+/** OpenAI 兼容的工具定义（顺序固定 → 前缀稳定；不要为了美观重排）。 */
 export function toolDefinitions() {
   return [
     {
@@ -23,15 +23,35 @@ export function toolDefinitions() {
         name: "ReadFile",
         description:
           "读取工程或仓库里的一个文本文件（只读）。用于查看脚本完整源码、配置、文档。"
-          + "不要用它读二进制（图片/字体）。一次最多返回 200 行，可用 from/lines 翻页。",
+          + "不要用它读二进制（图片/字体）。一次最多返回 400 行（默认 400），用 from/lines 翻页。"
+          + "⚠ 大文件请翻页读：一次读 400 行比反复重读整个文件更省 token，也更可能读到要改的那段。",
         parameters: {
           type: "object",
           properties: {
             path: { type: "string", description: "仓库或工程内的相对路径，例如 web/examples/city/scripts/player.js" },
             from: { type: "integer", description: "起始行（1 开始），默认 1" },
-            lines: { type: "integer", description: "读取行数，默认 200，上限 400" }
+            lines: { type: "integer", description: "读取行数，默认 400，上限 400" }
           },
           required: ["path"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "ReadToolResult",
+        description:
+          "读取一次**已剪枝**工具结果里被省略的原文（按 sha1）。"
+          + "某个工具结果末尾写着「已剪枝…可用 ReadToolResult 续读」时用本工具取回剩下部分；"
+          + "不要用 ReadFile 去读 toolCache 路径，那条路走不通。",
+        parameters: {
+          type: "object",
+          properties: {
+            sha1: { type: "string", description: "结果末尾给出的 sha1（40 位十六进制，也接受前 8 位）" },
+            from: { type: "integer", description: "起始行（1 开始），默认 1" },
+            lines: { type: "integer", description: "读取行数，默认 400，上限 400" }
+          },
+          required: ["sha1"]
         }
       }
     },
@@ -56,12 +76,14 @@ export function toolDefinitions() {
       function: {
         name: "SearchApi",
         description:
-          "在 BWE 脚本 API 文档（约 271 条）里按关键词搜索，返回最多 5 条 {签名, 说明}。"
-          + "不确定某个 API 是否存在、名字怎么拼、参数是什么时，先查再写代码。",
+          "在 BWE 脚本 API 文档（约 359 条）里搜索，返回最多 5 条 {签名, 说明}。"
+          + "不确定某个 API 是否存在、名字怎么拼、参数是什么时，先查再写代码。"
+          + "⚠ query 里**每个词都必须命中**（AND 语义），所以别把整句话塞进去："
+          + "用 1~2 个短词（\"physics\" / \"collision\" / \"world findAll\"），查不到就换更短的词再查一次。",
         parameters: {
           type: "object",
           properties: {
-            query: { type: "string", description: "关键词，可用空格分隔多个词，如 \"camera shake\" 或 \"world find\"" },
+            query: { type: "string", description: "关键词，1~2 个短词最佳，如 \"camera shake\" 或 \"world findAll\"" },
             limit: { type: "integer", description: "最多返回几条，默认 5，上限 5" }
           },
           required: ["query"]
@@ -72,10 +94,10 @@ export function toolDefinitions() {
 }
 
 /** 工具名白名单：模型给出未定义的名字时直接拒掉，不要瞎执行。 */
-export const TOOL_NAMES = ["ReadFile", "SceneDigest", "SearchApi"];
+export const TOOL_NAMES = ["ReadFile", "ReadToolResult", "SceneDigest", "SearchApi"];
 
 const MAX_READ_LINES = 400;
-const DEFAULT_READ_LINES = 200;
+const DEFAULT_READ_LINES = 400;
 /** 不抓取的目录：依赖与构建产物没必要也不安全。 */
 const DENY_DIRS = ["node_modules", ".git", "desktop/vendor", "desktop/dist", ".tmp_desk"];
 
@@ -87,6 +109,12 @@ const DENY_DIRS = ["node_modules", ".git", "desktop/vendor", "desktop/dist", ".t
  * @param {string} [opts.workspaceRoot] 当前工作区（.bwproj 所在目录或工程文件路径）
  * @param {(options?:object)=>Promise<string>} [opts.sceneDigest]  由渲染侧提供的工程摘要生成器（主进程自己没有工程）
  * @param {{search:(q:string,n:number)=>Promise<any[]>, render:(q:string,n:number)=>Promise<string>}} opts.apiIndex
+ * @param {{get:(s:string)=>Promise<string|null>, list?:()=>Promise<string[]>}} [opts.toolCache]
+ *        剪枝原文的磁盘缓存（可选）。
+ * @param {(sha:string)=>Promise<string|null>} [opts.resolvePruned]
+ *        剪枝原文的**内存**来源（优先于 toolCache；保证 ReadToolResult 在不配缓存时也可用）。
+ * @param {(sha:string, raw:string)=>void} [opts.onPruned]
+ *        每次剪枝时把原文登记进内存（bridge 注入，用于实现 resolvePruned）。
  */
 export function createToolRunner(opts) {
   /**
@@ -165,6 +193,59 @@ export function createToolRunner(opts) {
     return { text, meta: { query, limit } };
   }
 
+  /**
+   * 续读一次被剪枝的工具结果。
+   *
+   * 为什么必须有：剪枝把大结果压成「头部 + 统计」，但模型**没有别的办法**拿到被省略的部分 ——
+   * 统计行原来写的是主进程本地路径，模型只能去 `ReadFile` 那条路径然后失败。
+   * 实测后果：连续两次失败后被止损逻辑判成「工具不可用」，整轮对话就此结束，一句正文都没有。
+   *
+   * 数据源是 toolCache（内容寻址），所以不需要保存「这次请求的上下文」——sha1 就是句柄。
+   */
+  async function readToolResultTool(args) {
+    const sha = String(args?.sha1 ?? "").trim().toLowerCase();
+    if (!/^[0-9a-f]{8,40}$/.test(sha)) {
+      throw new Error("ReadToolResult 需要 sha1（结果末尾给出的 40 位十六进制，可只给前 8 位）");
+    }
+    // ---- 取原文：内存优先 → toolCache ----
+    //
+    // ⚠ 两条通路都要支持**前缀**（工具定义承诺「也接受前 8 位」，剪枝摘要里也只显示 8 位）。
+    //   实测踩过两次：① bridge 从没把 toolCache 传给工具 → 工具答「没配置」；
+    //   ② 内存通路修好后只支持完整 40 位 → 给 8 位就查不到。两次都是"承诺了某种能力、
+    //   某条配置下不支持"，而模型正是照着剪枝摘要的 8 位 sha 来调用的。
+    let raw = null;
+    if (typeof opts.resolvePruned === "function") {
+      raw = await Promise.resolve(opts.resolvePruned(sha)).catch(() => null);
+    }
+    if (raw === null || raw === undefined) {
+      // toolCache 分支自带前缀补全（list + startsWith）；内存通路的补全由注入方实现。
+      if (opts.toolCache && typeof opts.toolCache.get === "function") {
+        raw = await opts.toolCache.get(sha);
+        if ((raw === null || raw === undefined) && sha.length < 40 && typeof opts.toolCache.list === "function") {
+          const matches = (await opts.toolCache.list()).filter((n) => n.startsWith(sha));
+          if (matches.length === 1) raw = await opts.toolCache.get(matches[0]);
+          else if (matches.length > 1) throw new Error(`sha1 前缀「${sha}」命中 ${matches.length} 条，请给完整 sha1`);
+        }
+      }
+    }
+    if (raw === null || raw === undefined) {
+      throw new Error(
+        `ReadToolResult 找不到 sha1「${sha}」对应的结果（缓存可能已过期）。`
+        + "改用原文件 ReadFile(from/lines) 翻页读取，不要反复重试本工具。"
+      );
+    }
+    const lines = String(raw).split(/\r?\n/);
+    const limit = Math.min(MAX_READ_LINES, Math.max(1, Number(args?.lines) || DEFAULT_READ_LINES));
+    const from = Math.max(1, Number(args?.from) || 1);
+    const slice = lines.slice(from - 1, from - 1 + limit).join("\n");
+    const end = Math.min(lines.length, from - 1 + limit);
+    const footer = end >= lines.length ? "" : `\n…（还有 ${lines.length - end} 行，用 from=${from + limit} 继续）`;
+    return {
+      text: `ReadToolResult(${sha.slice(0, 8)}…) 第 ${from}-${end} 行 / 共 ${lines.length} 行\n${slice}${footer}`,
+      meta: { sha1: sha, from, lines: limit, totalLines: lines.length }
+    };
+  }
+
   return {
     definitions: toolDefinitions(),
     /**
@@ -180,6 +261,7 @@ export function createToolRunner(opts) {
       const args = call?.arguments ?? {};
       try {
         if (name === "ReadFile") return await readFileTool(args);
+        if (name === "ReadToolResult") return await readToolResultTool(args);
         if (name === "SceneDigest") return await sceneDigestTool(args);
         if (name === "SearchApi") return await searchApiTool(args);
         throw new Error(`未知工具「${name}」（可用：${TOOL_NAMES.join(" / ")}）`);
@@ -191,6 +273,7 @@ export function createToolRunner(opts) {
     describeArg(call) {
       const args = call?.arguments ?? {};
       if (call?.name === "ReadFile") return String(args.path ?? "");
+      if (call?.name === "ReadToolResult") return `sha1=${String(args.sha1 ?? "").slice(0, 8)}… from=${args.from ?? 1}`;
       if (call?.name === "SearchApi") return String(args.query ?? "");
       if (call?.name === "SceneDigest") return String(args.scene ?? "全部场景");
       return "";

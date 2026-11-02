@@ -123,7 +123,21 @@ const SAMPLING_FALLBACK = { temperature: 0.3, topP: 0.95 };
 
 /** 模型条目缺省值（OpenAI 兼容服务通常不告诉窗口大小，给保守默认）。 */
 export const DEFAULT_CONTEXT_WINDOW = 128000;
-export const DEFAULT_MAX_TOKENS = 4096;
+/**
+ * 默认**输出**预算。
+ *
+ * ⚠ 这个值原来是 4096 —— 而思考模型（Kimi K3 / K2.x-thinking、DeepSeek reasoner 等）
+ * 的 `reasoning_content` **与正文共享同一个 max_tokens**。实测 4096 常在"想完"之后就
+ * 所剩无几：正文写到一半被硬切（`finish_reason: "length"`），用户看到的是
+ * 「AI 答了半句就没了、什么都没交付」。
+ *
+ * Kimi 官方文档明确要求：使用思考模型时把 `max_tokens` 设到 **≥16000**，
+ * 否则 reasoning + content 会被截断。这里取 16384 作为默认，仍可被单模型条目覆盖。
+ * 成本上这只是一个**上限**（不是预扣），正常回答不会因为调高上限而变贵。
+ */
+export const DEFAULT_MAX_TOKENS = 16384;
+/** 思考模型的推荐下限（低于它会高概率截断，UI 用来提示用户调大）。 */
+export const THINKING_MIN_MAX_TOKENS = 16000;
 
 /**
  * 归一化一条模型条目：缺字段补默认、类型统一。

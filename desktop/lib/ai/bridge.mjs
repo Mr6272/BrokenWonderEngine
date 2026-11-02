@@ -22,8 +22,36 @@ import { emptyUsage, estimateSavings, mergeUsage } from "./usage.mjs";
 import { makeMessage, messageText } from "./session.mjs";
 import { createToolRunner } from "./tools.mjs";
 
-/** 工具轮数上限：防止模型自问自答把一轮对话刷成十几次调用。 */
-const MAX_TOOL_ROUNDS = 3;
+/**
+ * **工具轮次预算**（这是用户报「AI 调用工具居然有次数限制」的那条限制）。
+ *
+ * 历史取值 3 轮 —— 真实任务（读 1408 行脚本、查 API、改写、复查）根本不够：
+ * 模型在第 4 轮就被掐断，一句正文都没产出，用户看到的就是「跑两下就寄了，什么都没交付」。
+ *
+ * 现在的语义：
+ *   · MAX_TOOL_ROUNDS = 模型往返次数上限（一轮 = 一次请求 + 可能的一批工具调用）
+ *   · MAX_TOOL_CALLS  = 工具**执行次数**上限（一轮可以有多个调用，这才是真正的成本）
+ * 两个独立上限：只限轮数会被"一轮调 8 个工具"绕过；只限调用数会让"每轮 1 个工具"跑很久。
+ *
+ * 预算耗尽**不是失败**：会进入兜底作答（不带 tools 再问一次），并把
+ * `done.extra.toolBudget.budgetExhausted = true` 告诉界面 —— 界面据此提示
+ * 「本轮工具预算用完，已基于已有信息作答」，用户才知道发生了什么。
+ * 静默截止是最糟的做法（用户只看到答案很短，不知道为什么）。
+ */
+const MAX_TOOL_ROUNDS = 12;
+const MAX_TOOL_CALLS = 24;
+
+/**
+ * `finish_reason === "length"` 时自动续写的次数上限。
+ *
+ * 为什么必须有续写：Kimi/DeepSeek 思考模型的 `reasoning_content` **也计入 max_tokens**，
+ * 4096 的预算常常在"想完"之后就所剩无几，正文写到一半被硬切
+ * （用户实测的 `答到一半就 "..." 结束`）。以前我们**完全忽略 finish_reason**，
+ * 半句话就当成正常完成落盘 —— 那是"看起来没输出"，其实是"输出被截断后没人管"。
+ *
+ * 续写不是无限重试：最多 AUTO_CONTINUE_LIMIT 次，之后如实标记 truncated 让界面提示。
+ */
+const AUTO_CONTINUE_LIMIT = 2;
 
 /**
  * 把模型服务的原始错误报文映射成用户能看懂的话。
@@ -132,11 +160,60 @@ export function createAiBridge(opts) {
    */
   let session = opts.session;
   const log = opts.log ?? (() => {});
+  /**
+   * 被剪枝结果的**内存副本**（sha1 → 原文）。
+   *
+   * 为什么光有 toolCache 不够：`ReadToolResult`（续读被剪枝的尾部）必须**在任何配置下**都能用。
+   * 实测缺陷（harness 抓到的，两次）：
+   *   ① `createToolRunner` 从来没有收到 `opts.toolCache` → 工具答「没配置 toolCache」，
+   *      而剪枝提示照写「用 ReadToolResult 续读」→ 被省掉的原文成了信息黑洞；
+   *   ② 内存通路修好后，**只支持完整 40 位 sha1** —— 而工具定义明确写了「也接受前 8 位」，
+   *      剪枝摘要里也只显示 8 位 → 模型给 8 位就查不到。
+   * 两次都是同一形态：「承诺了某种能力/参数形态，但某条配置下不支持」。
+   * 所以这里把**前缀补全**做进内存通路本身，而不是只挂在上层 toolCache 分支上。
+   *
+   * 双保险：内存 Map（同进程立即可用，不依赖磁盘/目录权限）+ toolCache（跨请求/跨会话）。
+   * 上限 32 条、按插入顺序淘汰最旧的：一次对话里真正需要回看的结果不会更多。
+   */
+  const prunedStore = new Map();
+  const PRUNED_STORE_MAX = 32;
+  const rememberPruned = (sha, raw) => {
+    if (!sha) return;
+    if (prunedStore.has(sha)) prunedStore.delete(sha);
+    prunedStore.set(sha, raw);
+    while (prunedStore.size > PRUNED_STORE_MAX) {
+      const oldest = prunedStore.keys().next().value;
+      prunedStore.delete(oldest);
+    }
+  };
+  /**
+   * 按 sha（完整或前缀）从内存取原文。
+   *
+   * 前缀语义必须与 toolCache 分支等价：唯一命中才补全，多命中要报错让人给完整 sha1，
+   * 零命中返回 null（交给下一层）。**不能**"取不到就当没有"——那会让模型以为原文丢了。
+   */
+  const resolvePrunedFromMemory = (sha) => {
+    const key = String(sha ?? "").toLowerCase();
+    if (!key) return null;
+    const exact = prunedStore.get(key);
+    if (exact !== undefined) return exact;
+    if (key.length >= 40) return null;
+    const matches = [...prunedStore.keys()].filter((k) => k.startsWith(key));
+    if (matches.length === 1) return prunedStore.get(matches[0]);
+    return null;
+  };
   const toolRunner = createToolRunner({
     repoRoot: opts.repoRoot,
     workspaceRoot: opts.workspaceRoot,
     sceneDigest: opts.sceneDigest,
-    apiIndex: opts.apiIndex
+    apiIndex: opts.apiIndex,
+    // ⚠ 必须传：ReadToolResult 靠它跨请求续读（漏传就是上面说的「提示指向不存在的能力」）。
+    toolCache: opts.toolCache,
+    // 内存优先（不依赖配置/磁盘），失败再落到 toolCache。
+    // ⚠ 传的是**带前缀补全**的实现：工具定义承诺「也接受前 8 位」，内存这条通路必须同样支持，
+    //   否则「没配 toolCache」这个配置下，模型给 8 位就查不到（harness S7bc 实测）。
+    resolvePruned: async (sha) => resolvePrunedFromMemory(sha),
+    onPruned: rememberPruned
   });
   const running = new Map(); // requestId → { abort: AbortController, cancelled:boolean }
   let lastUsage = emptyUsage();
@@ -440,21 +517,33 @@ export function createAiBridge(opts) {
   }
 
   /**
-   * **轮次耗尽兜底**：工具轮用完、模型还没产出正文时，逼它基于已有信息作答。
+   * **兜底作答**：工具预算用完 / 模型没产出正文时，逼它基于已有信息给出答复。
    *
-   * 为什么必须有：模型可能连续 N 轮都在调工具（尤其是工具一直失败时）。
-   * 如果循环耗尽后直接 done，finalText 是空字符串 ——
-   * 用户看到的是「AI 说半句就消失」，这是本次线上问题的直接成因。
+   * 为什么必须有：模型可能连续多轮都在调工具（尤其是工具一直失败时）。
+   * 如果循环结束后直接 done 而 finalText 为空 ——
+   * 用户看到的是「AI 说半句就消失」，这次用户报的「跑两下就寄、什么都没交付」正是这个形态。
    *
    * 做法：**不带 tools** 再请求一次（模型没有工具可调，只能输出文字），
    * 并明确要求它基于已有结果作答；若确实缺信息就说明缺什么。
+   *
+   * @param {string} [partialText]  本轮已产出的正文（可能只是开场白）。
+   *   有它时要求模型**接着写**而不是从零重答 —— 否则用户会看到两段重复内容。
+   * @param {object} [budget]       预算账单，写进 nudge 让模型知道"为什么不能再调工具"
    */
-  async function finalAnswerFallback({ resolved, settings, messages, requestId, controller, ai }) {
+  async function finalAnswerFallback({ resolved, settings, messages, requestId, controller, ai, partialText = "", budget = null }) {
+    const budgetLine = budget
+      ? `（本轮已用 ${budget.roundsUsed}/${budget.roundsMax} 轮对话、${budget.callsUsed}/${budget.callsMax} 次工具调用，预算已用完）`
+      : "";
     const nudge = {
       role: "user",
-      content: "工具调用次数已到上限，**请不要再请求工具**。"
+      content: `工具调用预算已用完${budgetLine}，**请不要再请求工具**（这次请求也不给你工具）。`
+        + (partialText.trim()
+          ? "你刚才已经开始作答但没写完。请**从这里接着写完**，不要重复已经写过的内容：\n"
+            + `---\n${partialText.trim()}\n---\n`
+          : "")
         + "请基于上面已经拿到的信息直接给出结论或下一步具体动作；"
         + "如果信息确实不足，请明确说明缺什么、以及用户可以怎么做。"
+        + "注意：即使信息不全，也要给出**能落地的最小建议**，不要只说「信息不足」就停下。"
     };
     const outMessages = [...messages, nudge];
     let text = "";
@@ -493,10 +582,11 @@ export function createAiBridge(opts) {
   /**
    * 执行工具调用：剪枝 + 缓存 + 回填。
    *
-   * @param {(name:string)=>number} failureStreakOf  取某工具当前连续失败次数
-   * @param {(name:string,success:boolean)=>void} noteToolResult 记录本次成败（成功清零）
+   * @param {(key:string)=>number} failureStreakOf  取「工具名+参数」指纹当前的连续失败次数
+   * @param {(key:string,success:boolean)=>void} noteToolResult 记录本次成败（成功清零）
+   * @param {(call:object)=>string} failureKey       由调用方提供指纹算法（见 run() 里的 argFingerprint）
    */
-  async function runTools(requestId, calls, failureStreakOf, noteToolResult) {
+  async function runTools(requestId, calls, failureStreakOf, noteToolResult, failureKey) {
     const results = [];
 
     /**
@@ -513,14 +603,18 @@ export function createAiBridge(opts) {
       const arg = toolRunner.describeArg(call);
       const callId = callIdOf(call, index);
       index += 1;
+      // 失败计数的键：**工具名 + 参数**（见 run() 里 argFingerprint 的注释）。
+      const fp = failureKey ? failureKey(call) : call.name;
 
-      // 若该工具已连续失败到上限，**不再真的执行**：直接把「不可用」告知模型。
-      // 为什么由我们判断：模型不会自己意识到"这个工具坏了"，它会一直重试同一条路径，
+      // 若**同一个**调用已连续失败到上限，不再真的执行：直接把「不可用」告知模型。
+      // 为什么由我们判断：模型不会自己意识到"这个调用坏了"，它会一直重试同一条路径，
       // 最终耗尽轮次、一句正文都没产出（用户看到的就是"AI 说半句就消失"）。
-      const streak = failureStreakOf(call.name);
+      // ⚠ 只对「同 name 同参数」止损 —— 换个参数就是另一条路径，必须允许它再试。
+      const streak = failureStreakOf(fp);
       if (streak >= TOOL_FAILURE_LIMIT) {
-        const stopText = `工具 ${call.name} 已连续失败 ${streak} 次，判定为当前不可用。`
-          + "请**不要再调用它**，基于已有信息直接作答；如果确实缺少信息，请说明缺什么。";
+        const stopText = `你刚才用**同样的参数**调用 ${call.name}(${arg}) 已经连续失败 ${streak} 次，`
+          + "这条调用路径已判定为**当前不可用**，**不要再用同样的参数重试**。"
+          + "请换一个参数/换一个工具，或基于已有信息直接作答；如果确实缺少信息，请说明缺什么、用户可以怎么做。";
         emit({ type: "tool", requestId, callId, name: call.name, phase: "end", detail: stopText, ok: false, error: stopText, ms: 0 });
         results.push({
           call,
@@ -536,10 +630,19 @@ export function createAiBridge(opts) {
       const out = await toolRunner.run(call);
       const ms = Date.now() - t0;
       const ok = !out?.error;
-      noteToolResult(call.name, ok);
+      noteToolResult(fp, ok);
 
       const raw = String(out.text ?? out.error ?? "");
       const prune = pruneToolResult(raw, { meta: out.meta ?? {} });
+      // ⚠ 剪枝时**必须**把原文留在内存里：剪枝提示承诺了「可用 ReadToolResult 续读」，
+      //   而这个承诺只有在原文还能被取到时才成立（memory 优先，磁盘缓存是可选的第二道）。
+      if (prune.pruned) {
+        try {
+          rememberPruned(prune.fullSha1, raw);
+        } catch (e) {
+          log(`剪枝原文登记失败（续读将退回 toolCache）：${e?.message || e}`);
+        }
+      }
       if (opts.toolCache) {
         try {
           await opts.toolCache.put(raw, { tool: call.name, arg, at: new Date().toISOString() });
@@ -641,7 +744,19 @@ export function createAiBridge(opts) {
 
     let finalText = "";
     let usage = emptyUsage("no-usage");
+    /** 已发起的请求轮数（工具轮 + 续写轮都算，防止任何一种变成死循环）。 */
     let rounds = 0;
+    /** 已**实际执行**的工具调用次数（真正花钱/耗时的量，轮数只是外层的次数）。 */
+    let toolCallsUsed = 0;
+    /** 预算耗尽（轮数或调用数任一触顶）。这不是失败，只是要如实告诉界面。 */
+    let budgetExhausted = false;
+    /** 输出因 max_tokens 被截断且自动续写次数用尽（半句话的直接成因）。 */
+    let truncated = false;
+    /** 本轮（最后一次请求）产出的正文/推理 —— 续写与回填都要按"轮"来分。 */
+    let turnText = "";
+    let turnReasoning = "";
+    let continueUsed = 0;
+    const runStartedAt = Date.now();
     const toolTrace = [];
 
     // ---- 工具数据源注入（每次请求）----
@@ -655,11 +770,29 @@ export function createAiBridge(opts) {
     toolRunner.setSceneDigest?.(request?.context?.sceneDigest ?? null);
 
     /**
-     * 同一工具**连续**失败次数（成功一次即清零）。
-     * 达到 TOOL_FAILURE_LIMIT 后停止重试，并在工具结果里明确告知模型「该工具不可用」。
-     * 为什么必须由我们判断：模型不会自己意识到"这个工具坏了"，它会一直重试同一条路径。
+     * 同一工具**同一参数**的连续失败次数（成功一次即清零）。
+     *
+     * ⚠ 键必须是「工具名 + 参数指纹」，不能只用工具名。
+     * 历史缺陷：按 name 计数 —— 模型先用一个错路径读 A 文件失败、再换一个路径读 B 文件也失败，
+     * 就会被判成「ReadFile 已连续失败 2 次，判定为当前不可用」，把**本来能成功**的工具禁掉。
+     * 用户实测里就是这样：ReadFile 先失败两次（路径猜错），然后整个 ReadFile 被禁，
+     * 模型再也没法读任何文件 → 只剩 SearchApi → 也搜不到 → 轮次耗尽 → 什么都没交付。
+     *
+     * 反面同样要防：**同一个**坏调用被模型无限重试（同 name 同参数），这才是该止损的形态。
      */
     const toolFailureStreak = new Map();
+    /** 参数指纹：稳定序列化（键序无关），用于把"同一次坏调用"与"换了个参数的调用"分开。 */
+    const argFingerprint = (name, args) => {
+      const stable = (v) => {
+        if (v === null || typeof v !== "object") return JSON.stringify(v);
+        if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
+        return `{${Object.keys(v)
+          .sort()
+          .map((k) => `${JSON.stringify(k)}:${stable(v[k])}`)
+          .join(",")}}`;
+      };
+      return `${name}|${stable(args ?? {})}`;
+    };
 
     // ---- 3.5 「思考中」状态机 ----
     //
@@ -731,14 +864,37 @@ export function createAiBridge(opts) {
       }
     };
 
-    // ---- 4. 轮次循环（工具调用）----
-    while (rounds <= MAX_TOOL_ROUNDS) {
-      rounds += 1;
-      if (controller.signal.aborted) {
-        stopSlowTimer();
-        emit({ type: "error", requestId, message: "已取消", recoverable: true });
-        return;
+    // ---- 4. 主循环（工具调用 + max_tokens 截断续写）----
+    //
+    // 这个循环要同时处理两件以前被忽略的事：
+    //
+    // ① **工具预算**（用户报「调用工具居然有次数限制」）。
+    //    旧上限是 3 轮：读一个大脚本 + 查 API + 改写，第 4 轮就被掐断，一句正文都没有。
+    //    现在 MAX_TOOL_ROUNDS=12 / MAX_TOOL_CALLS=24，且触顶时会进入兜底作答并
+    //    把 budgetExhausted 报给界面（**静默截止是最糟的**）。
+    //
+    // ② **输出被 max_tokens 截断**（用户报「答半句就寄」）。
+    //    思考模型的 reasoning_content 与 content **共享** max_tokens：4096 预算常在
+    //    "想完"之后所剩无几，正文写到一半被截断，`finish_reason === "length"`。
+    //    旧代码完全不看 finish_reason → 半句话当正常完成落盘。
+    //    现在：截断时用「继续」续写（最多 AUTO_CONTINUE_LIMIT 次），仍截断则如实标记 truncated。
+    while (!controller.signal.aborted) {
+      // 预算检查放在**发起请求之前**：模型这一轮还没花钱，先判定要不要继续。
+      if (rounds >= MAX_TOOL_ROUNDS || toolCallsUsed >= MAX_TOOL_CALLS) {
+        budgetExhausted = true;
+        log(
+          `工具预算用完（轮 ${rounds}/${MAX_TOOL_ROUNDS}、调用 ${toolCallsUsed}/${MAX_TOOL_CALLS}），`
+          + `停止工具循环${finalText.trim() ? "并保留已产出的正文" : "并进入兜底作答"}`
+        );
+        break;
       }
+      rounds += 1;
+      // 每轮重置"这一轮产出了什么"——正文/推理都按轮记，续写与回填才不会串。
+      turnText = "";
+      turnReasoning = "";
+      thinkingPhase = "connecting";
+      reasoningChars = 0;
+      sawAnyOutput = false;
 
       let result;
       if (!resolved.ready || resolved.provider === "mock") {
@@ -760,7 +916,7 @@ export function createAiBridge(opts) {
         try {
           for await (const ev of mock.iterate()) {
             if (ev.type === "delta") {
-              finalText += ev.text;
+              turnText += ev.text;
               emit({ type: "delta", requestId, text: ev.text });
               continue;
             }
@@ -769,9 +925,11 @@ export function createAiBridge(opts) {
         } finally {
           controller.signal.removeEventListener("abort", onCancel);
         }
+        // mock 的 text 是全文（上面已逐 delta 累积），以 turnText 为准，避免重复。
+        if (result) result.text = turnText;
       } else {
         // 发起网络之前先告诉 UI「已在连接」—— 这正是首字延迟期间 UI 需要的信号。
-        if (thinkingPhase === "connecting") emitThinking("connecting");
+        emitThinking("connecting");
         startSlowTimer();
         try {
           result = await streamChat({
@@ -793,12 +951,13 @@ export function createAiBridge(opts) {
                   thinkingPhase = "answering";
                   emitThinking("answering");
                 }
-                finalText += ev.text;
+                turnText += ev.text;
                 emit({ type: "delta", requestId, text: ev.text });
               } else if (ev.type === "reasoning") {
                 markOutputStarted();
                 reasoningChars += String(ev.text ?? "").length;
                 thinkingPhase = "reasoning";
+                turnReasoning += String(ev.text ?? "");
                 // 只带**增量**文本与累计字符数；全量 reasoning 不进事件流（见上面注释 2）。
                 emitThinking("reasoning", { chars: reasoningChars, delta: String(ev.text ?? "") });
               } else if (ev.type === "usage") {
@@ -809,6 +968,11 @@ export function createAiBridge(opts) {
         } finally {
           // 兜底清理：即使是 streamChat 抛异常/取消，也不能让 slow 定时器在进程里残留。
           stopSlowTimer();
+        }
+        if (result) {
+          // streamChat 自己也累积了 text/reasoning；以它为准（它包含精确的 finishReason）。
+          turnText = String(result.text ?? turnText);
+          turnReasoning = String(result.reasoning ?? turnReasoning);
         }
       }
 
@@ -829,19 +993,63 @@ export function createAiBridge(opts) {
         break;
       }
 
-      // ---- 工具调用 ----
+      // ---- 4.1 max_tokens 截断 → 续写 ----
+      //
+      // 判据只用 finish_reason === "length"（**不要用"文本以省略号结尾"猜**：
+      // 模型正常收尾也常用 "…"，按文本猜会误续写并污染答案）。
+      if (result?.finishReason === "length") {
+        if (continueUsed < AUTO_CONTINUE_LIMIT && !controller.signal.aborted) {
+          continueUsed += 1;
+          // 续写要求模型**接着上文继续**，而不是重新回答。
+          // ⚠ 不能把 finish_reason 的残缺半句写进 assistant 历史再让它"续"——
+          //   那句话在协议上是完整消息，模型会当作已说完。用一条 user 指令驱使它。
+          //
+          // ⚠ 这条 assistant 必须**带上 reasoning_content**：Kimi K3 / k2.7-code 的
+          //   Preserved Thinking 永远是开的，历史 assistant 轮缺 reasoning_content 直接 400。
+          const contTurn = { role: "assistant", content: turnText || null };
+          if (turnReasoning) contTurn.reasoning_content = turnReasoning;
+          messages.push(contTurn);
+          messages.push({
+            role: "user",
+            content: "（上一条回答因输出长度上限被截断，请**只从中断处继续写完**，不要重复已写内容，不要重新开始。）"
+          });
+          finalText += turnText;
+          log(`输出被 max_tokens 截断（已 ${continueUsed}/${AUTO_CONTINUE_LIMIT} 次续写）`);
+          continue;
+        }
+        // 续写次数用尽：如实标记，界面会提示"回答被截断"。
+        truncated = true;
+        finalText += turnText;
+        break;
+      }
+
+      finalText += turnText;
+
+      // ---- 4.2 工具调用 ----
       if (result.toolCalls?.length) {
         emit({ type: "usage", requestId, usage });
+        // 调用数预检：这一轮要执行的数量若会超预算，只执行到上限为止，
+        // 剩下的以"未执行"告知模型 —— 比让它们全部执行再截断更诚实（且省 token）。
+        const remaining = Math.max(0, MAX_TOOL_CALLS - toolCallsUsed);
+        const todo = result.toolCalls.slice(0, remaining);
+        const skipped = result.toolCalls.slice(remaining);
+        toolCallsUsed += todo.length;
         const executed = await runTools(
           requestId,
-          result.toolCalls,
-          (name) => toolFailureStreak.get(name) ?? 0,
-          (name, ok) => {
+          todo,
+          (key) => toolFailureStreak.get(key) ?? 0,
+          (key, ok) => {
             // 成功一次即清零：只有**连续**失败才止损（偶发失败重试一次是合理的）
-            if (ok) toolFailureStreak.delete(name);
-            else toolFailureStreak.set(name, (toolFailureStreak.get(name) ?? 0) + 1);
-          }
+            if (ok) toolFailureStreak.delete(key);
+            else toolFailureStreak.set(key, (toolFailureStreak.get(key) ?? 0) + 1);
+          },
+          (call) => argFingerprint(call.name, call.arguments)
         );
+        if (skipped.length) {
+          budgetExhausted = true;
+          log(`工具调用预算用完：本轮 ${result.toolCalls.length} 个调用，只执行了 ${todo.length} 个`);
+        }
+
         // ---- 回填工具结果 ----
         //
         // ⚠ 这里有两个**协议合规**要点，写错会让服务端直接 400（用户实测「跑两下就寄了」）：
@@ -855,17 +1063,20 @@ export function createAiBridge(opts) {
         //    DeepSeek/Kimi 的思考模式要求：模型这一轮产出了 reasoning_content，下一轮请求必须带回，
         //    否则第二轮必然 400（报错原文："The `reasoning_content` in the thinking mode must be passed back to the API"）。
         //    ⚠ 只在**非空**时添加：空字符串会被某些实现当作「传了空 reasoning」而不是「没有思考」。
+        //
+        // ③ 被预算跳过的那几个调用**也必须**出现在 assistant 的 tool_calls 里并配上 tool 消息 ——
+        //    否则 tool_calls 与 tool 响应对不上，同样 400。它们的 tool 消息写"未执行"。
         const assistantTurn = {
           role: "assistant",
           // 模型可能同时有正文和 tool_calls —— 别把正文丢了
-          content: result.text || null,
+          content: turnText || null,
           tool_calls: result.toolCalls.map((c) => ({
             id: c.id,
             type: "function",
             function: { name: c.name, arguments: JSON.stringify(c.arguments ?? {}) }
           }))
         };
-        if (result.reasoning) assistantTurn.reasoning_content = result.reasoning;
+        if (turnReasoning) assistantTurn.reasoning_content = turnReasoning;
         messages.push(assistantTurn);
 
         for (const { call, prune, out } of executed) {
@@ -876,23 +1087,44 @@ export function createAiBridge(opts) {
             content: out.error ? `工具失败：${out.error}` : prune.text
           });
         }
+        for (const call of skipped) {
+          const stopText = `本轮工具调用次数已达上限（${MAX_TOOL_CALLS}），这个调用未执行。`
+            + "请基于已有信息直接作答；如果确实缺少信息，请说明缺什么、以及用户可以怎么做。";
+          messages.push({ role: "tool", tool_call_id: call.id, content: stopText });
+          emit({
+            type: "tool", requestId, callId: call.id, name: call.name, phase: "end",
+            detail: stopText, ok: false, error: stopText, ms: 0
+          });
+        }
+
         // 工具结果落到会话历史（无损：原文在 toolCache，预览在 blocks）
         //
         // ⚠ reasoning 也要存：下一轮对话（用户再问一句）时 buildMessages 重放历史，
         //   如果这条 assistant 轮有 tool_calls 却没带 reasoning_content，**同样会 400**。
         //   这就是「同一轮工具循环内」与「多轮对话的第二轮」两种 400 的成因，必须一起修。
         await session.append(
-          makeMessage("assistant", result.text || "", {
-            reasoning: result.reasoning || "",
-            blocks: executed.map(({ call, prune, out }) => ({
-              type: "tool-result",
-              name: call.name,
-              arguments: call.arguments,
-              preview: prune.text,
-              fullSha1: prune.fullSha1,
-              pruned: prune.pruned,
-              error: out.error ?? null
-            }))
+          makeMessage("assistant", turnText || "", {
+            reasoning: turnReasoning || "",
+            blocks: [
+              ...executed.map(({ call, prune, out }) => ({
+                type: "tool-result",
+                name: call.name,
+                arguments: call.arguments,
+                preview: prune.text,
+                fullSha1: prune.fullSha1,
+                pruned: prune.pruned,
+                error: out.error ?? null
+              })),
+              ...skipped.map((call) => ({
+                type: "tool-result",
+                name: call.name,
+                arguments: call.arguments,
+                preview: "（未执行：本轮工具调用次数已达上限）",
+                fullSha1: "",
+                pruned: false,
+                error: "本轮工具调用次数已达上限"
+              }))
+            ]
           })
         );
         continue; // 再流一轮，让模型基于工具结果作答
@@ -905,17 +1137,37 @@ export function createAiBridge(opts) {
       usage = { ...usage, reason: "aborted" };
     }
 
-    // ---- 5. 轮次耗尽兜底 ----
+    // ---- 5. 预算耗尽 / 无产出兜底 ----
     //
-    // 走到这里如果 finalText 还是空，说明模型把全部轮次都花在调工具上了
-    //（典型场景：某个工具一直失败，模型反复重试同一条路径）。
-    // 原来这里直接落盘 + done → 用户看到「AI 说半句就消失」。
-    // 现在**强制再问一次**（不带 tools），保证用户一定能拿到答复。
-    if (!finalText.trim() && !controller.signal.aborted) {
-      log(`工具轮次耗尽（${rounds} 轮）且无正文产出，触发兜底作答`);
-      const fb = await finalAnswerFallback({ resolved, settings, messages, requestId, controller, ai });
+    // 走到这里有两种情况需要兜底：
+    //   a) 工具预算用完（`budgetExhausted`）但一句正文都没有 —— 常见于模型一直在调工具；
+    //   b) 正常退出但 `finalText` 为空 —— 模型这一轮只吐了工具调用，或空响应。
+    //
+    // 以前这里直接落盘 + done → 用户看到「AI 说半句就消失」。
+    // 现在**强制再问一次**（不带 tools），保证用户一定能拿到答复 ——
+    // 「没交付任何东西」是用户最不能接受的失败形态，比慢或短更糟。
+    const needFallback =
+      !controller.signal.aborted
+      && (!finalText.trim() || (budgetExhausted && finalText.trim().length < 20));
+    if (needFallback) {
+      log(
+        `预算/产出兜底：（轮 ${rounds}/${MAX_TOOL_ROUNDS}、调用 ${toolCallsUsed}/${MAX_TOOL_CALLS}、`
+        + `正文 ${finalText.trim().length} 字${budgetExhausted ? "、预算已用完" : ""}）触发兜底作答`
+      );
+      const fb = await finalAnswerFallback({
+        resolved,
+        settings,
+        messages,
+        requestId,
+        controller,
+        ai,
+        // 把「已产出的部分」也交给兜底：让它接着写，而不是从零重答（否则用户会看到两段重复）。
+        partialText: finalText,
+        budget: { roundsUsed: rounds, roundsMax: MAX_TOOL_ROUNDS, callsUsed: toolCallsUsed, callsMax: MAX_TOOL_CALLS }
+      });
       if (fb.text.trim()) {
-        finalText = fb.text;
+        // 兜底结果**追加**在已有正文之后（已有正文可能只是开场白，不该被丢掉）。
+        finalText = [finalText.trim(), fb.text.trim()].filter(Boolean).join("\n\n");
         // 兜底这轮也计入工具轨迹（便于排查"为什么多了一次请求"）
         toolTrace.push({ name: "(final-answer-fallback)", arg: `rounds=${rounds}`, pruned: false });
       }
@@ -978,7 +1230,29 @@ export function createAiBridge(opts) {
         routeReason: route.reason,
         rounds,
         toolCalls: toolTrace,
-        promptVersion: PROMPT_VERSION
+        promptVersion: PROMPT_VERSION,
+        /**
+         * 本轮的工具预算账单。
+         *
+         * ⚠ 必须如实给出 `budgetExhausted`：静默截止会让用户只看到"答案怎么这么短"，
+         * 完全不知道发生了什么（这正是用户报「跑两下就寄、什么都没交付」时的体感）。
+         * 界面据此显示「本轮工具预算用完，已基于已有信息作答」。
+         */
+        toolBudget: {
+          roundsUsed: rounds,
+          roundsMax: MAX_TOOL_ROUNDS,
+          callsUsed: toolCallsUsed,
+          callsMax: MAX_TOOL_CALLS,
+          budgetExhausted,
+          elapsedMs: Date.now() - runStartedAt
+        },
+        /**
+         * 输出被 max_tokens 截断（自动续写用尽）。界面据此提示"回答被截断"，
+         * 并给出可操作下一步（调大最大输出 token / 换模型）。
+         */
+        truncated,
+        /** 续写实际发生了几次（排查"为什么这轮发了多次请求"）。 */
+        autoContinued: continueUsed
       }
     });
   }
@@ -1013,6 +1287,34 @@ export function createAiBridge(opts) {
     abortAll,
     whenIdle,
     swapSession,
+    /**
+     * 工具链**能力接线**自检（启动期由 app-main 调用）。
+     *
+     * 为什么需要它而不是只检查"对象存不存在"：本机实测出现过一次典型事故 ——
+     * `createToolRunner` 从未收到 `toolCache`，而剪枝提示仍然写着「用 ReadToolResult 续读」，
+     * 于是模型照着提示调用、拿到「没有配置 toolCache」，被省掉的原文成了信息黑洞。
+     * **「提示承诺的能力」与「实际接线」必须能从同一个地方查证**，否则只能靠端到端复现发现。
+     *
+     * 返回 warnings 数组（空 = 全通）。不抛异常：自检不该让主进程起不来。
+     */
+    toolWiringReport() {
+      const warnings = [];
+      const defs = toolRunner.definitions.map((d) => d.function.name);
+      for (const must of ["ReadFile", "ReadToolResult", "SceneDigest", "SearchApi"]) {
+        if (!defs.includes(must)) warnings.push(`工具定义缺 ${must}（模型无法调用它）`);
+      }
+      // 剪枝提示指向的续读能力必须真的可达：内存或磁盘至少有一条通路。
+      const hasMemory = typeof prunedStore?.get === "function";
+      const hasDisk = Boolean(opts.toolCache && typeof opts.toolCache.get === "function");
+      if (!hasMemory && !hasDisk) {
+        warnings.push("剪枝续读两条通路都不可用（内存表 + toolCache 均缺失）→ ReadToolResult 会答「找不到」");
+      }
+      if (!opts.toolCache) {
+        // 这条不再是"只影响性能"：以前这么说掩盖了上面的接线缺陷。
+        warnings.push("未配置 toolCache → 剪枝原文只能在本进程内续读（跨请求/重启后不可用）");
+      }
+      return warnings;
+    },
     /** 当前会话对象（只读观察用，例如取 session.dir）。 */
     get currentSession() {
       return session;
