@@ -89,6 +89,16 @@ const DENY_DIRS = ["node_modules", ".git", "desktop/vendor", "desktop/dist", ".t
  * @param {{search:(q:string,n:number)=>Promise<any[]>, render:(q:string,n:number)=>Promise<string>}} opts.apiIndex
  */
 export function createToolRunner(opts) {
+  /**
+   * 本次请求可用的工程摘要（字符串，或生成器函数）。
+   *
+   * 由 bridge 在每次 run() 开头通过 setSceneDigest 注入。
+   * 为什么不用构造时的 opts.sceneDigest：bridge 只创建一次 toolRunner，
+   * 构造时闭包的值在"工程切换/每次请求摘要不同"的场景下就是错的
+   *（历史缺陷：app-main 从未传该选项，SceneDigest 每次必抛错，
+   *  模型连续重试耗尽轮次，最终静默结束 —— 用户看到"AI 说半句就消失"）。
+   */
+  let currentSceneDigest = null;
   const repoRoot = resolve(opts.repoRoot);
   const workspaceRoot = opts.workspaceRoot ? resolve(opts.workspaceRoot) : null;
 
@@ -129,15 +139,22 @@ export function createToolRunner(opts) {
   }
 
   async function sceneDigestTool(args) {
-    if (typeof opts.sceneDigest !== "function") {
-      // 主进程没有工程对象：工程在渲染侧。给出可执行的下一步而不是一句「失败」。
-      throw new Error(
-        "SceneDigest 需要渲染侧提供当前工程。请在前端把工程摘要随 aiChat 的 context.sceneDigest 一起传进来，"
-        + "或先在编辑器里打开一个工程。"
-      );
+    // ⚠ 数据源是"**本次请求**携带的工程摘要"，不是构造时的闭包。
+    // 渲染侧每次都把当前工程摘要放在 request.context.sceneDigest 里，
+    // 工具要读的必须是同一份数据 —— 否则模型在 prompt 里"看得到"工程，工具却读不到
+    //（历史缺陷：app-main 没传 opts.sceneDigest，工具每次必抛错）。
+    const digest = currentSceneDigest ?? opts.sceneDigest;
+    if (typeof digest === "function") {
+      const text = await digest({ scene: args?.scene, maxScenes: args?.maxScenes });
+      return { text: String(text ?? ""), meta: { kind: "scene-digest" } };
     }
-    const text = await opts.sceneDigest({ scene: args?.scene, maxScenes: args?.maxScenes });
-    return { text: String(text ?? ""), meta: { kind: "scene-digest" } };
+    if (typeof digest === "string" && digest.trim()) {
+      return { text: digest, meta: { kind: "scene-digest", source: "context" } };
+    }
+    throw new Error(
+      "没有可用的工程摘要：本次请求既没带 context.sceneDigest，也没有可调用的摘要生成器。"
+      + "请在编辑器里打开工程后重试。"
+    );
   }
 
   async function searchApiTool(args) {
@@ -150,6 +167,13 @@ export function createToolRunner(opts) {
 
   return {
     definitions: toolDefinitions(),
+    /**
+     * 注入本次请求的工程摘要（bridge 在 run() 开头调用）。
+     * 传 null 表示"本次请求没有工程摘要"。
+     */
+    setSceneDigest(value) {
+      currentSceneDigest = value ?? null;
+    },
     /** 执行一个工具调用；名字不认识或参数坏掉都返回可读错误而不是抛给上层。 */
     async run(call) {
       const name = String(call?.name ?? "");

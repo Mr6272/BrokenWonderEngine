@@ -45,7 +45,30 @@ final class GridPainter {
     }
 
     private final TopDownRuntime rt;
-    private final GridBoard board;
+    private GridBoard board;
+
+    /**
+     * 换绑到新的棋盘（行/列/格子尺寸变化后必须调用）。
+     *
+     * <p><b>为什么必须有这个方法（「改列数后画面被灰色大块盖住」的真因）</b>：
+     * {@code Minesweeper.reset()} 在规格变化时<b>总是</b> {@code new GridBoard(rows, cols, cell)}，
+     * 但旧实现只在 {@code oldCell != cell} 时才重建 painter —— 于是「只改列数、格子尺寸不变」
+     * 这条路径上 painter 仍然攥着<b>旧 board 对象</b>。它按旧 board 的
+     * {@code pixelWidth()/pixelHeight()} 建离屏位图并绘制，而 {@code Minesweeper.draw()}
+     * 用新 board 的尺寸算贴图位置与大小 → 两者对不上，画出来就是一块错位的纯色大矩形
+     * （玩家看到「整屏被灰块盖住、HUD 和棋盘全没了」）。
+     *
+     * <p>换绑后必须标脏：位图尺寸与内容都变了，下一次 {@code paintIfDirty} 会按新尺寸重建。
+     */
+    void rebind(GridBoard newBoard) {
+        if (newBoard == null || newBoard == board) {
+            return;
+        }
+        this.board = newBoard;
+        // 尺寸变了：旧位图作废（下一帧按新 pixelWidth/Height 重新分配）
+        this.image = null;
+        this.dirty = true;
+    }
 
     /** 离屏位图（尺寸跟着棋盘走）。 */
     private BufferedImage image;

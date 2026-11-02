@@ -349,6 +349,14 @@ app.whenReady().then(async () => {
       log: (m) => log(m, "bwe:ai")
     });
 
+    // ---- 启动期工具依赖自检 ----
+    //
+    // 为什么在启动时检查：这些依赖只在「模型真的调用某个工具」时才被用到。
+    // 缺了不会报错、也不影响界面，直到用户在真实对话里触发了那个工具才炸 ——
+    // 而那时错误发生在对话中途，表现为「AI 中断自己」，极难定位。
+    //（历史缺陷：sceneDigest 没接上，SceneDigest 工具每次必抛错）
+    checkToolDependencies({ apiIndex, toolCache });
+
     registerIpc();
     if (PROBE_ONLY_MODE) {
       // 只读探针：不创建窗口，直接跑探针并退出（见 PROBE_ONLY_MODE 注释）。
@@ -642,6 +650,36 @@ async function switchToConversation(id) {
   );
   if (aborted > 0) log(`切换会话时中止了 ${aborted} 个在途请求`, "bwe:ai");
   return { ...result, aborted };
+}
+
+/**
+ * 启动期检查 AI 工具的依赖是否齐全。
+ *
+ * ⚠ 一个容易误判的点：`sceneDigest` **不需要**在启动时传函数。
+ * 工程摘要是**每次请求**由渲染侧随 `request.context.sceneDigest` 传来的
+ *（bridge 在 run() 开头调用 toolRunner.setSceneDigest 注入）。
+ * 所以这里只检查"构造时必需"的依赖，并提示 sceneDigest 是按请求传递的 ——
+ * 避免后人又去启动时闭包一个函数（那正是历史缺陷的形态）。
+ */
+function checkToolDependencies({ apiIndex, toolCache } = {}) {
+  const warnings = [];
+  // apiIndex：构造时必需（SearchApi 工具依赖它）
+  if (!apiIndex || typeof apiIndex.render !== "function") {
+    warnings.push("apiIndex 缺失或不可用 → SearchApi 工具会失败");
+  }
+  // toolCache：非必需（只影响剪枝缓存），但缺了会每次都重复读
+  if (!toolCache || typeof toolCache.put !== "function") {
+    warnings.push("toolCache 缺失 → 工具结果不会被缓存（不影响正确性，只影响性能）");
+  }
+  if (warnings.length === 0) {
+    log(
+      "工具依赖自检通过（SceneDigest 走 request.context.sceneDigest 按请求注入，非启动闭包）",
+      "bwe:ai"
+    );
+  } else {
+    for (const w of warnings) log(`⚠ 工具依赖自检：${w}`, "bwe:ai");
+  }
+  return warnings;
 }
 
 function registerIpc() {

@@ -302,6 +302,7 @@ node desktop/test/script-language.test.mjs # 补全/提示（14 项：UTF-16 off
 node desktop/test/conversations.test.mjs   # 多会话存储（20 项：迁移/新建/切换/删除/标题/自愈）
 node desktop/test/session-title.test.mjs   # 标题随对话生成（5 项：零 token/不覆盖用户标题/不串会话）
 node desktop/test/ai-session-switch.test.mjs # 切会话时 abort 在途请求（4 项：不串会话）
+node desktop/test/ai-tools.test.mjs       # 工具链路（6 项：sceneDigest 注入/失败止损/轮次兜底/callId 配对）
 
 # ── 5f. 脚本编辑器（含 Yarn）尺寸与「新建后不再空态」回归 ──
 node desktop/tools/verify-script-editor.mjs
@@ -578,6 +579,71 @@ quickInfo(光标在 world 上) → (method) bwe.World.find(q: bwe.EntityQuery): 
 node desktop/test/conversations.test.mjs    # 20 项：迁移/新建/切换/删除/标题/索引健壮性
 node desktop/test/ai-session-switch.test.mjs # 4 项：切换时 abort 在途请求、不串会话
 ```
+
+## 工具链（AI 调用工具的四个坑）
+
+「AI 会在修复过程中中断自己」——用户报的这个现象，根因不是模型，是工具链的三处缺陷叠加。
+四个坑都值得记住，因为它们**都不报错**，只在真实对话里表现为「AI 说半句就消失」。
+
+### 坑 1：构造时闭包 vs 每次请求传入（最重要）
+
+`createToolRunner` 只在 `createAiBridge` 时**创建一次**，它闭包了构造那一刻的 `opts.sceneDigest`。
+而工程摘要是**每次请求**由渲染侧随 `request.context.sceneDigest` 传来的。
+
+```
+错误形态：启动时闭包一个全局值 → 之后每次请求都用它（工程切换后就是错的，没有时则每次必失败）
+正确形态：每次 run() 开头把 request.context.sceneDigest 注入 → toolRunner.setSceneDigest(...)
+```
+
+历史缺陷：`app-main` 从未传 `opts.sceneDigest`（grep 计数 0），而 `tools.mjs` 又要求它必须是函数
+→ **SceneDigest 工具每次必抛错** → 模型"换个路径再试一次"→ 再调 → 再失败 → 耗尽轮次。
+
+> **这条经验通用**：任何"工厂只创建一次 + 数据每请求变化"的组合，都必须有**注入点**，
+> 不能让工厂在构造时闭包。判据：问自己「这个值会不会在处理后续请求时变旧？」会 → 必须注入。
+
+### 坑 2：轮次耗尽没有兜底 → 静默结束
+
+```
+while (rounds <= MAX_TOOL_ROUNDS) { ... if (toolCalls) { ...; continue; } break; }
+// 退出后直接落盘 + done —— finalText 可能是空串
+```
+
+模型连续 3 轮都在调工具（因为工具一直失败），**从没机会产出正文**，循环退出后直接 `done`。
+用户看到的就是「AI 说了半句话就消失了」。
+
+**修法（两条都必须有）**：
+1. **轮次耗尽后再做一次不带 `tools` 的调用**，逼模型基于已有信息作答 —— 否则用户永远拿不到答案。
+2. **同一工具连续失败 2 次即止损**，并在工具结果里明确写「该工具不可用，请基于已有信息作答」。
+   **模型不会自己意识到"这个工具坏了"，它会一直重试** —— 这个判断必须由我们做。
+
+### 坑 3：工具事件按 name 配对会串
+
+一次对话里可能**两次调用同名工具**（真实发生过：SceneDigest ×2）。
+按 `name` 配对会让第一次的 `start` 配到第二次的 `end` —— 耗时算错、成败也可能串。
+
+**修法**：事件带 `callId`（取模型返回的 `tool_call.id`，天然唯一），UI 按 `callId` 配对。
+`tool` 事件形状：
+```ts
+{ type: "tool", requestId, callId, name, phase: "start" | "end",
+  detail, ok?, error?, ms? }   // ok/error/ms 仅 end
+```
+`error` 必须是**完整原文**，不经过剪枝：错误通常很短，剪枝反而把根因削掉。
+
+### 坑 4：依赖缺失要等运行时才暴露
+
+`sceneDigest` / `apiIndex` / `toolCache` 这类"工具依赖"缺了不会影响界面，
+直到用户在真实对话里触发那个工具才炸 —— 而那时错误发生在对话中间，表现为"AI 中断自己"，极难定位。
+
+**修法**：启动时 `checkToolDependencies()` 扫一遍，缺什么直接打警告。
+（这和「打包漏复制文件 → Electron 静默挂死」是同一类：**依赖缺失不该等到运行时才暴露**。）
+
+### 验收
+
+```bash
+node desktop/test/ai-tools.test.mjs    # 6 项：注入/止损/兜底/callId 配对
+```
+覆盖五条：`SceneDigest 读 request.context.sceneDigest`、`bridge 每次 run 都注入`、
+`连续失败 2 次止损`、`轮次耗尽仍产出答复`、`同名工具 callId 不配错`。
 
 ## 「思考中」事件（thinking）
 

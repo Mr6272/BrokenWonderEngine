@@ -29,6 +29,15 @@ final class ScriptTextInput {
         final String id;
         /** 当前编辑中的文本（激活时是用户敲的，未激活时是显示值）。 */
         String text = "";
+        /**
+         * 输入法<b>组合段</b>（拼音/联想还没选字的部分，数字键盘逐键预演也算）。
+         *
+         * <p>与 {@link #text} 分开：{@code text} 是已落字的正文，本字段是"还可能被整体
+         * 替换"的临时段。输入法每次 {@code setComposingText} 只替换这一段，
+         * {@code commitText} 时才并入 {@link #text}。旧实现把它们混成一个整体替换，
+         * 导致「打多个数字只剩最后一个」「有时完全输不进」。
+         */
+        String composing = "";
         /** 是否处于编辑态。 */
         boolean active;
         /** 数值范围（数字模式用；0 表示不限）。 */
@@ -128,7 +137,7 @@ final class ScriptTextInput {
         if (f == null) {
             return "";
         }
-        String t = f.text == null ? "" : f.text.trim();
+        String t = visibleText(f).trim();
         if (t.isEmpty()) {
             return "不能为空";
         }
@@ -164,7 +173,7 @@ final class ScriptTextInput {
     /** 某字段的当前文本（未激活就是显示值，激活中是用户正在敲的）。 */
     String textOf(String id) {
         Field f = find(id);
-        return f == null ? "" : f.text;
+        return f == null ? "" : visibleText(f);
     }
 
     /** 某字段的整数解析结果（非法/为空时返回 fallback）。 */
@@ -174,7 +183,7 @@ final class ScriptTextInput {
             return fallback;
         }
         try {
-            int v = Integer.parseInt(f.text.trim());
+            int v = Integer.parseInt(visibleText(f).trim());
             if (f.min > 0 && v < f.min) {
                 v = f.min;
             }
@@ -239,6 +248,7 @@ final class ScriptTextInput {
         activeField = f;
         f.active = true;
         f.text = "";              // 激活即清空，用户直接敲新值（比「全选覆盖」更符合触摸直觉）
+        f.composing = "";         // 组合段也必须清，否则上一次没落字的残段会拼进来
         f.caretPhase = 0f;
         if (keyboardHost != null) {
             keyboardHost.setSoftKeyboardVisible(true);
@@ -253,14 +263,27 @@ final class ScriptTextInput {
         }
         activeField = null;
         f.active = false;
+        // ⚠ 先把「组合段」并入正文再判空 / 回调。
+        //
+        // 这是「输入有时候完全无效」的第二个原因：旧代码判的是 {@code f.text}
+        // （已落字正文），而某些输入法在「完成键」按下时内容还停在组合段里 ——
+        // 此时 text 为空、composing 有值，判空直接命中 → 回调根本不触发 → 玩家觉得
+        // 「打了字按完成，游戏一点反应都没有」。并进来之后才判，才代表玩家真正看到的内容。
+        String finalText = visibleText(f).trim();
+        f.composing = "";
+        f.text = finalText;
         if (keyboardHost != null) {
             keyboardHost.setSoftKeyboardVisible(false);
         }
         // 非法值也提交给脚本 —— 由脚本统一 clamp 并在下次绘制时展示「已修正」。
         // 引擎不擅自丢弃玩家的输入（那会让「输入了但没反应」更困惑）。
-        if (!f.text.isEmpty() && onSubmit != null) {
+        if (!finalText.isEmpty() && onSubmit != null) {
             onSubmit.accept(f);
+            return true;
         }
+        // 空输入：不回调业务，但仍然要发一次 onChange —— 脚本据此把框的显示值
+        // 复位成业务值（否则框会停在空字符串，看起来像"输入被吞了"）。
+        notifyChange();
         return true;
     }
 
@@ -274,6 +297,7 @@ final class ScriptTextInput {
         f.active = false;
         // 取消时把文本还原成「业务值」（由脚本下次 draw 时重新写回）
         f.text = "";
+        f.composing = "";
         if (keyboardHost != null) {
             keyboardHost.setSoftKeyboardVisible(false);
         }
@@ -290,6 +314,12 @@ final class ScriptTextInput {
             return false;
         }
         if (ch == '\b' || ch == 127) {          // 退格
+            // 优先删组合段（输入法未落字的部分），再删正文 —— 与系统的编辑直觉一致。
+            if (!f.composing.isEmpty()) {
+                f.composing = f.composing.substring(0, f.composing.length() - 1);
+                notifyChange();
+                return true;
+            }
             if (f.text.isEmpty()) {
                 return true;
             }
@@ -307,7 +337,7 @@ final class ScriptTextInput {
         if (f.numeric && (ch < '0' || ch > '9')) {
             return true;                        // 数字框只收数字
         }
-        if (f.text.length() >= f.maxChars) {
+        if (visibleText(f).length() >= f.maxChars) {
             return true;
         }
         f.text = f.text + ch;
@@ -334,7 +364,81 @@ final class ScriptTextInput {
         if (f == null) {
             return false;
         }
-        String v = text == null ? "" : text;
+        String v = sanitize(f, text);
+        if (v.equals(f.text)) {
+            return false;
+        }
+        f.text = v;
+        notifyChange();
+        return true;
+    }
+
+    /**
+     * 输入法<b>组合态</b>更新（拼音/联想还没选字，或数字键盘逐键预演）。
+     *
+     * <p><b>为什么要和 {@link #setActiveText} 分开（「输入有时候无效」的真因）</b>：
+     * Android 输入法给文本是<b>两段式</b>协议 ——
+     * <pre>
+     *   setComposingText("7")   ← 组合中（可能被后续按键整体替换）
+     *   commitText("7")         ← 落字（此后成为既有内容）
+     * </pre>
+     * 前者是<b>可被下一次组合整体覆盖的临时内容</b>，后者才进正式文本。
+     * 旧实现把两者都当「整体替换整框文本」，于是：
+     * <ul>
+     *   <li>已敲进「7」之后再按「8」，输入法发 {@code setComposingText("8")}
+     *       → <b>整体替换</b>把「7」覆盖掉，玩家看到「打了两个键只剩一个」；</li>
+     *   <li>数字键盘/部分输入法在落字前会先发一次空组合态 → 把已输入内容清空，
+     *       玩家表现为「输入完全无效」。</li>
+     * </ul>
+     *
+     * <p>正确语义：<b>已提交的正文（{@link Field#text}）+ 当前组合段（{@link Field#composing}）</b>，
+     * 每一次组合态只替换组合段，提交时把组合段并入正文。这也正是输入法
+     * {@code getTextBeforeCursor} 期望看到的结构。
+     */
+    boolean setComposing(String text) {
+        Field f = activeField;
+        if (f == null) {
+            return false;
+        }
+        String v = sanitize(f, text);
+        if (v.equals(f.composing)) {
+            return false;
+        }
+        f.composing = v;
+        notifyChange();
+        return true;
+    }
+
+    /**
+     * 提交组合段（输入法 {@code commitText}）。
+     *
+     * <p>把组合段并入正文并清空组合态。若输入法直接给了一段完整文本
+     * （数字键盘常见：先 {@code setComposingText} 再 {@code commitText} 同值），
+     * 这里会得到「正文 = 旧正文 + 该段」，不会覆盖已输入内容。
+     */
+    boolean commitComposing(String text) {
+        Field f = activeField;
+        if (f == null) {
+            return false;
+        }
+        String incoming = text == null ? "" : text;
+        // 输入法给的这段若与当前组合段一致，说明是「把组合段落字」；
+        // 否则是「直接给一段新文本」，同样追加进正文（不覆盖）。
+        String add = incoming.isEmpty() ? f.composing : sanitize(f, incoming);
+        f.composing = "";
+        String merged = sanitize(f, f.text + add);
+        if (merged.equals(f.text)) {
+            notifyChange();
+            return false;
+        }
+        f.text = merged;
+        notifyChange();
+        return true;
+    }
+
+    /** 过滤：数字框只留数字；统一截到 maxChars；顺带清掉换行。 */
+    private static String sanitize(Field f, String text) {
+        String v = text == null ? "" : text.replace("\n", "").replace("\r", "");
         if (f.numeric) {
             StringBuilder sb = new StringBuilder(v.length());
             for (int i = 0; i < v.length(); i++) {
@@ -348,18 +452,21 @@ final class ScriptTextInput {
         if (f.maxChars > 0 && v.length() > f.maxChars) {
             v = v.substring(0, f.maxChars);
         }
-        if (v.equals(f.text)) {
-            return false;
+        return v;
+    }
+
+    /** 当前<b>可见</b>文本 = 已提交正文 + 组合段（输入法/绘制都该看到这个）。 */
+    String visibleText(Field f) {
+        if (f == null) {
+            return "";
         }
-        f.text = v;
-        notifyChange();
-        return true;
+        return f.text + f.composing;
     }
 
     /** 当前编辑框的文本（没有激活框时返回 null，供宿主同步输入法控件）。 */
     String activeText() {
         Field f = activeField;
-        return f == null ? null : f.text;
+        return f == null ? null : visibleText(f);
     }
 
     /** 当前编辑框的归一化矩形（没有激活框时返回 null）。 */

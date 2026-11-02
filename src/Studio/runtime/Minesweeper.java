@@ -197,14 +197,20 @@ final class Minesweeper {
             // painter 持有的是一张 boardW×boardH 的离屏位图 + 一个 GL 纹理，
             // 重建它意味着下次必须整块重绘（192 格 × ~0.27ms ≈ 53ms/次）。
             // 行列数变化（12×16 → 10×8）只改变格子数量，格子像素尺寸没变时
-            // 可以让旧 painter 继续用（它按新 board 的 pixelWidth 会自动重建位图）。
-            // 这样连续点 +/- 改行列不会每次都触发 53ms 的重绘卡顿。
+            // 可以让旧 painter 继续用 —— **但必须把它的 board 引用换绑到新 board**。
+            //
+            // ⚠⚠ 「不重建 painter 却不换绑 board」是「改列数后整屏被灰色大块盖住」
+            // 的真因：painter 仍按旧 board 的 pixelWidth()/pixelHeight() 建位图与贴图，
+            // 而 Minesweeper.draw() 用新 board 的尺寸算位置 → 两者对不上，
+            // 画出一块错位的纯色矩形盖住画面。换绑（rebind）就是为了消除这个错配。
             if (painter == null || oldCell != cell) {
                 // 旧 painter 的纹理必须真正释放，否则每次改格子尺寸都泄漏一张 GPU 纹理。
                 if (painter != null) {
                     painter.dispose();
                 }
                 painter = new GridPainter(rt, board);
+            } else {
+                painter.rebind(board);
             }
         } else {
             // 规格没变：只清状态，不重新分配数组
@@ -227,6 +233,21 @@ final class Minesweeper {
         painter.invalidate();
         boardW = board.pixelWidth();
         boardH = board.pixelHeight();
+        // ⚠ 棋盘对象的「实际渲染尺寸」必须跟着棋盘走（否则留下灰色大块）。
+        //
+        // 棋盘对象在场景里带着 {@code props.color="#909090"} 与<b>固定的</b>
+        // {@code halfW/halfH}（工程里写死 448/320 = 896x640）。引擎判定渲染尺寸时
+        // {@code halfW>0} 会<b>完全忽略</b> {@code props.w/h}（见 sizeOfCached 的 halfBranch），
+        // 而脚本的 fitBoard 只改 props.w/h —— 于是行列一变，那块灰色底衬还是 896x640，
+        // 与真实棋盘尺寸对不上，多出来的部分就是玩家看到的「灰色大方块」。
+        //
+        // 棋盘本身是由 Minesweeper.draw() 逐格画在纹理上的，不依赖这个对象的素材，
+        // 所以同步 halfW/halfH 不会拉伸任何美术资源（脚本侧那条「绝不能 setSize」的
+        // 警告针对的是挂了素材的对象，这里没有素材）。
+        if (actor != null && actor.o != null) {
+            actor.o.halfW = boardW / 2f;
+            actor.o.halfH = boardH / 2f;
+        }
         painter.invalidate();
         mineCount = Math.min(wantedMines, Math.max(1, n - 1));
     }
@@ -286,19 +307,92 @@ final class Minesweeper {
             toggleFlag(idx);
             return true;
         }
-        // 点「已翻开的数字格」= 自动机制入口：
-        //   1) 先按开关做自动标记/翻开（普通模式也能用）；
-        //   2) 复雷模式再走 chord（它带「虚实比例」这条额外规则）。
+        // 点「已翻开的数字格」= 连锁翻开（chord）入口。
+        //
+        // ⚠ <b>普通模式也必须有 chord —— 否则「点数字没反应」</b>。
+        // 早先这里只走 {@link #autoActionAt}（受 autoAction 参数控制，默认「关闭」= 0），
+        // 而普通模式又没有自己的 chord 分支，于是玩家点已翻开的数字格时<b>什么都不发生</b>：
+        // 脚本 UI 明明写着「点数字可连锁翻开」，实际点下去毫无反应 —— 典型的功能性缺失。
+        // 标准扫雷的规则是：<b>周围旗数 == 该格数字 → 翻开其余未插旗的邻格</b>，
+        // 不需要任何「自动辅助」开关，也不需要复雷模式的「虚实比例」。
         if (open[idx]) {
-            boolean did = autoActionAt(idx);
+            boolean did = autoActionAt(idx);   // 可选辅助（自动标记/翻开），开关关着就跳过
             if (complexMode) {
                 chord(idx);
                 did = true;
+            } else if (reveal && !over && !mine[idx]) {
+                // 普通模式标准 chord：旗数对齐才动，避免误踩（0 格直接忽略）
+                did = chordStandard(idx) || did;
             }
-            return did || true;   // 点已翻开格永远是「已被处理」，不再往下 reveal
+            return true;   // 点已翻开格永远是「已被处理」，不再往下 reveal
         }
         reveal(idx);
         return true;
+    }
+
+    /**
+     * 普通模式的标准连锁翻开（chord）。
+     *
+     * <p>规则（与 Windows 扫雷一致，只依赖玩家可见的信息）：
+     * 当一个<b>已翻开</b>的数字格周围<b>玩家插的旗数恰好等于该数字</b>时，
+     * 说明其余未翻开的邻格必定安全 → 把它们全翻开。
+     * 旗数不对时<b>什么都不做</b>（不猜、不碰运气、不踩雷）。
+     *
+     * <p>这与 {@link #autoActionAt}（受 {@code autoAction} 开关控制、还包含「自动插旗」这种
+     * 辅助能力）是两件事：标准 chord 是扫雷的<b>基本操作</b>，必须始终可用。
+     *
+     * @return 是否真的翻开了格子
+     */
+    private boolean chordStandard(int idx) {
+        if (!open[idx] || over) {
+            return false;
+        }
+        int number = counts[idx];
+        if (number <= 0) {
+            return false;              // 0 格周围本来就没有雷，没有 chord 语义
+        }
+        int flagged = 0;
+        int remaining = 0;
+        for (int dr = -1; dr <= 1; dr++) {
+            for (int dc = -1; dc <= 1; dc++) {
+                if (dr == 0 && dc == 0) {
+                    continue;
+                }
+                int nr = idx / cols + dr;
+                int nc = idx % cols + dc;
+                if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) {
+                    continue;
+                }
+                int ni = nr * cols + nc;
+                if (flag[ni]) {
+                    flagged++;
+                } else if (!open[ni]) {
+                    remaining++;
+                }
+            }
+        }
+        if (remaining <= 0 || flagged != number) {
+            return false;              // 旗数没对齐：不做任何事
+        }
+        boolean acted = false;
+        for (int dr = -1; dr <= 1; dr++) {
+            for (int dc = -1; dc <= 1; dc++) {
+                if (dr == 0 && dc == 0) {
+                    continue;
+                }
+                int nr = idx / cols + dr;
+                int nc = idx % cols + dc;
+                if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) {
+                    continue;
+                }
+                int ni = nr * cols + nc;
+                if (!open[ni] && !flag[ni]) {
+                    reveal(ni);
+                    acted = true;
+                }
+            }
+        }
+        return acted;
     }
 
     /**

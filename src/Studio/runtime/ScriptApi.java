@@ -1718,8 +1718,17 @@ final class ScriptApi {
                 // Rhino Context，直接调 engine.invoke 会静默返回 null（回调永不执行，
                 // 表现就是「输入框按回车/点确认没反应」，且不报错）。
                 // postScriptCall 把它排到下一次 update，在脚本上下文里执行，延迟 ≤1 帧。
+                //
+                // ⚠⚠ 必须**当场快照文本**，不能把 field.text 的读取留到下一帧 ——
+                // 这是「输入有时无效 / 输入 30 却变成 12 / 串到别的框」的真因：
+                // commitActive() 已经把 active=false 设好，而下一帧脚本 draw 会先执行
+                // syncInputField → define(id, 业务值, ...)，define 看到 !active 就把
+                // f.text 覆盖回业务值（12）。等排队回调真正跑起来，读到的已是 "12"，
+                // 玩家输入的值被静默丢弃。快照之后无论下一帧怎么覆盖都不会再串。
+                final String submittedId = field.id;
+                final String submittedText = field.text;
                 engine.postScriptCall(() -> engine.invoke(null, fn, null,
-                        new Object[]{field.id, field.text}));
+                        new Object[]{submittedId, submittedText}));
             });
             return null;
         });

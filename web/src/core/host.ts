@@ -58,7 +58,36 @@ export type AiEvent =
       delta?: string;
     }
   | { type: "delta"; requestId: string; text: string }
-  | { type: "tool"; requestId: string; name: string; detail: string }
+  | {
+      /**
+       * 一次工具调用。**开始与结束都发这个事件**，用 `callId` 配对（不要按 `name` 或顺序配对：
+       * 同名工具可能连调多次，按名字配会把「失败的那次」和「成功的那次」算成同一步）。
+       *
+       * 字段语义：
+       *   phase  —— "start" 已开始调用 / "end" 已得到结果（含失败结果）
+       *   ok     —— 仅 end 有：`false` 表示工具执行失败（`error` 带原因）
+       *   error  —— 仅失败时有，**完整错误文本**（不是剪枝摘要）
+       *   ms     —— 仅 end 有：本次调用耗时（毫秒）
+       *
+       * ⚠ 这三条是 2026-11-02 补的、因为**原先只有 `detail` 字符串，UI 分不出成败**：
+       * 失败和成功都渲染成一样的灰块，用户看到的是「一个空块挂很久」，无法判断是坏了还是在跑。
+       * **不要在 UI 侧从 `detail` 文案里猜成败** —— 那是拿文案当协议，改一个字就静默失效。
+       */
+      type: "tool";
+      requestId: string;
+      name: string;
+      detail: string;
+      /** 开始/结束。缺省时按 end 处理（兼容未升级的主进程）。 */
+      phase?: "start" | "end";
+      /** 标识同一次调用，用于把 start 与 end 配对、并防止同名连调配错。 */
+      callId?: string;
+      /** 仅 end：是否成功。 */
+      ok?: boolean;
+      /** 仅失败：完整错误文本（客服/排查需要原文，不要截断成摘要）。 */
+      error?: string;
+      /** 仅 end：本次调用耗时（毫秒）。 */
+      ms?: number;
+    }
   | { type: "usage"; requestId: string; usage: TokenUsage }
   | {
       type: "done";

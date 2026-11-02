@@ -308,6 +308,25 @@ export class Editor {
     mkThink("data-demo-thinking-reasoning", "reasoning", 128);
     mkThink("data-demo-thinking-slow", "slow");
 
+    // 验收用：构造「工具失败 + 空答复」的对话（截图用）。
+    // 为什么需要：mock 流不产生 tool 事件，真模型又需要 key，
+    // 而这两个视觉（红条失败块、系统提示条）必须有图自证。
+    // 注入的是**事件**（走 handleAiEvent 同一条渲染路径），不是直接拼 DOM，
+    // 所以证明的是"UI 收到这些事件后会这样显示"。
+    const mkDemoBtn = (attr: string, onClick: () => void) => {
+      const b = el("button", { type: "button", [attr]: "1", "aria-hidden": "true", tabindex: "-1" });
+      (b as HTMLElement).style.cssText =
+        "position:absolute;left:-9999px;width:0;height:0;padding:0;border:0;opacity:0";
+      b.addEventListener("click", onClick);
+      bar.appendChild(b);
+    };
+    mkDemoBtn("data-demo-tool-fail", () => {
+      void import("../panels/aiPanel.ts").then((m) => m.demoToolFailure());
+    });
+    mkDemoBtn("data-demo-empty-done", () => {
+      void import("../panels/aiPanel.ts").then((m) => m.demoEmptyDone());
+    });
+
     // 验收用：量取编辑器几何（点一下就把 .js-code 等实际像素打进控制台，
     // 配合 --console 就能拿到数字，不必改 A 的 --probe-dom）。
     const measureProbe = el("button", {

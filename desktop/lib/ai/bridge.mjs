@@ -26,6 +26,15 @@ import { createToolRunner } from "./tools.mjs";
 const MAX_TOOL_ROUNDS = 3;
 
 /**
+ * 同一工具**连续**失败多少次后停止重试。
+ *
+ * 为什么必须有上限：模型不会自己意识到「这个工具坏了」，它会一直重试同一条路径，
+ * 最终耗尽工具轮次、一句正文都没产出 —— 用户看到的就是「AI 说半句就消失」。
+ * 取 2：偶发失败重试一次是合理的；连续两次失败基本可以判定这条路径有问题。
+ */
+const TOOL_FAILURE_LIMIT = 2;
+
+/**
  * 首字超时兜底（毫秒）：超过这个时间既没 reasoning 也没正文，就提示「可能网络慢/排队中」。
  * 8 秒的依据：推理模型首字常在 2~5 秒；8 秒还没动静基本可以确认「慢得值得提示」，
  * 但又不会短到把正常的慢模型误报成问题。
@@ -307,13 +316,105 @@ export function createAiBridge(opts) {
     return result;
   }
 
-  /** 执行工具调用：剪枝 + 缓存 + 回填。 */
-  async function runTools(requestId, calls) {
+  /**
+   * **轮次耗尽兜底**：工具轮用完、模型还没产出正文时，逼它基于已有信息作答。
+   *
+   * 为什么必须有：模型可能连续 N 轮都在调工具（尤其是工具一直失败时）。
+   * 如果循环耗尽后直接 done，finalText 是空字符串 ——
+   * 用户看到的是「AI 说半句就消失」，这是本次线上问题的直接成因。
+   *
+   * 做法：**不带 tools** 再请求一次（模型没有工具可调，只能输出文字），
+   * 并明确要求它基于已有结果作答；若确实缺信息就说明缺什么。
+   */
+  async function finalAnswerFallback({ resolved, settings, messages, requestId, controller, ai }) {
+    const nudge = {
+      role: "user",
+      content: "工具调用次数已到上限，**请不要再请求工具**。"
+        + "请基于上面已经拿到的信息直接给出结论或下一步具体动作；"
+        + "如果信息确实不足，请明确说明缺什么、以及用户可以怎么做。"
+    };
+    const outMessages = [...messages, nudge];
+    let text = "";
+    let usageOut = null;
+    try {
+      const result = await streamChat({
+        baseUrl: resolved.baseUrl,
+        apiKey: resolved.apiKey,
+        model: resolved.model,
+        messages: outMessages,
+        // ⚠ 关键：不传 tools。模型没有工具可调，只能产出正文。
+        tools: undefined,
+        maxTokens: Number(ai.maxTokens) || undefined,
+        temperature: resolved.sampling.temperature,
+        topP: resolved.sampling.topP,
+        signal: controller.signal,
+        headers: opts.extraHeaders?.(settings) ?? {},
+        onEvent: (ev) => {
+          if (ev.type === "delta") {
+            text += ev.text;
+            emit({ type: "delta", requestId, text: ev.text });
+          } else if (ev.type === "usage") {
+            usageOut = ev.usage;
+            emit({ type: "usage", requestId, usage: ev.usage });
+          }
+        }
+      });
+      if (result?.error) log(`兜底作答失败（不再重试）：${result.error}`);
+      if (result?.usage) usageOut = result.usage;
+    } catch (e) {
+      log(`兜底作答异常（不再重试）：${e?.message || e}`);
+    }
+    return { text, usage: usageOut };
+  }
+
+  /**
+   * 执行工具调用：剪枝 + 缓存 + 回填。
+   *
+   * @param {(name:string)=>number} failureStreakOf  取某工具当前连续失败次数
+   * @param {(name:string,success:boolean)=>void} noteToolResult 记录本次成败（成功清零）
+   */
+  async function runTools(requestId, calls, failureStreakOf, noteToolResult) {
     const results = [];
+
+    /**
+     * 为一次工具调用生成稳定的 callId。
+     *
+     * 为什么必须按 id 配对而不是按 name：用户实际遇到过一次对话里**两次同名工具**（SceneDigest）。
+     * 按 name 配对会让第一次的 start 配到第二次的 end —— 耗时算错、成败也可能串。
+     * 模型返回的 tool_call id 天然唯一；没有就现生成一个。
+     */
+    const callIdOf = (call, index) => String(call?.id ?? call?.tool_call_id ?? "") || `c_${requestId}_${index}_${Date.now().toString(36)}`;
+
+    let index = 0;
     for (const call of calls) {
       const arg = toolRunner.describeArg(call);
-      emit({ type: "tool", requestId, name: call.name, detail: `调用 ${call.name}(${arg})` });
+      const callId = callIdOf(call, index);
+      index += 1;
+
+      // 若该工具已连续失败到上限，**不再真的执行**：直接把「不可用」告知模型。
+      // 为什么由我们判断：模型不会自己意识到"这个工具坏了"，它会一直重试同一条路径，
+      // 最终耗尽轮次、一句正文都没产出（用户看到的就是"AI 说半句就消失"）。
+      const streak = failureStreakOf(call.name);
+      if (streak >= TOOL_FAILURE_LIMIT) {
+        const stopText = `工具 ${call.name} 已连续失败 ${streak} 次，判定为当前不可用。`
+          + "请**不要再调用它**，基于已有信息直接作答；如果确实缺少信息，请说明缺什么。";
+        emit({ type: "tool", requestId, callId, name: call.name, phase: "end", detail: stopText, ok: false, error: stopText, ms: 0 });
+        results.push({
+          call,
+          prune: { text: stopText, pruned: false, meta: { skipped: true } },
+          out: { error: stopText, text: stopText, meta: { tool: call.name, skipped: true } }
+        });
+        continue;
+      }
+
+      emit({ type: "tool", requestId, callId, name: call.name, phase: "start", detail: `调用 ${call.name}(${arg})` });
+
+      const t0 = Date.now();
       const out = await toolRunner.run(call);
+      const ms = Date.now() - t0;
+      const ok = !out?.error;
+      noteToolResult(call.name, ok);
+
       const raw = String(out.text ?? out.error ?? "");
       const prune = pruneToolResult(raw, { meta: out.meta ?? {} });
       if (opts.toolCache) {
@@ -326,8 +427,14 @@ export function createAiBridge(opts) {
       emit({
         type: "tool",
         requestId,
+        callId,
         name: call.name,
-        detail: describeToolResult(call.name, arg, prune, false)
+        phase: "end",
+        detail: describeToolResult(call.name, arg, prune, false),
+        ok,
+        // ⚠ 完整错误原文，**不经过剪枝**：错误信息通常很短，剪枝反而把根因削掉。
+        error: ok ? "" : String(out.error ?? ""),
+        ms
       });
       results.push({ call, prune, out });
     }
@@ -413,6 +520,23 @@ export function createAiBridge(opts) {
     let usage = emptyUsage("no-usage");
     let rounds = 0;
     const toolTrace = [];
+
+    // ---- 工具数据源注入（每次请求）----
+    //
+    // 历史缺陷：toolRunner 在 createAiBridge 时创建一次，闭包了构造时的 opts.sceneDigest；
+    // 而 app-main 从未传该选项 → SceneDigest 每次必抛错 → 模型反复重试同一条坏路径 →
+    // 轮次耗尽 → 静默结束（用户看到「AI 说半句就消失」）。
+    //
+    // 正确数据源是 **request.context.sceneDigest**（渲染侧每次都传当前工程摘要）。
+    // 每次 run() 注入一次，工程切换/多会话下都不会用到过期数据。
+    toolRunner.setSceneDigest?.(request?.context?.sceneDigest ?? null);
+
+    /**
+     * 同一工具**连续**失败次数（成功一次即清零）。
+     * 达到 TOOL_FAILURE_LIMIT 后停止重试，并在工具结果里明确告知模型「该工具不可用」。
+     * 为什么必须由我们判断：模型不会自己意识到"这个工具坏了"，它会一直重试同一条路径。
+     */
+    const toolFailureStreak = new Map();
 
     // ---- 3.5 「思考中」状态机 ----
     //
@@ -582,7 +706,16 @@ export function createAiBridge(opts) {
       // ---- 工具调用 ----
       if (result.toolCalls?.length) {
         emit({ type: "usage", requestId, usage });
-        const executed = await runTools(requestId, result.toolCalls);
+        const executed = await runTools(
+          requestId,
+          result.toolCalls,
+          (name) => toolFailureStreak.get(name) ?? 0,
+          (name, ok) => {
+            // 成功一次即清零：只有**连续**失败才止损（偶发失败重试一次是合理的）
+            if (ok) toolFailureStreak.delete(name);
+            else toolFailureStreak.set(name, (toolFailureStreak.get(name) ?? 0) + 1);
+          }
+        );
         for (const { call, prune, out } of executed) {
           toolTrace.push({ name: call.name, arg: toolRunner.describeArg(call), pruned: prune.pruned });
           messages.push({
@@ -626,7 +759,24 @@ export function createAiBridge(opts) {
       usage = { ...usage, reason: "aborted" };
     }
 
-    // ---- 5. 落盘（无损）----
+    // ---- 5. 轮次耗尽兜底 ----
+    //
+    // 走到这里如果 finalText 还是空，说明模型把全部轮次都花在调工具上了
+    //（典型场景：某个工具一直失败，模型反复重试同一条路径）。
+    // 原来这里直接落盘 + done → 用户看到「AI 说半句就消失」。
+    // 现在**强制再问一次**（不带 tools），保证用户一定能拿到答复。
+    if (!finalText.trim() && !controller.signal.aborted) {
+      log(`工具轮次耗尽（${rounds} 轮）且无正文产出，触发兜底作答`);
+      const fb = await finalAnswerFallback({ resolved, settings, messages, requestId, controller, ai });
+      if (fb.text.trim()) {
+        finalText = fb.text;
+        // 兜底这轮也计入工具轨迹（便于排查"为什么多了一次请求"）
+        toolTrace.push({ name: "(final-answer-fallback)", arg: `rounds=${rounds}`, pruned: false });
+      }
+      if (fb.usage) usage = mergeUsage(usage, fb.usage);
+    }
+
+    // ---- 6. 落盘（无损）----
     // 只写 **targetSession**（发起时绑定的那个会话），绝不写当前的 `session` ——
     // 见 run() 开头 targetSession 的注释：否则切会话后旧请求会污染新会话的历史。
     const incoming = (request?.messages ?? []).filter((m) => m?.role === "user");

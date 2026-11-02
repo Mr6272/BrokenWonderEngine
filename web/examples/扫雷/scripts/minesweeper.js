@@ -536,7 +536,9 @@ function drawInfoBar(W, topH, S) {
   } else {
     msg = S.over
       ? (S.won ? "恭喜！全部安全格已翻开" : "踩到雷了，按笑脸重开")
-      : (S.started ? "进行中 · 左键翻开 / 右键插旗" : "左键翻开第一格（首击必安全）");
+      : (S.started
+        ? "进行中 · 左键翻开 / 右键插旗 · 点数字可连锁翻开"
+        : "左键翻开第一格（首击必安全）· 点数字可连锁翻开（旗数要对）");
   }
   text(msg, 16 + cw + 14, cy + 26, 15, TEXT_DARK, "left");
 

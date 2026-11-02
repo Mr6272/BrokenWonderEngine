@@ -198,6 +198,14 @@ function diagnosticsContext(): { errors: number; firstError?: string } | undefin
 interface ToolCallBlock {
   name: string;
   detail: string;
+  /** 主进程给的调用 id：start/end 用它配对，**同名工具连续调用不会串** */
+  callId?: string;
+  /** 主进程给的耗时（优先）；缺省时 UI 侧按 callId 计时 */
+  ms?: number;
+  /** 成败：true 成功 / false 失败 / **undefined 未知（老契约，不显示徽标）** */
+  ok?: boolean;
+  /** 失败时的**完整错误原文**（不截断，用户要拿去搜索/贴给别人） */
+  error?: string;
 }
 
 interface ChatTurn {
@@ -246,8 +254,63 @@ interface PanelHooks {
   runAction(intent: AiChatRequest["intent"]): void;
   /** 重画「正在思考」提示（phase 变化时调用） */
   renderThinking(): void;
+  /** 在对话区插一条系统提示（done 无正文 / error 可重试时用） */
+  appendSystemNote(text: string, retryLast?: () => void): void;
+  /** 重发上一条用户消息（「重试」按钮） */
+  retryLastUserMessage(): void;
 }
 let hooks: PanelHooks | null = null;
+
+/**
+ * 工具调用登记表（**模块级**，因为 `handleAiEvent` 是模块级函数）。
+ *
+ * 放在模块级还有一个好处：面板重渲染（`host.replaceChildren()`）不会清掉计时状态 ——
+ * 工具调用跨重绘仍然能算出耗时。
+ *
+ * ⚠ **必须用 `callId` 配对，不能用 name**：用户实际遇到「两个同名 SceneDigest
+ * 连续调用」—— 按 name 配对会把第一次的 start 配到第二次的 end，
+ * 耗时算错、成败甚至会串到另一个块上。
+ */
+const toolCalls = new Map<string, { t0: number; ms?: number; ok?: boolean; error?: string; detail?: string }>();
+
+function toolKeyOf(ev: { callId?: string; name: string }): string {
+  if (ev.callId) return `id:${ev.callId}`;
+  // 兼容未升级的主进程：按 name 造键（同 name 多次调用会互相覆盖 ——
+  // 明知不完美，但比"完全不显示耗时"好；升级后 callId 会接管）
+  return `name:${ev.name}`;
+}
+
+/**
+ * 处理 `tool` 事件：记录开始/结束，返回本次事件带来的增量信息。
+ *
+ * 兼容性设计（A 可能分两批落地）：
+ *   · `phase` 缺省 → 按 end 处理（老版本不区分 start/end）
+ *   · `ms` 缺省 → 用 callId 计时
+ *   · `ok` 缺省 → **不显示成败徽标**（不猜 —— 把失败画成绿勾比不显示更糟）
+ */
+function trackToolEvent(ev: {
+  name: string;
+  detail: string;
+  phase?: "start" | "end";
+  callId?: string;
+  ok?: boolean;
+  error?: string;
+  ms?: number;
+}): { ms?: number; ok?: boolean; error?: string } {
+  const key = toolKeyOf(ev);
+  if (ev.phase === "start") {
+    toolCalls.set(key, { t0: Date.now(), detail: ev.detail });
+    return {};
+  }
+  const prev = toolCalls.get(key);
+  let ms: number | undefined = typeof ev.ms === "number" ? ev.ms : undefined;
+  if (ms === undefined && ev.phase === "end" && prev) {
+    ms = Date.now() - prev.t0;
+  }
+  toolCalls.set(key, { t0: prev?.t0 ?? Date.now(), ms, ok: ev.ok, error: ev.error, detail: ev.detail });
+  return { ms, ok: ev.ok, error: ev.error };
+}
+
 
 /** 由外壳注入的重画请求（diff 应用后刷新剧本面板） */
 let requestRepaint: () => void = () => {};
@@ -312,8 +375,32 @@ function handleAiEvent(ev: AiEvent): void {
       return;
     }
     case "tool": {
-      if (live) live.tools.push({ name: ev.name, detail: ev.detail });
-      hooks?.appendToolBlock({ name: ev.name, detail: ev.detail });
+      // 主线：耗时 / 成败 / 完整错误。
+      // 兼容性（A 可能分两批落地）：
+      //   · phase 缺省 → 按 end 处理（老版本不区分 start/end）
+      //   · ms 缺省 → UI 侧按 callId 计时
+      //   · ok 缺省 → **不显示成败徽标**，不猜（猜错比不显示严重）
+      const t = trackToolEvent({
+        name: ev.name,
+        detail: ev.detail,
+        phase: (ev as { phase?: "start" | "end" }).phase,
+        callId: (ev as { callId?: string }).callId,
+        ok: (ev as { ok?: boolean }).ok,
+        error: (ev as { error?: string }).error,
+        ms: (ev as { ms?: number }).ms
+      });
+      const blk: ToolCallBlock = {
+        name: ev.name,
+        detail: ev.detail,
+        callId: (ev as { callId?: string }).callId,
+        ms: t.ms,
+        ok: t.ok,
+        error: t.error
+      };
+      // **在数据层合并**（不是 DOM 层去重）：
+      // renderThread() 会整树重建，DOM 查存必然失效 —— 我写过一版，测出来 4 个块。
+      if (live) upsertToolBlock(live.tools, blk);
+      hooks?.appendToolBlock(blk);
       return;
     }
     case "usage": {
@@ -334,6 +421,16 @@ function handleAiEvent(ev: AiEvent): void {
       endThinking();
       pendingEdit = extractCodeBlock(ev.text);
       hooks?.renderThread();
+      // **正文为空 = 这轮什么都没产出**（典型：模型连续调坏工具直到轮次耗尽）。
+      // 用户此刻的处境是「AI 说了半句、没了、也没有任何解释」——
+      // 沉默的失败比报错更让人困惑，必须明确说明 + 给出口（重试）。
+      const produced = (String(ev.text ?? "") + String(live?.text ?? "")).trim();
+      if (!produced) {
+        hooks?.appendSystemNote(
+          "这轮没有产出答复（可能工具连续失败，或模型轮次耗尽）。可以重试，或换个问法。",
+          () => hooks?.retryLastUserMessage()
+        );
+      }
       hooks?.renderThinking?.();
       hooks?.updateMeter();
       return;
@@ -346,6 +443,13 @@ function handleAiEvent(ev: AiEvent): void {
       currentRequest = "";
       endThinking();
       hooks?.renderThread();
+      // recoverable=true 表示"再试一次可能成功"（网络抖动 / 限流等）。
+      // 给明确的重试入口，而不是让用户自己琢磨要不要再点一次。
+      if (ev.recoverable) {
+        hooks?.appendSystemNote(`这次调用失败：${ev.message}。这个问题可能可以重试解决。`, () =>
+          hooks?.retryLastUserMessage()
+        );
+      }
       hooks?.renderThinking?.();
       hooks?.updateMeter();
       return;
@@ -356,6 +460,31 @@ function handleAiEvent(ev: AiEvent): void {
 // ============================================================================
 // 面板入口
 // ============================================================================
+
+/**
+ * 把工具事件合并进 `tools` 数组（**按 callId，不是按 name/detail**）。
+ *
+ * 为什么必须在**数据层**合并而不是在 DOM 层去重：
+ *   `renderThread()` 会 `thread.replaceChildren()` 整树重建，
+ *   任何基于 DOM 查存的去重都会在下次重绘后失效 —— 我写过一版，实测出来 4 个块
+ *   （start 一条 + end 一条，× 两次调用）。数据层合并才对：
+ *   一次调用在 `tools` 里只占一条，start 建、end 原地更新。
+ *
+ * 为什么 key 是 `callId`：用户实际遇到「两个同名 SceneDigest 连续调用」，
+ * 按 name 合并会把两次调用合成一条（耗时和错误都会串）。
+ * 没有 callId 时（老契约）退回 name —— **宁可多显示一条，也不错误合并**。
+ */
+export function upsertToolBlock(list: ToolCallBlock[], blk: ToolCallBlock): void {
+  const keyOf = (b: ToolCallBlock): string => b.callId ?? `nm:${b.name}`;
+  const key = keyOf(blk);
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (keyOf(list[i]) === key) {
+      list[i] = { ...list[i], ...blk };
+      return;
+    }
+  }
+  list.push(blk);
+}
 
 /**
  * 渲染 AI 面板。
@@ -464,7 +593,15 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
 
   // ---------------- 发送 / 停止 ----------------
 
-  async function send(intent: AiChatRequest["intent"]): Promise<void> {
+  /**
+   * 发一轮。
+   *
+   * @param intent 动作类型
+   * @param retryText 重试用：直接发这段文本（不走输入框）。
+   *   「重试」按钮要能重发**上一条用户消息**，而那时输入框已经被清空了 ——
+   *   所以必须有这个入口，否则"重试"点下去只会发出内置提示语，不是原来那句。
+   */
+  async function send(intent: AiChatRequest["intent"], retryText?: string): Promise<void> {
     if (currentRequest) {
       info("上一轮还在生成，等它结束或点「停止」");
       return;
@@ -474,7 +611,7 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
       return;
     }
 
-    const typed = ta.value.trim();
+    const typed = retryText ?? ta.value.trim();
     const preset = actionPrompt(intent);
     // 「继续对话」必须用输入框内容；其余动作输入框为空时用内置提示语，
     // 免得用户点了按钮却发出一条空消息。
@@ -486,7 +623,7 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
 
     turns.push({ role: "user", text, tools: [], streaming: false });
     turns.push({ role: "assistant", text: "", tools: [], streaming: true });
-    ta.value = "";
+    if (!retryText) ta.value = "";   // 重试不动输入框（那句话本来就不在里面）
     trimHistory();
 
     const requestId = newRequestId();
@@ -1383,21 +1520,94 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     thread.scrollTop = thread.scrollHeight;
   }
 
+
+  // ---------------- 工具调用块（耗时 / 成败 / 完整错误） ----------------
+
+  /**
+   * 当前轮的 tool 调用登记表。
+   *
+   * ⚠ **必须用 `callId` 配对，不能用 name**：
+   * 用户实际遇到过「两个同名 SceneDigest 连续调用」—— 按 name 配对会把
+   * 第一次的 start 配到第二次的 end，耗时算错、成败甚至会串到另一个块上。
+   * 只在主进程没给 callId 时才退回 name+序号（并接受这种退化的风险）。
+   */
+  /**
+   * 处理 `tool` 事件：记录开始/结束，并返回该事件带来的增量信息。
+   *
+   * 兼容性设计（A 可能分两批落地）：
+   *   · `phase` 缺省 → 按 end 处理（老版本只有一条"调用X"和一条"结果"两条消息，
+   *     分不清谁是谁，那就当它是一条完整的事件，不显示耗时）；
+   *   · `ms` 缺省 → 用 callId 计时（再退回 name+序号）；
+   *   · `ok` 缺省 → **不显示成败徽标**（不猜成成功也不猜成失败 ——
+   *     猜错的后果比不显示严重：把失败画成绿勾会让用户以为工具成功了）。
+   */
   function appendToolBlock(tool: ToolCallBlock): void {
-    thread.appendChild(toolBlock(tool));
+    // 同一个调用只产生**一个**块：start 建块，end 原地更新。
+    //
+    // ⚠ key 必须用 `callId`，不能用 `name::detail`：
+    //   start 的 detail 是「调用 X(arg)」、end 的 detail 是「X 32 行 / 1.2K 字符」——
+    //   两者**永远不同**，按 detail 做 key 会让每次调用变成两个块。
+    //   这正是用户截图里"两个 SceneDigest 空块"的成因之一（另一个是 start 块本身没内容）。
+    //   没有 callId 时（老契约）退回 name+序号，至少不会重复建块。
+    const key = tool.callId ? `id:${tool.callId}` : `nm:${tool.name}`;
+    const existing = thread.querySelector(`[data-ai-tool-key="${CSS.escape(key)}"]`) as HTMLElement | null;
+    if (existing) {
+      // 原地替换成最新状态（保留展开状态由新块自己决定：失败默认展开）
+      const wasOpen = (existing.querySelector(".body") as HTMLElement | null)?.style.display !== "none";
+      const fresh = toolBlock(tool);
+      fresh.dataset.aiToolKey = key;
+      if (wasOpen) (fresh.querySelector(".body") as HTMLElement | null)!.style.display = "";
+      existing.replaceWith(fresh);
+    } else {
+      const blk = toolBlock(tool);
+      blk.dataset.aiToolKey = key;
+      thread.appendChild(blk);
+    }
     thread.scrollTop = thread.scrollHeight;
   }
 
+  /**
+   * 工具块。
+   *
+   * 三种视觉（**这是用户报「AI 中断自己」的直接观感来源**）：
+   *   · 失败：左侧红条 + `⚠ 失败` 徽标 + 展开显示**完整错误原文**（不截断）
+   *   · 成功：左侧绿条（`ok === true` 才有；未知就不画，不猜）
+   *   · 未知（老契约）：保持中性，只显示耗时
+   * 为什么失败要红色且常驻展开：用户看到两个一模一样的块，根本不知道哪个失败了。
+   */
   function toolBlock(tool: ToolCallBlock): HTMLElement {
     const box = el("div", { class: "ai-tool" });
+    const failed = tool.ok === false;
+    const okTrue = tool.ok === true;
+    if (failed) box.classList.add("failed");
+    else if (okTrue) box.classList.add("ok");
+
     const head = el("header");
-    head.appendChild(svg(I.puzzle, 13));
+    head.appendChild(svg(failed ? I.warn : I.puzzle, 13));
     head.appendChild(el("span", { class: "ai-tool-name" }, tool.name));
+    // 成败徽标：只有明确知道才显示（ok 缺省 = 老契约 = 不猜）
+    if (failed) head.appendChild(el("span", { class: "ai-tool-badge failed" }, "⚠ 失败"));
+    else if (okTrue) head.appendChild(el("span", { class: "ai-tool-badge ok" }, "完成"));
     head.appendChild(el("div", { class: "spacer" }));
+    // 耗时：用户判断"是不是卡死"的主要依据 —— 空块挂很久最吓人
+    if (typeof tool.ms === "number") {
+      head.appendChild(el("span", { class: "hint ai-tool-ms" }, `${Math.round(tool.ms)}ms`));
+    }
     head.appendChild(el("span", { class: "hint" }, "工具调用"));
-    const body = el("div", { class: "body" }, tool.detail);
-    body.style.display = "none";
-    let open = false;
+
+    // 失败时 body 默认**展开**：错误原文是用户拿去搜索/贴给别人看的，
+    // 藏在折叠里等于没给。成功则默认折叠（内容通常很长，刷屏）。
+    const body = el("div", { class: "body" });
+    if (failed && tool.error) {
+      // 完整错误原文，不截断（用户明确要求）
+      body.appendChild(el("div", { class: "ai-tool-error mono" }, tool.error));
+      if (tool.detail) body.appendChild(el("div", { class: "ai-tool-detail" }, tool.detail));
+    } else {
+      body.textContent = tool.detail;
+    }
+    let open = failed;
+    body.style.display = open ? "" : "none";
+
     head.addEventListener("click", () => {
       open = !open;
       body.style.display = open ? "" : "none";
@@ -1405,6 +1615,47 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     box.appendChild(head);
     box.appendChild(body);
     return box;
+  }
+
+  /**
+   * 在对话区插一条系统提示。
+   *
+   * 用途：`done` 但正文为空 / 出错可重试 —— 这两种都是**"AI 什么都没说就停了"**
+   * 的场景。沉默的失败比报错更让人困惑，所以必须明确告诉用户发生了什么、能做什么。
+   *
+   * @param retryLast 给了就渲染「重试」按钮（重发上一条用户消息）
+   */
+  function appendSystemNote(text: string, retryLast?: () => void): void {
+    const box = el("div", { class: "ai-note" });
+    box.dataset.aiNote = "1";
+    box.appendChild(svg(I.info, 13));
+    box.appendChild(el("span", { class: "ai-note-text" }, text));
+    if (retryLast) {
+      box.appendChild(el("div", { class: "spacer" }));
+      const btn = button("重试", retryLast, {
+        size: "sm",
+        variant: "ghost",
+        iconPath: I.redo,
+        title: "重发上一条消息"
+      });
+      btn.dataset.aiRetry = "1";
+      box.appendChild(btn);
+    }
+    // 插到最后一个助手回合之后（没有助手回合就追加到末尾）
+    thread.appendChild(box);
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  /** 重发上一条用户消息（用于「重试」按钮）。 */
+  function retryLastUserMessage(): void {
+    if (currentRequest) return;   // 正在跑就别重复发
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const t = turns[i];
+      if (t.role === "user") {
+        void send("chat", t.text);
+        return;
+      }
+    }
   }
 
   /**
@@ -1508,17 +1759,50 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     stopBtn.style.display = "none";
   }
 
+  /**
+   * `usage.reason` → 人话。
+   *
+   * 为什么必须映射：`reason` 是主进程的机器可读标记（`no-usage` / `cache-hit` …），
+   * 直接贴到界面上用户看不懂 —— 截图里就出现过「路由: no-usage」，
+   * 用户的理解可能是"没用量？是不是没扣钱？还是统计坏了？"，三种都猜不出。
+   *
+   * 尤其 `no-usage` 必须解释清楚：它表示**这次调用没拿到 usage 数据**
+   * （供应商/模型没返回用量字段），**不代表没有消耗 token**。
+   * 不写这句，用户会以为"没花钱"或"统计坏了"。
+   */
+  const USAGE_REASON_CN: Record<string, string> = {
+    "no-usage": "用量未统计（本次响应没有返回 usage 数据，不代表没有消耗）",
+    "local-mock": "本地演示（零 token）",
+    mock: "本地演示（零 token）",
+    "cache-hit": "前缀缓存命中",
+    cached: "前缀缓存命中"
+  };
+
   function routeReasonText(): string {
     for (let i = turns.length - 1; i >= 0; i--) {
       const t = turns[i];
-      if (t.role === "assistant" && t.reason) return `路由：${t.reason}`;
+      if (t.role === "assistant" && t.reason) {
+        // 认识的标记翻成人话；不认识的原样显示（至少让用户知道这是个代号，
+        // 而不是一句英文故障信息）
+        const cn = USAGE_REASON_CN[t.reason];
+        return cn ? `用量：${cn}` : `用量：${t.reason}`;
+      }
     }
-    if (!statusLoaded) return "路由：—";
-    return status?.mode === "mock" ? "路由：本地演示（零 token）" : "路由：—";
+    if (!statusLoaded) return "用量：—";
+    return status?.mode === "mock" ? "用量：本地演示（零 token）" : "用量：—";
   }
 
   // 把实现填进槽位：模块层的流式回调据此驱动本面板的 DOM
-  hooks = { renderThread, appendDelta, appendToolBlock, updateMeter, renderThinking, runAction: (intent) => void send(intent) };
+  hooks = {
+    renderThread,
+    appendDelta,
+    appendToolBlock,
+    updateMeter,
+    renderThinking,
+    appendSystemNote,
+    retryLastUserMessage,
+    runAction: (intent) => void send(intent)
+  };
 
   void refreshStatus(headBar, mockHint);
   renderThread();
@@ -1865,6 +2149,87 @@ export function demoThinking(phase: "connecting" | "reasoning" | "answering" | "
   freezeThinkingForDemo(phase, chars);
   hooks?.renderThinking?.();
 }
+
+/**
+ * 验收出口：构造「工具失败 + 空答复」的一轮（仅截图用，**不发真实请求**）。
+ *
+ * 为什么必须走事件路径而不是直接拼 DOM：
+ *   直接拼 DOM 只能证明"样式能画出来"，走 `handleAiEvent` 才能证明
+ *   "UI 收到 tool(failed) / done(空文本) 事件后确实这样显示"。
+ * 为什么需要它：mock 流不产生 tool 事件，真模型需要 key，
+ *   而"失败工具块"和"空答复提示"这两个视觉必须有图自证。
+ */
+export function demoToolFailure(): void {
+  const rid = "__demo_tool_fail__";
+  const liveTurnExists = turns.length > 0 && turns[turns.length - 1].role === "assistant";
+  if (!liveTurnExists) {
+    turns.push({ role: "user", text: "审一遍当前场景", tools: [], streaming: false });
+    turns.push({ role: "assistant", text: "", tools: [], streaming: true });
+  }
+  currentRequest = rid;
+
+  // 两次同名工具调用（正是用户遇到的场景：两个 SceneDigest）
+  const calls = [
+    { callId: "demo-call-1", ms: 812, error: "工具 SceneDigest 执行失败：主进程未注入工程摘要（sceneDigest 不在工具上下文里）" },
+    { callId: "demo-call-2", ms: 1234, error: "工具 SceneDigest 执行失败：同上，重试路径仍然拿不到 context.sceneDigest" }
+  ];
+  for (const c of calls) {
+    handleAiEvent({
+      type: "tool",
+      requestId: rid,
+      name: "SceneDigest",
+      detail: "调用 SceneDigest(mapSize=64x64)",
+      phase: "start",
+      callId: c.callId
+    } as AiEvent);
+    handleAiEvent({
+      type: "tool",
+      requestId: rid,
+      name: "SceneDigest",
+      detail: "SceneDigest 32 行 / 1.2K 字符 · 已剪枝 → toolCache/9f3a1b2c…",
+      phase: "end",
+      callId: c.callId,
+      ok: false,
+      error: c.error,
+      ms: c.ms
+    } as AiEvent);
+  }
+  // 模型说了半句就没了 + done 无正文 → 系统提示
+  handleAiEvent({ type: "delta", requestId: rid, text: "工具调用失败了，我换个路径再试一次…" } as AiEvent);
+  handleAiEvent({
+    type: "usage",
+    requestId: rid,
+    usage: {
+      inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0,
+      reason: "no-usage"
+    }
+  } as AiEvent);
+  handleAiEvent({
+    type: "done",
+    requestId: rid,
+    text: "",
+    usage: { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reason: "no-usage" },
+    cacheHitRate: 0,
+    savedUsdApprox: 0
+  } as AiEvent);
+}
+
+/** 验收出口：只截「done 但正文为空」的系统提示（不含工具块）。 */
+export function demoEmptyDone(): void {
+  const rid = "__demo_empty_done__";
+  turns.push({ role: "user", text: "把这个场景的性能问题找出来", tools: [], streaming: false });
+  turns.push({ role: "assistant", text: "", tools: [], streaming: true });
+  currentRequest = rid;
+  handleAiEvent({
+    type: "done",
+    requestId: rid,
+    text: "",
+    usage: { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reason: "no-usage" },
+    cacheHitRate: 0,
+    savedUsdApprox: 0
+  } as AiEvent);
+}
+
 
 export function aiPanelDebugModels(): { state: AiModelsState | null; hostMode: string; hasHost: boolean } {
   const w = window as unknown as { bweHost?: { mode?: string } };
