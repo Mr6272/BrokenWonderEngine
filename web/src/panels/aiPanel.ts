@@ -43,7 +43,7 @@ import {
 import { error, info, modal, ok, warn } from "../ui/toast.ts";
 import { renderSessionSwitcher } from "./aiSessions.ts";
 import { presentError, type ErrorPresentation } from "./aiErrorView.ts";
-import { reconcileKeyBroken } from "./keyBrokenReconcile.ts";
+import { keyBrokenViewOf } from "./keyBrokenView.ts";
 
 // ============================================================================
 // 工程摘要（契约 §4.5）—— 唯一允许进入 prompt 的工程信息
@@ -776,7 +776,17 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
    *   · count >= 2 → 同一条提示 + 「去重填」展开成小列表，每行一个模型 + 各自按钮
    *   · count === 0 → 完全不出现
    */
-  function renderKeyBrokenHint(st: AiStatus | null): void {
+  /**
+   * 渲染 Key 失效批量提示条。
+   *
+   * ⚠ **`models` 必须是参数，不能自己去读全局 `modelsState`** ——
+   *   这是 A 提的改造建议，比运行时守卫更根本：
+   *   接收 `AiModelEntry[]` 后，调用点若还没 `await loadModels()` 就只能传 `[]`，
+   *   而 `[]` 会让计数为 0 —— 但那**正是原来的 bug**，不是一种"合法的降级"。
+   *   传 `null` 更不可能：类型直接不允许。约束前移到类型系统，比运行时抛错更早。
+   *   （曾经三次同类事故都是"渲染依赖某状态但没确认它已就绪"。）
+   */
+  function renderKeyBrokenHint(models: AiModelEntry[], st: AiStatus | null): void {
     const host = document.querySelector("[data-ai-keybroken]") as HTMLElement | null;
     if (!host) return;
 
@@ -787,24 +797,14 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     //
     // 清单未加载时**抛错**（由下方 try/catch 兜底并记输出面板）：
     // 曾因为这里读到 null 清单 → countKeyBroken([]) 恒为 0 → 提示条永远隐藏。
-    let perEntry = 0;
-    try {
-      perEntry = countKeyBroken(requireModels("renderKeyBrokenHint").models);
-    } catch (e) {
-      // 写「输出」面板的 error 级（红色），并在控制台也打一份 ——
-      // 这类顺序错误必须**看得见**，否则又会变成"静默渲染成空"。
-      // 不向上抛：一个提示条不该把整个面板打死（生产环境的取舍），
-      // 但开发时看输出面板/控制台立刻就能发现。
-      appendOutput("AI", `[顺序错误] ${(e as Error).message}`, "error");
-      console.error("%c[AI 面板 / 顺序错误]", "color:#c33;font-weight:bold", (e as Error).message);
-    }
-    const check = reconcileKeyBroken(perEntry, st?.keyUndecryptableCount, st?.keyUndecryptableEntries);
-    if (check.warning && !keyBrokenWarned) {
+    // 决策交给纯函数（可单测），这里只负责渲染
+    const view = keyBrokenViewOf(models, st);
+    if (view.warning && !keyBrokenWarned) {
       keyBrokenWarned = true;   // 只记一次，不刷屏
-      appendOutput("AI", check.warning, "warn");
+      appendOutput("AI", view.warning, "warn");
     }
 
-    const count = check.shown;
+    const count = view.count;
     if (!count) {
       host.style.display = "none";
       return;
@@ -815,10 +815,10 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     const head = el("div", { class: "ai-keybroken-head" });
     head.appendChild(svg(I.warn, 13));
     head.appendChild(
-      el("span", { class: "ai-keybroken-text" }, `${count} 个模型的 API Key 需要重新粘贴`)
+      el("span", { class: "ai-keybroken-text" }, view.title)
     );
     head.appendChild(el("div", { class: "spacer" }));
-    const goBtn = button(count === 1 ? "去重填" : "查看并重填", () => void rekeyAll(count), {
+    const goBtn = button(view.buttonLabel, () => void rekeyAll(count), {
       size: "sm",
       variant: "primary",
       iconPath: I.lock,
@@ -829,9 +829,9 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     host.appendChild(head);
 
     // count >= 2 才展开列表（1 个时直接由「去重填」处理，不占高度）
-    if (count >= 2) {
+    if (view.showList) {
       const list = el("div", { class: "ai-keybroken-list" });
-      const brokenEntries = (modelsState?.models ?? []).filter((m) => m.keyUndecryptable);
+      const brokenEntries = view.brokenEntries;
       for (const m of brokenEntries) {
         const row = el("div", { class: "ai-keybroken-row" });
         row.dataset.aiKeybrokenItem = m.id;
@@ -873,7 +873,7 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       if (list) {
         list.style.display = list.style.display === "none" ? "" : "none";
       } else {
-        renderKeyBrokenHint(status);   // 首次点：让它按 >=2 的形态渲染出列表
+        renderKeyBrokenHint(requireModels("rekeyAll").models, status);   // 首次点：按 >=2 的形态渲染出列表
         document.querySelector(".ai-keybroken-list")!.scrollIntoView({ block: "nearest" });
       }
       return;
@@ -963,9 +963,12 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     // ========================================================================
     await loadModels();
 
-    // 清单就绪后才渲染"依赖逐条数据"的提示
+    // 清单就绪后才渲染"依赖逐条数据"的提示。
+    // `requireModels()` 只在这里用一次：拿到**真的数组**再传给纯函数
+    // —— 函数本身不读全局，所以可以直接单测（喂数组、断言输出）。
+    const modelsReady = requireModels("refreshStatus/renderKeyBrokenHint").models;
     renderInsecureHint(status);
-    renderKeyBrokenHint(status);
+    renderKeyBrokenHint(modelsReady, status);
 
     // 常驻状态标识：不只弹一次性 toast。
     // 为什么必须常驻：用户可能过一会儿才发下一条消息，那时才会失败；

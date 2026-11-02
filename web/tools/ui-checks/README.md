@@ -123,6 +123,24 @@ npm run verify:ui
    - `demoInsecure()` 同理，注入 `insecure:true` 后提示条恒为 `display:none`。
 
    第一次我只修了症状（改成重建面板）；第二次又踩 —— **同一机制第二次出现是最强的根因信号**。
+
+   **第四次（2026-11-02）**：`renderKeyBrokenHint` 调在 `await loadModels()` 之前，
+   `modelsState` 是 null → `countKeyBroken([])` 恒 0 → 批量提示条**永远 display:none**
+   （真机 probe 出 rect `0x0` / `visible:false` / text 空）。
+   **三次同类事故的共性**：渲染依赖某个状态，却没人确认那个状态已就绪。
+
+   **最终修法（约束前移到类型系统，比运行时守卫更根本）**：
+   ```ts
+   // ❌ 自读全局：顺序错了只能在运行时发现，且表现为"静默渲染成空"
+   function renderKeyBrokenHint(st: AiStatus | null)
+   // ✅ 接收数据：传 null 编译期就报错；决策逻辑抽成纯函数可直接单测
+   function renderKeyBrokenHint(models: AiModelEntry[], st: AiStatus | null)
+   ```
+   - 调用点用 `requireModels()` 取一次真数组再传（`[]` 是类型挡不住的漏网，靠它兜底）
+   - 决策抽到 `keyBrokenView.ts` 的 `keyBrokenViewOf(models, status)`，
+     **不用起 Electron 就能喂数组断言**
+   - 单测里专门有「空数组」用例：必须返回 count=0 **并报出统计不一致** ——
+     那正是原 bug 的形态
    最终修法是加 `statusPinnedForDemo` 开关：demo 注入后置 true，`refreshStatus` 见到就
    **跳过真实拉取**，从根上关掉覆写。
 
