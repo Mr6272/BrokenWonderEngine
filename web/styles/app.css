@@ -4787,3 +4787,210 @@ body .command-palette {
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/* ==========================================================================
+   错误气泡（结构化）：人话在上，技术详情折叠，request_id 可复制
+   --------------------------------------------------------------------------
+   起因：400 的原始 JSON 原样挂在对话区，占一大块、用户看不懂，
+   而真正有用的 request_id 反而埋在里面。
+   ========================================================================== */
+.ai-panel .ai-error {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 6px 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  border-left: 3px solid var(--danger);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface-2));
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.ai-panel .ai-error header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--danger);
+}
+
+.ai-panel .ai-error-title {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.ai-panel .ai-error-hint {
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* 服务端原文（已从 JSON 抽出，通常是一句人话） */
+.ai-panel .ai-error-msg {
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-family: var(--mono);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* 技术详情：默认折叠 —— 用户不查就不该看到 JSON */
+.ai-panel .ai-error-detail summary {
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: 11px;
+  user-select: none;
+}
+
+.ai-panel .ai-error-detail summary:hover {
+  color: var(--text-2);
+}
+
+.ai-panel .ai-error-pre {
+  margin: 4px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* request_id：单独一行、等宽、可点复制 */
+.ai-panel .ai-error-rid {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--line-soft);
+}
+
+.ai-panel .ai-error-rid-label {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.ai-panel .ai-error-rid-value {
+  color: var(--text-2);
+  font-size: 11px;
+  word-break: break-all;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.ai-panel .ai-error-rid-value:hover {
+  color: var(--accent);
+}
+
+/* 错误气泡里的重试按钮左对齐（不占满整行） */
+.ai-panel .ai-error > .btn {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* 模型 chip 的「Key 失效」态：用 **danger**（不是 warn）。
+   为什么比 warn 更重：warn 是「还没填，需要你去填」，
+   danger 是「你填过了、但客户端解不开 —— 这是我们的故障」。
+   两者严重程度不同，颜色必须不同，否则用户分不清"是我没做"还是"软件坏了"。 */
+.ai-panel .model-chip.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-2));
+  font-weight: 600;
+}
+
+/* 明文存储告知条：一行小字 + 可关闭
+   —— 是安全告知，不是错误；不能抢视觉，也不能藏着。
+   放在 AI 面板顶部（模型 chip 下方），因为 chip 只回答"能不能用"。 */
+.ai-panel .ai-insecure-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 12px 0;
+  padding: 4px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.ai-panel .ai-insecure-hint .ai-insecure-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ai-panel .ai-insecure-hint svg {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+
+/* ==========================================================================
+   Key 失效批量提示条（阻断级：key 解不开 = 功能完全不可用）
+   --------------------------------------------------------------------------
+   为什么是常驻条：阻断级问题不能藏进二级菜单，打开面板第一眼必须看到。
+   为什么用 danger：这不是"提醒你配一下"，是"你配了但客户端解不开"。
+   ========================================================================== */
+.ai-panel .ai-keybroken-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 12px 0;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--line));
+  border-left: 3px solid var(--danger);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface-2));
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.ai-panel .ai-keybroken-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-panel .ai-keybroken-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+}
+
+/* count >= 2 时的内嵌小列表（每行一个模型 + 各自重填按钮） */
+.ai-panel .ai-keybroken-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed color-mix(in srgb, var(--danger) 30%, var(--line));
+}
+
+.ai-panel .ai-keybroken-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-panel .ai-keybroken-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-panel .ai-keybroken-empty {
+  color: var(--text-3);
+  font-size: 10.5px;
+}

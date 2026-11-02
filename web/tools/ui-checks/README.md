@@ -112,6 +112,33 @@ npm run verify:ui
 **不要顺手删掉它们**。删了不会报错，只会让验收截图静默退回"只有 mock 两条"的状态，
 而那时没有人会注意到"模型切换功能其实一直没被自动验证过"。
 
+### ⚠ `data-demo-*` 注入的第三条约束（2026-11-02 两次踩坑后补）
+
+3. **注入的状态必须防止被后续真实拉取覆盖** —— 这是 demo 类机制的通病，
+   而且它表现为「截图正常、提示条空着」，极难察觉。
+
+   实际踩过两次：
+   - `demoKeyBroken()` 注入 `modelsState` 后，`renderAiPanel` 重新调 `refreshStatus`，
+     而 `refreshStatus` **无条件** `status = await aiStatus()` → 注入的 status 被真实值冲掉。
+   - `demoInsecure()` 同理，注入 `insecure:true` 后提示条恒为 `display:none`。
+
+   第一次我只修了症状（改成重建面板）；第二次又踩 —— **同一机制第二次出现是最强的根因信号**。
+   最终修法是加 `statusPinnedForDemo` 开关：demo 注入后置 true，`refreshStatus` 见到就
+   **跳过真实拉取**，从根上关掉覆写。
+
+   **凡新增 `data-demo-*` 触发器，必须回答两个问题**：
+   1. 注入的状态会被谁读走/覆盖？（`refreshStatus` / `loadModels` / 面板重建）
+   2. 有没有对应的 `pinned` 标志把它保住？
+
+```bash
+# 现有 demo 触发器一览（全部需要遵守上面的第三条约束）
+#   data-demo-interaction-states / data-demo-models      → 工具条交互态 / 模型清单
+#   data-demo-thinking[-reasoning|-slow]                 → 思考四 phase
+#   data-demo-tool-fail / data-demo-empty-done           → 工具失败 / 空答复
+#   data-demo-server-error / data-demo-retry-twice       → 错误结构化 / 重试去重
+#   data-demo-key-broken / data-demo-insecure            → Key 失效 / 明文存储
+```
+
 ### 对应的现成命令
 
 ```bash

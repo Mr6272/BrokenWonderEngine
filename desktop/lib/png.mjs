@@ -139,8 +139,47 @@ export function analyzePng(buf) {
   const foregroundRatio = 1 - backgroundRatio;
   // 判定「空」：前景极少（<1.5%）或颜色数 < 8 —— 白屏、纯色、加载占位都属于这类。
   const isEmpty = foregroundRatio < 0.015 || counts.size < 8;
+
+  /**
+   * **角落采样亮度**（避开中央区域）。
+   *
+   * 为什么需要它：全画面众数色会被「大面积覆盖物」骗 ——
+   * modal 的半透明遮罩一铺，深色遮罩就成了面积最大的颜色，
+   * 于是浅色主题被误判成深色（实测：带 modal 的截图稳定误判）。
+   * 而**主题是底色属性**，应该看"没有被内容覆盖的地方" —— 也就是四角。
+   *
+   * 做法：从四个角各取 32×32 区域，算中位亮度（不看众数、不受单点噪声影响）。
+   */
+  const cornerPx = 32;
+  const cornerLums = [];
+  const sampleRegion = (x0, y0, w, h) => {
+    for (let y = y0; y < y0 + h; y += 2) {
+      for (let x = x0; x < x0 + w; x += 2) {
+        if (x < 0 || y < 0 || x >= width || y >= height) continue;
+        const o = (y * width + x) * 4;
+        cornerLums.push(relativeLuminance(rgba[o], rgba[o + 1], rgba[o + 2]));
+      }
+    }
+  };
+  sampleRegion(0, 0, cornerPx, cornerPx);                                   // 左上
+  sampleRegion(width - cornerPx, 0, cornerPx, cornerPx);                    // 右上
+  sampleRegion(0, height - cornerPx, cornerPx, cornerPx);                   // 左下
+  sampleRegion(width - cornerPx, height - cornerPx, cornerPx, cornerPx);    // 右下
+  cornerLums.sort((a, b) => a - b);
+  const cornerLuminance = cornerLums.length
+    ? cornerLums[Math.floor(cornerLums.length / 2)]
+    : backgroundLuminance;
+
   // 判定「深色主题」：主色亮度 < 0.35（奶油主题的白底约 0.94，深蓝约 0.09）。
+  // ⚠ 但这个 isDark 是**像素判据**，会被遮罩骗 —— 真正的主题判定请看 assertTheme()，
+  //   它优先用 DOM 底色。这里保留 isDark 只为「疑似深色覆盖」警告。
   const isDark = backgroundLuminance < 0.35;
+
+  /**
+   * 是否存在「大面积深色覆盖」但角落是浅色 —— 典型是 modal/遮罩/全屏对话框。
+   * 用来在日志里解释「为什么这张图看起来暗」，不是失败判据。
+   */
+  const darkOverlayLikely = isDark && cornerLuminance >= 0.5;
   return {
     width,
     height,
@@ -152,6 +191,10 @@ export function analyzePng(buf) {
     backgroundLuminance,
     averageLuminance,
     isDark,
+    /** 四角采样的中位亮度（避开中央 modal/遮罩，是更可靠的"底色"代理）。 */
+    cornerLuminance,
+    /** 疑似有大面积深色覆盖（modal/遮罩）：众数色深、但角落浅。仅用于警告，不作失败判据。 */
+    darkOverlayLikely,
     partiallyTransparent: hasAlpha(rgba),
     isEmpty
   };
@@ -193,27 +236,120 @@ export function describePng(stats) {
 }
 
 /**
- * 主题断言：主色亮度 < 0.35 判深色。
+ * 把 CSS 颜色字符串（`rgb(r,g,b)` / `rgba(...)` / `#rrggbb`）解析成 Rec.709 亮度。
  *
- * 为什么用「最高频颜色」而不是平均亮度：奶油主题里大面积是浅底（~0.94），
- * 但深色文字/描边占比不低，平均亮度会被拉低到 0.6 附近，阈值判断会飘；
- * 而「出现次数最多的颜色」就是窗口底色，语义最直接。
+ * 为什么放在 Node 侧而不是渲染侧的注入脚本里：那段脚本写在模板字符串内，
+ * 正则的反斜杠要穿透两层转义（写错就会让整个注入脚本抛错，表现为所有字段 undefined ——
+ * 比"算错一个值"难查得多）。放在这里，正则只经过一层 JS 字符串，所见即所得。
  *
- * @returns {{theme:"cream"|"dark"|"unknown", detail:string, ok:boolean}}
+ * @returns {number|null} 解析失败返回 null（调用方据此降级到像素判据）
  */
-export function assertTheme(stats) {
-  if (stats.isEmpty) {
-    return { theme: "unknown", ok: false, detail: "截图空白，无法判断主题" };
+export function cssColorLuminance(css) {
+  const text = String(css ?? "").trim();
+  if (!text) return null;
+
+  // #rrggbb / #rgb
+  const hex = /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.exec(text);
+  if (hex) {
+    const h = hex[1];
+    const expand = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    const r = parseInt(expand.slice(0, 2), 16);
+    const g = parseInt(expand.slice(2, 4), 16);
+    const b = parseInt(expand.slice(4, 6), 16);
+    return relativeLuminance(r, g, b);
   }
-  const dark = stats.backgroundLuminance < 0.35;
-  const bg = stats.background;
-  const lum = stats.backgroundLuminance.toFixed(2);
+
+  // rgb(...) / rgba(...)
+  const rgb = /^rgba?\(([^)]+)\)/i.exec(text);
+  if (rgb) {
+    const parts = rgb[1].split(",").map((s) => Number(s.trim()));
+    if (parts.length >= 3 && parts.slice(0, 3).every((n) => Number.isFinite(n))) {
+      return relativeLuminance(parts[0], parts[1], parts[2]);
+    }
+  }
+  return null;
+}
+
+/**
+ * 主题断言：只看**底色**亮度，不看全画面众数色。
+ *
+ * ── 为什么改（真实误判）────────────────────────────────────────────────
+ * 原实现用「全画面出现次数最多的颜色」当背景色。问题是：**大面积覆盖的东西会赢**。
+ * modal 的半透明遮罩一铺，深色遮罩就成了面积最大的颜色 ——
+ * 于是**浅色主题被误判成深色**。B 的隔离实验证明了这点：
+ *   · 只点 demo-key-broken（不弹 modal）→ cream ✓
+ *   · 只点 data-ai-rekey-all（弹 modal）→ cream ✓
+ *   · 两个都点（modal 叠在演示态上）→ midnight ✗
+ * 而真机视觉就是 cream —— **探测算法被遮罩骗了，不是主题坏了**。
+ *
+ * ── 现在的判据优先级 ───────────────────────────────────────────────────
+ *   ① **DOM 底色**（最可靠）：`getComputedStyle(body).backgroundColor`
+ *      这是"文档底色"属性，**不受任何遮罩影响**，也不需要沿像素猜。
+ *   ② **四角采样亮度**（像素兜底）：拿不到 DOM 值时用，避开中央区域的 modal。
+ *   （全画面众数色只在上面两者都不可用时才用，并明确标注为低置信度。）
+ *
+ * @param {object} stats        analyzePng 的结果
+ * @param {object} [opts]
+ * @param {number|null} [opts.domLuminance]  DOM 底色解析出的亮度（有就用它，优先级最高）
+ * @param {string|null} [opts.domColor]      DOM 底色原文（写进 detail 便于排查）
+ * @returns {{theme:"cream"|"dark"|"unknown", detail:string, ok:boolean, source:string, overlayWarning:string|null}}
+ */
+export function assertTheme(stats, opts = {}) {
+  if (stats.isEmpty) {
+    return { theme: "unknown", ok: false, detail: "截图空白，无法判断主题", source: "none", overlayWarning: null };
+  }
+
+  const domLum = typeof opts.domLuminance === "number" && Number.isFinite(opts.domLuminance)
+    ? opts.domLuminance
+    : null;
+  const cornerLum = typeof stats.cornerLuminance === "number" && Number.isFinite(stats.cornerLuminance)
+    ? stats.cornerLuminance
+    : null;
+
+  // ---- 选判据：DOM 底色 > 四角采样 > 全画面众数（置信度依次降低）----
+  let luminance;
+  let source;
+  let judgedBy;
+  if (domLum !== null) {
+    luminance = domLum;
+    source = "dom";
+    judgedBy = `DOM 底色 ${opts.domColor ?? ""}（亮度 ${domLum.toFixed(2)}）`.replace(" （", "（");
+  } else if (cornerLum !== null) {
+    luminance = cornerLum;
+    source = "corner";
+    judgedBy = `四角采样（亮度 ${cornerLum.toFixed(2)}）`;
+  } else {
+    luminance = stats.backgroundLuminance;
+    source = "mode";
+    judgedBy = `全画面众数色 ${stats.background}（亮度 ${luminance.toFixed(2)}，低置信度）`;
+  }
+
+  const dark = luminance < 0.35;
+
+  // ---- 「疑似深色覆盖」警告：众数色深、但底色浅 → 大概率是 modal/遮罩 ----
+  // 这不是失败，只是让人知道"为什么这张图看起来暗"，避免下次又被它误导。
+  let overlayWarning = null;
+  if (!dark && stats.isDark) {
+    overlayWarning =
+      `画面上有大面积深色覆盖（全画面众数色 ${stats.background}，亮度 ${stats.backgroundLuminance.toFixed(2)}），`
+      + `但底色是浅色 —— 很可能是 modal/遮罩。主题判据已改用 ${source === "dom" ? "DOM 底色" : "四角采样"}。`;
+  }
+
   if (dark) {
     return {
       theme: "dark",
       ok: false,
-      detail: `主色 ${bg}（亮度 ${lum}）是深色 —— 预期是奶油主题 #f7f4ee（亮度约 0.94）。检查 web/index.html 是否加载了 styles/cream.css`
+      detail: `${judgedBy} 是深色 —— 预期是奶油主题 #f7f4ee（亮度约 0.94）。`
+        + "检查 web/index.html 是否加载了 styles/cream.css，或 html 上是否被加了 theme-midnight。",
+      source,
+      overlayWarning
     };
   }
-  return { theme: "cream", ok: true, detail: `主色 ${bg}（亮度 ${lum}），浅底主题` };
+  return {
+    theme: "cream",
+    ok: true,
+    detail: `${judgedBy}，浅底主题`,
+    source,
+    overlayWarning
+  };
 }

@@ -1461,6 +1461,49 @@ final class ScriptApi {
             out.values.put("elapsed", Double.valueOf((double) m.elapsed));
             return out;
         });
+        /**
+         * 调试用：把整张棋盘的逐格状态打出来（"r,c:数字/雷/旗/开"）。
+         *
+         * <p><b>为什么需要</b>：{@code state()} 只给汇总（行列/雷数/旗数），
+         * 而验证「点数字连锁翻开（chord）」必须知道<b>哪一格是数字、周围有几颗雷、
+         * 哪几格还盖着</b>。没有逐格视图就只能靠猜坐标点，测不出真实行为。
+         *
+         * <p>输出格式：每格 {@code r,c=N}{@code M}{@code F}{@code O}
+         * （M=是雷、F=已插旗、O=已翻开），行末换行。仅调试/取证用，不影响玩法。
+         */
+        method(o, "dump", (cx, thisObj, args) -> {
+            Minesweeper m = host.minesweeper;
+            if (m == null) {
+                return "no-minesweeper";
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("grid ").append(m.rows).append('x').append(m.cols)
+                    .append(" mines=").append(m.mineCount)
+                    .append(" flags=").append(m.flags)
+                    .append(" over=").append(m.over)
+                    .append(" won=").append(m.won).append('\n');
+            for (int r = 0; r < m.rows; r++) {
+                for (int c = 0; c < m.cols; c++) {
+                    int i = r * m.cols + c;
+                    sb.append(r).append(',').append(c).append('=')
+                            .append(m.counts[i]);
+                    if (m.mine[i]) {
+                        sb.append('M');
+                    }
+                    if (m.flag[i]) {
+                        sb.append('F');
+                    }
+                    if (m.open[i]) {
+                        sb.append('O');
+                    }
+                    sb.append(' ');
+                }
+                sb.append('\n');
+            }
+            String line = sb.toString();
+            host.scriptLog("[mine.dump] " + line);
+            return line;
+        });
         ScriptJs.put(bwe, "mine", o);
     }
 

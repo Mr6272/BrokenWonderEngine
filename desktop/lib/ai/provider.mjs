@@ -149,7 +149,18 @@ export function normalizeModelEntry(raw, index = 0) {
     notes: String(m.notes || ""),
     // 来源标记（trae-import 等），便于审计「这个模型是哪来的」。
     source: m.source ? String(m.source) : "",
-    needsKey: m.needsKey === undefined ? preset.needsKey : Boolean(m.needsKey)
+    needsKey: m.needsKey === undefined ? preset.needsKey : Boolean(m.needsKey),
+    /**
+     * ⚠ **必须保留这两个字段**，否则 UI 会丢掉「key 填过但解不开」这个状态。
+     *
+     * 这里曾是真实缺陷：`normalizeModelEntry` 只输出上面那些字段，
+     * settings.load() 里置上的 `keyUndecryptable` 在这一步被整个丢掉 ——
+     * 于是 ai-models 出口永远是 false，UI 只能看到「没填 key」，
+     * 而用户明明填过、只是 Electron 安全存储解不开。两种情况的下一步动作完全不同。
+     */
+    keyUndecryptable: Boolean(m.keyUndecryptable),
+    // 密文归档（解不开时保留，万一以后环境恢复能解回来）
+    encryptedApiKeyBak: m.encryptedApiKeyBak ? String(m.encryptedApiKeyBak) : ""
   };
 }
 
@@ -330,8 +341,28 @@ export function listModels(settingsAi = {}, activeId = "") {
       // 一条已经填了 key 的 deepseek 模型仍是 needsKey:true，于是显示成「需要填 key」。
       // 所以另外给两个语义明确的字段，UI 用它们决定文案：
       needsKey: Boolean(m.needsKey),
-      /** 这条是否真的没有 key（= 需要用户去填）。已是布尔，不再让 UI 自己推断。 */
-      needsKeyMissing: Boolean(m.needsKey) && !Boolean(m.apiKey || m.encryptedApiKey),
+      /**
+       * 这条是否真的没有 key（= 需要用户去填）。
+       *
+       * ⚠ 必须排除 `keyUndecryptable`：解不开时 hasApiKey 是 false，
+       * 但那是「填过但坏了」，不是「没填」。两者下一步动作不同 ——
+       * 前者去填一个新的，后者**重新粘贴一次**。
+       * 若不排除，UI 会同时收到 needsKeyMissing:true 与 keyUndecryptable:true 两个矛盾信号
+       * （虽然 UI 按 keyUndecryptable 优先判断，但出口语义不该自相矛盾）。
+       */
+      needsKeyMissing: Boolean(m.needsKey) && !Boolean(m.apiKey || m.encryptedApiKey) && !Boolean(m.keyUndecryptable),
+      /**
+       * 这条**填过 key 但本次启动解不开**（不是「没填」）。
+       *
+       * 为什么必须和 needsKeyMissing 分开：两者下一步动作完全不同 ——
+       *   needsKeyMissing  → 用户去填
+       *   keyUndecryptable → 用户**重新粘贴一次**（key 还在磁盘上，只是解不开）
+       *
+       * 成因：Electron safeStorage 在 Windows 上可能「isEncryptionAvailable()=true
+       * 但 decryptString 失败」（DPAPI 上下文在重启后不一致 / Electron 升级后参数变化）。
+       * 若把它当「没填」，用户明明填过却看到「待填」，发请求带空 key 必然 401。
+       */
+      keyUndecryptable: Boolean(m.keyUndecryptable),
       /** 这条是否已有 key（不关心有没有填，只管有没有）。 */
       hasApiKey: Boolean(m.apiKey || m.encryptedApiKey),
       source: m.source || "",

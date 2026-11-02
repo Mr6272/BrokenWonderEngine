@@ -26,6 +26,63 @@ import { createToolRunner } from "./tools.mjs";
 const MAX_TOOL_ROUNDS = 3;
 
 /**
+ * 把模型服务的原始错误报文映射成用户能看懂的话。
+ *
+ * 为什么需要：服务端 400 返回的是一整段 JSON（用户截图里就是），
+ * 直接显示在对话区毫无帮助 —— 用户只会以为软件坏了，而实际上多半是
+ * 「该模型服务对消息格式有额外要求」这类可解释的问题。
+ *
+ * ⚠ 这只是**展示层兜底**。根因（协议违规）必须在代码里真修好，
+ *   否则用户每轮都会看到这条提示 —— 提示本身不能替代修复。
+ *
+ * @param {string} raw   服务端原始错误文本
+ * @param {number} status HTTP 状态码（可能为 0，表示网络错误）
+ */
+function humanizeApiError(raw, status) {
+  const text = String(raw ?? "");
+  const code = Number(status) || 0;
+
+  // 思考模式的 reasoning_content 必须回传（DeepSeek / Kimi 等）
+  if (/reasoning_content/i.test(text)) {
+    return "该模型是「思考模式」，要求把上一轮的推理内容原样回传。"
+      + "这通常是软件侧的历史拼装问题（已尝试修复）；若仍出现，请把这条对话新建后重试。\n"
+      + `（服务端原文：${text.slice(0, 300)}）`;
+  }
+
+  // 工具调用格式不兼容
+  if (/tool_calls|tool_call_id|tool role|function_call/i.test(text)) {
+    return "工具调用格式与该模型服务不兼容（assistant 的 tool_calls 与 tool 响应必须成对）。"
+      + "可先关闭工具/改用不带工具的问答，或换一个模型。\n"
+      + `（服务端原文：${text.slice(0, 300)}）`;
+  }
+
+  // 其他 400：把服务端 message 抠出来，别让用户读整段 JSON
+  if (code === 400 || code === 422) {
+    let serverMsg = "";
+    try {
+      const parsed = JSON.parse(text.replace(/^模型接口返回 \d+：/, ""));
+      serverMsg = String(parsed?.error?.message ?? parsed?.message ?? "");
+    } catch {
+      serverMsg = "";
+    }
+    return `请求被服务端拒绝（${code}）：${serverMsg || text.slice(0, 300)}`;
+  }
+
+  if (code === 401 || code === 403) {
+    return `API Key 无效或没有权限（${code}）。请到「设置 → AI」检查 key，或换一个模型。\n`
+      + `（服务端原文：${text.slice(0, 200)}）`;
+  }
+  if (code === 429) {
+    return "请求太频繁或额度用尽（429）。稍等一会儿再试，或检查账户额度。";
+  }
+  if (code >= 500) {
+    return `模型服务端出错（${code}）。这不是你的问题，稍后重试即可。\n（服务端原文：${text.slice(0, 200)}）`;
+  }
+
+  return text;
+}
+
+/**
  * 同一工具**连续**失败多少次后停止重试。
  *
  * 为什么必须有上限：模型不会自己意识到「这个工具坏了」，它会一直重试同一条路径，
@@ -210,7 +267,30 @@ export function createAiBridge(opts) {
       // 桥只持有「当前会话对象」，不该自己去读索引（职责单一，也避免桥依赖存储实现）。
       activeSession: String(sessionInfo?.active ?? ""),
       sessionCount: Number(sessionInfo?.count ?? 0),
-      insecure: Boolean(settings.insecure)
+      insecure: Boolean(settings.insecure),
+      /**
+       * key 密文解不开（不是「没填」）。UI 必须能区分这两种状态：
+       *   needsKeyMissing  → 「需要填 API Key」
+       *   keyUndecryptable → 「Key 已失效，请重新粘贴」（并提供一键跳转填 key 的入口）
+       * 若按「没填」处理，用户明明填过却看到「待填」，完全不知道该做什么。
+       */
+      keyUndecryptable: Boolean(settings.keyUndecryptable),
+      keyUndecryptableEntries: Array.isArray(settings.keyUndecryptableEntries)
+        ? settings.keyUndecryptableEntries
+        : [],
+      /**
+       * 解不开的 key 条目**数量**（供 UI 批量提示条用）。
+       *
+       * ⚠ 它与 `keyUndecryptableEntries.length` 是**两个统计源**，必须恒等 ——
+       * 这是刻意的冗余，用来互相校验（契约里写了这条恒等式）。
+       * 一旦漂移，用户会看到「红条说 1 个，点进去却是 2 个」。
+       * 所以这里**由 entries 派生**，不是另算一遍（另算就迟早漂）。
+       */
+      keyUndecryptableCount: Array.isArray(settings.keyUndecryptableEntries)
+        ? settings.keyUndecryptableEntries.length
+        : 0,
+      /** 上次保存因加密不可用而降级成明文：UI 应明确告知「当前 key 未加密存储」。 */
+      keyPlaintextFallback: Boolean(settings.keyPlaintextFallback)
     };
   }
 
@@ -232,12 +312,55 @@ export function createAiBridge(opts) {
     }
 
     // 历史：只取最近若干条，再往前的已进摘要（避免摘要 + 全文重复计入）。
+    //
+    // ⚠ 重放历史时有**协议约束**，写错会让下一轮对话直接 400：
+    //   历史里带 `tool-result` 块的 assistant 轮，必须还原成
+    //   「一条 assistant（带 tool_calls + reasoning_content）+ N 条 tool 消息」，
+    //   不能压成一条纯文本 assistant —— 那样协议里出现了「无主的 tool 响应」，
+    //   服务端会认为 tool_calls 与 tool 响应对不上（DeepSeek 直接 400）。
+    //   同时 reasoning_content 也必须带回：思考模式下缺它同样 400。
     const history = session.messages();
     const recent = history.slice(-20);
     for (const m of recent) {
+      // 每条消息的纯文本都在这里取一次。
+      // ⚠ 我第一版重构时把它挪进了 assistant 分支，导致第 277 行 user 分支引用未定义变量
+      //   （报 "text is not defined"）—— 而这条路径只在"历史里有 assistant 轮"时触发，
+      //   也就是**多轮对话的第二轮**。单轮测试全绿，多轮直接炸。教训：重构时先搜变量引用范围。
       const text = messageText(m);
       if (m.role === "assistant") {
-        out.push({ role: "assistant", content: text || "（无文本输出）" });
+        const toolBlocks = (m.blocks ?? []).filter((b) => b?.type === "tool-result");
+        if (toolBlocks.length > 0) {
+          // 还原成：assistant(tool_calls) + 每条 tool 结果
+          const callIds = toolBlocks.map((b, i) => `hist_${m.id}_${i}`);
+          const assistantTurn = {
+            role: "assistant",
+            content: text || null,
+            tool_calls: toolBlocks.map((b, i) => ({
+              id: callIds[i],
+              type: "function",
+              function: { name: String(b.name ?? ""), arguments: JSON.stringify(b.arguments ?? {}) }
+            }))
+          };
+          // 只在非空时加（空字符串会被某些实现当作"传了空 reasoning"）
+          if (m.reasoning && String(m.reasoning).length > 0) {
+            assistantTurn.reasoning_content = String(m.reasoning);
+          }
+          out.push(assistantTurn);
+          for (const [i, b] of toolBlocks.entries()) {
+            out.push({
+              role: "tool",
+              tool_call_id: callIds[i],
+              content: b.error ? `工具失败：${b.error}` : String(b.preview ?? "")
+            });
+          }
+          continue;
+        }
+        const assistantTurn = { role: "assistant", content: text || "（无文本输出）" };
+        // 历史里的普通 assistant 轮也可能带 reasoning（思考模式要求回传）
+        if (m.reasoning && String(m.reasoning).length > 0) {
+          assistantTurn.reasoning_content = String(m.reasoning);
+        }
+        out.push(assistantTurn);
         continue;
       }
       out.push({ role: "user", content: text });
@@ -695,7 +818,10 @@ export function createAiBridge(opts) {
         emit({
           type: "error",
           requestId,
-          message: result.error,
+          // 把服务端的原始 JSON 映射成人话（原始报文仍写在日志里，便于排查）。
+          // 用户截图里那一整段 {"error":{"message":"The `reasoning_content` ..."}}
+          // 直接显示在界面上毫无帮助 —— 用户只会以为软件坏了。
+          message: humanizeApiError(result.error, result.status),
           recoverable
         });
         if (!recoverable) return;
@@ -716,19 +842,34 @@ export function createAiBridge(opts) {
             else toolFailureStreak.set(name, (toolFailureStreak.get(name) ?? 0) + 1);
           }
         );
+        // ---- 回填工具结果 ----
+        //
+        // ⚠ 这里有两个**协议合规**要点，写错会让服务端直接 400（用户实测「跑两下就寄了」）：
+        //
+        // ① **一条 assistant 消息必须带该轮全部 tool_calls**。
+        //    原来是把每个 call 各写成一条 assistant（N 个 call = N 条 assistant），
+        //    OpenAI 兼容协议要求「一条 assistant 带 N 个 tool_calls，紧跟 N 条 tool 消息」；
+        //    拆开会让服务端认为 tool_calls 与 tool 响应对不上，某些实现(含 DeepSeek)直接 400。
+        //
+        // ② **reasoning_content 必须原样回传**。
+        //    DeepSeek/Kimi 的思考模式要求：模型这一轮产出了 reasoning_content，下一轮请求必须带回，
+        //    否则第二轮必然 400（报错原文："The `reasoning_content` in the thinking mode must be passed back to the API"）。
+        //    ⚠ 只在**非空**时添加：空字符串会被某些实现当作「传了空 reasoning」而不是「没有思考」。
+        const assistantTurn = {
+          role: "assistant",
+          // 模型可能同时有正文和 tool_calls —— 别把正文丢了
+          content: result.text || null,
+          tool_calls: result.toolCalls.map((c) => ({
+            id: c.id,
+            type: "function",
+            function: { name: c.name, arguments: JSON.stringify(c.arguments ?? {}) }
+          }))
+        };
+        if (result.reasoning) assistantTurn.reasoning_content = result.reasoning;
+        messages.push(assistantTurn);
+
         for (const { call, prune, out } of executed) {
           toolTrace.push({ name: call.name, arg: toolRunner.describeArg(call), pruned: prune.pruned });
-          messages.push({
-            role: "assistant",
-            content: null,
-            tool_calls: [
-              {
-                id: call.id,
-                type: "function",
-                function: { name: call.name, arguments: JSON.stringify(call.arguments ?? {}) }
-              }
-            ]
-          });
           messages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -736,8 +877,13 @@ export function createAiBridge(opts) {
           });
         }
         // 工具结果落到会话历史（无损：原文在 toolCache，预览在 blocks）
+        //
+        // ⚠ reasoning 也要存：下一轮对话（用户再问一句）时 buildMessages 重放历史，
+        //   如果这条 assistant 轮有 tool_calls 却没带 reasoning_content，**同样会 400**。
+        //   这就是「同一轮工具循环内」与「多轮对话的第二轮」两种 400 的成因，必须一起修。
         await session.append(
-          makeMessage("assistant", "", {
+          makeMessage("assistant", result.text || "", {
+            reasoning: result.reasoning || "",
             blocks: executed.map(({ call, prune, out }) => ({
               type: "tool-result",
               name: call.name,

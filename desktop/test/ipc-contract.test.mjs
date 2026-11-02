@@ -370,6 +370,35 @@ test("关键语义在代码里有对应注释（文档与实现不脱节）", as
   assert.ok(probeSrc.includes("unauthorized-on-models"), "probe.mjs 必须实现 unauthorized-on-models 分类");
 });
 
+test("ai-status 的三源恒等式：count === entries.length，且与 ai-models 逐条数一致", () => {
+  // 契约里声明了这条恒等式（见 ipc-contract.mjs 的 ai-status notes）。
+  // 为什么在契约测试里也断言：主进程侧出口一旦漂移，UI 的交叉校验只能"发现"不能"修复" ——
+  // 所以主进程自己必须先自洽。
+  const declared = IPC_CONTRACT["bwe:ai-status"].returns;
+  for (const f of ["keyUndecryptable", "keyUndecryptableCount", "keyUndecryptableEntries"]) {
+    assert.ok(declared.includes(f), `ai-status 必须声明 ${f}`);
+  }
+  // 契约 notes 必须写明恒等式（否则后人不知道这是刻意冗余、会当垃圾删掉）
+  const notes = IPC_CONTRACT["bwe:ai-status"].notes;
+  assert.ok(notes.includes("三源恒等式"), "notes 必须写明三源恒等式");
+  assert.ok(notes.includes("keyUndecryptableCount === keyUndecryptableEntries.length"), "notes 必须写明具体公式");
+});
+
+test("主进程有 bwe:key-state-consistency 自检通道（运行时断言三源一致）", async () => {
+  const appMain = await readFile(join(DESKTOP, "lib", "app-main.mjs"), "utf8");
+  assert.ok(
+    appMain.includes("bwe:key-state-consistency"),
+    "app-main 必须注册 bwe:key-state-consistency 自检（否则出口漂移没人发现）"
+  );
+  // 自检必须覆盖三条：count vs entries、count vs 逐条、语义互斥
+  assert.ok(appMain.includes("keyUndecryptableCount"), "自检必须比对 keyUndecryptableCount");
+  assert.ok(appMain.includes("perModelCount"), "自检必须比对 ai-models 逐条数");
+  assert.ok(
+    appMain.includes("needsKeyMissing === true") || appMain.includes("needsKeyMissing"),
+    "自检必须覆盖「解不开不能同时算没填」这条语义约束"
+  );
+});
+
 for (const c of cases) {
   try {
     await c.fn();

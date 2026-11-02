@@ -150,6 +150,9 @@ final class Minesweeper {
     int boardW;
     int boardH;
 
+    /** 最近一次 click 的命中诊断（宿主日志用，纯记录，不影响玩法）。 */
+    String lastClickInfo = "";
+
     Minesweeper(TopDownRuntime rt, Actor actor, GameData.RtModule m) {
         this(rt, actor, m, GridModules.Bundle.of(actor == null ? null : actor.o));
     }
@@ -281,8 +284,33 @@ final class Minesweeper {
         return "扫雷 " + state + " · " + flags + "/" + mineCount + timer + mode;
     }
 
+    /**
+     * 计算世界坐标落在哪个格子、以及该格当前状态（<b>纯诊断</b>，不改任何状态）。
+     *
+     * <p>插旗 / 翻格「没生效」时先看这里：是坐标算错（命中在棋盘外或别的格），
+     * 还是命中正确但被规则挡掉（已翻开、已判负等）。
+     */
+    String describeHit(int wx, int wy) {
+        float left = actor.x - boardW / 2f;
+        float top = actor.y - boardH / 2f;
+        if (wx < left || wy < top || wx >= left + boardW || wy >= top + boardH) {
+            return "命中=棋盘外 棋盘世界矩形=[" + (int) left + "," + (int) top + " .. "
+                    + (int) (left + boardW) + "," + (int) (top + boardH) + "]";
+        }
+        int c = (int) ((wx - left) / cell);
+        int r = (int) ((wy - top) / cell);
+        if (c < 0 || r < 0 || c >= cols || r >= rows) {
+            return "命中=索引越界 r=" + r + " c=" + c;
+        }
+        int i = r * cols + c;
+        return "命中=(" + r + "," + c + ") 数字=" + counts[i]
+                + (mine[i] ? " 雷" : "") + (flag[i] ? " 已插旗" : "")
+                + (open[i] ? " 已翻开" : " 未翻开")
+                + (over ? " [over]" : "");
+    }
+
     boolean click(int wx, int wy, boolean right) {
-        if (over) {
+        lastClickInfo = describeHit(wx, wy) + " right=" + right;        if (over) {
             if (!right) {
                 reset();
                 return true;
@@ -320,7 +348,7 @@ final class Minesweeper {
             if (complexMode) {
                 chord(idx);
                 did = true;
-            } else if (reveal && !over && !mine[idx]) {
+            } else if (caps.reveal && !over && !mine[idx]) {
                 // 普通模式标准 chord：旗数对齐才动，避免误踩（0 格直接忽略）
                 did = chordStandard(idx) || did;
             }

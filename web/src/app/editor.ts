@@ -326,6 +326,24 @@ export class Editor {
     mkDemoBtn("data-demo-empty-done", () => {
       void import("../panels/aiPanel.ts").then((m) => m.demoEmptyDone());
     });
+    mkDemoBtn("data-demo-server-error", () => {
+      void import("../panels/aiPanel.ts").then((m) => m.demoServerError());
+    });
+    mkDemoBtn("data-demo-retry-twice", () => {
+      void import("../panels/aiPanel.ts").then((m) => m.demoRetryTwice());
+    });
+    // 验收用：「Key 失效」演示（key 填过但本次启动解不开）
+    mkDemoBtn("data-demo-key-broken", () => {
+      void import("../panels/aiPanel.ts").then((m) => m.demoKeyBroken());
+    });
+    // 验收用：明文存储告知条（insecure:true）
+    mkDemoBtn("data-demo-insecure", () => {
+      void import("../panels/aiPanel.ts").then((m) => m.demoInsecure());
+    });
+    // 验收用：明文「降级」文案（key 曾加密、因解不开才降级）
+    mkDemoBtn("data-demo-plaintext-fallback", () => {
+      void import("../panels/aiPanel.ts").then((m) => m.demoPlaintextFallback());
+    });
 
     // 验收用：量取编辑器几何（点一下就把 .js-code 等实际像素打进控制台，
     // 配合 --console 就能拿到数字，不必改 A 的 --probe-dom）。

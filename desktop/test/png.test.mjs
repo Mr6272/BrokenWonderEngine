@@ -12,7 +12,7 @@
 
 import assert from "node:assert/strict";
 import zlib from "node:zlib";
-import { analyzePng, assertTheme, describePng, decodePng } from "../lib/png.mjs";
+import { analyzePng, assertTheme, cssColorLuminance, describePng, decodePng } from "../lib/png.mjs";
 
 let pass = 0;
 const cases = [];
@@ -250,6 +250,76 @@ test("decodePng 对 8bit RGB（colorType=2）也能解", () => {
   assert.equal(decoded.channels, 3);
   const stats = analyzePng(png);
   assert.ok(stats.backgroundLuminance > 0.5, "浅色 RGB 图亮度应偏高");
+});
+
+// ---------------------------------------------------------------------------
+// 主题判据：必须区分「真深色主题」与「遮罩造成的假深色」
+// ---------------------------------------------------------------------------
+
+test("cssColorLuminance：解析 rgb()/rgba()/#hex", () => {
+  assert.ok(cssColorLuminance("rgb(246, 242, 234)") > 0.8, "奶白应接近 0.9");
+  assert.ok(cssColorLuminance("rgba(26, 26, 46, 1)") < 0.1, "深蓝应很低");
+  assert.ok(cssColorLuminance("#1a1a2e") < 0.1, "hex 深色");
+  assert.ok(cssColorLuminance("#f6f2ea") > 0.85, "hex 浅色");
+  assert.equal(cssColorLuminance(""), null, "空串返回 null");
+  assert.equal(cssColorLuminance("transparent"), null, "不认识的颜色返回 null（不猜）");
+});
+
+test("反向验证：真深色主题（DOM 底色深）必须 FAIL —— 判据不能变成永远 PASS", () => {
+  // ⚠ 这条是**反向锁**：判据刚从严苛改成鲁棒，很容易顺手改成"永远绿"。
+  // 必须证明它在该红的时候还红。
+  const darkStats = {
+    isEmpty: false,
+    background: "#1a1a2e",
+    backgroundLuminance: 0.03,
+    cornerLuminance: 0.03, // 角落也深 → 真深色主题，不是遮罩
+    isDark: true
+  };
+  const r = assertTheme(darkStats, {
+    domLuminance: cssColorLuminance("rgb(26, 26, 46)"),
+    domColor: "rgb(26, 26, 46)"
+  });
+  assert.equal(r.theme, "dark", `真深色必须判 dark，实际 ${r.theme}`);
+  assert.equal(r.ok, false, "真深色必须 FAIL（否则判据是死的）");
+  assert.equal(r.source, "dom", "应说明用的是 DOM 判据");
+});
+
+test("无 DOM 数据时，兜底判据（四角采样）也能判出深色", () => {
+  const darkStats = {
+    isEmpty: false,
+    background: "#1a1a2e",
+    backgroundLuminance: 0.03,
+    cornerLuminance: 0.03,
+    isDark: true
+  };
+  const r = assertTheme(darkStats, {});
+  assert.equal(r.ok, false, "兜底路径也必须能判深色");
+  assert.equal(r.source, "corner", `应降级到四角采样，实际 ${r.source}`);
+});
+
+test("遮罩场景：浅色 DOM 底色 + 深色众数色 → PASS，并给出「大面积深色覆盖」警告", () => {
+  // 这就是 B 的复现：modal 遮罩成了全画面最大面积颜色，但真机视觉是 cream。
+  const overlayStats = {
+    isEmpty: false,
+    background: "#686868",
+    backgroundLuminance: 0.14, // 众数色深（modal 遮罩）
+    cornerLuminance: 0.16,     // 角落也被遮住
+    isDark: true
+  };
+  const r = assertTheme(overlayStats, {
+    domLuminance: cssColorLuminance("rgb(246, 242, 234)"),
+    domColor: "rgb(246, 242, 234)"
+  });
+  assert.equal(r.theme, "cream", `浅底应判 cream，实际 ${r.theme}`);
+  assert.equal(r.ok, true, "浅底不该 FAIL");
+  assert.ok(r.overlayWarning, "必须给出「大面积深色覆盖（可能是 modal）」警告，让人知道图为什么暗");
+  assert.ok(String(r.overlayWarning).includes("modal"), "警告文案应提到 modal");
+});
+
+test("空白图仍判 unknown（不因改判据而放松空白检查）", () => {
+  const r = assertTheme({ isEmpty: true }, { domLuminance: 0.9, domColor: "rgb(255,255,255)" });
+  assert.equal(r.theme, "unknown");
+  assert.equal(r.ok, false, "空白必须 FAIL");
 });
 
 for (const c of cases) {

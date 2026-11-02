@@ -25,6 +25,7 @@ public final class AutoActionTest {
             testAutoFlagWhenUnopenedMatches();
             testNoActionWhenConditionsUnmet();
             testSafeGuards();
+            testStandardChordAlwaysAvailable();
             testTextInput();
             testSubmitCallbackQueued();
             testInputRangeValidation();
@@ -251,6 +252,100 @@ public final class AutoActionTest {
         ms.over = true;
         ms.counts[center] = 2;
         check("已判负 → 不动作", !ms.autoActionAt(center));
+    }
+
+    /**
+     * 回归测试：<b>普通模式下「点已翻开的数字格」必须能连锁翻开</b>。
+     *
+     * <p><b>真实事故</b>：{@code click} 对已翻开格只调 {@link Minesweeper#autoActionAt}，
+     * 而那个方法受 {@code autoAction} 参数控制、默认是「关闭 Off」（=0，直接返回 false）。
+     * 普通模式又没有自己的 chord 分支 → 玩家点数字格<b>什么都不发生</b>，
+     * 而脚本 UI 上明明写着「点数字可连锁翻开」。标准扫雷的 chord 是<b>基本操作</b>，
+     * 不该依赖任何「自动辅助」开关。
+     *
+     * <p>这里固定两条契约：
+     * <ol>
+     *   <li>{@code autoMode == 0}（默认配置）时，旗数对齐后点数字格<b>仍然会翻开</b>邻格；</li>
+     *   <li>旗数<b>没</b>对齐时<b>什么都不做</b>（绝不猜、绝不误踩）。</li>
+     * </ol>
+     */
+    private static void testStandardChordAlwaysAvailable() {
+        // 3x3、两颗雷在 (0,0)/(0,1)，中心 (1,1) 的数字应为 2
+        Minesweeper ms = newMine(3, 3, 2, 0);       // ⚠ autoMode = 0（默认关闭）
+        ms.started = true;
+        for (int i = 0; i < ms.mine.length; i++) {
+            ms.mine[i] = false;
+            ms.open[i] = false;
+            ms.flag[i] = false;
+            ms.mineValue[i] = 0;
+            ms.counts[i] = 0;
+        }
+        int mineA = ms.board.idx(0, 0);
+        int mineB = ms.board.idx(0, 1);
+        ms.mine[mineA] = true;
+        ms.mine[mineB] = true;
+        ms.mineValue[mineA] = ComplexRules.POS_RE;
+        ms.mineValue[mineB] = ComplexRules.POS_RE;
+        ms.mineCount = 2;
+        for (int idx = 0; idx < ms.board.size(); idx++) {
+            if (ms.mine[idx]) {
+                continue;
+            }
+            final int[] acc = new int[1];
+            ms.board.forEachNeighbor(idx, (ni, dr, dc) -> {
+                if (ms.mine[ni]) {
+                    acc[0]++;
+                }
+            });
+            ms.counts[idx] = acc[0];
+        }
+        int center = ms.board.idx(1, 1);
+        check("中心格数字 = 2", ms.counts[center] == 2);
+
+        // ---- ① 旗数没对齐：点数字格不该翻开任何东西 ----
+        ms.board.setOpened(center);
+        ms.open[center] = true;
+        int before1 = countOpened(ms);
+        boolean acted1 = ms.click(cx(ms, center), cy(ms, center), false);
+        check("旗数未对齐时点数字格 → 不翻开邻格", countOpened(ms) == before1);
+        check("旗数未对齐时点数字格 → 不踩雷", !ms.over);
+        check("点已翻开格视为已处理（返回 true）", acted1);
+
+        // ---- ② 旗数 = 数字：点数字格应翻开其余未插旗邻格 ----
+        ms.flag[mineA] = true;
+        ms.flag[mineB] = true;
+        int before2 = countOpened(ms);
+        ms.click(cx(ms, center), cy(ms, center), false);
+        int after2 = countOpened(ms);
+        check("旗数对齐后点数字格 → 邻格被翻开", after2 > before2);
+        // ⚠ 注意：{@code over} 表示「本局已结束」，<b>通关也会置 true</b>（配合 won）。
+        // 判「没踩雷」必须看 won / 是否翻开了雷格，不能只看 over —— 3x3 全翻开本来就是通关。
+        boolean steppedOnMine = ms.open[mineA] || ms.open[mineB];
+        check("连锁翻开没有踩雷（未翻开任何雷格）", !steppedOnMine);
+        check("3x3 全安全格翻开即通关（over 且 won）", ms.over && ms.won);
+        check("两颗雷仍插着旗", ms.flag[mineA] && ms.flag[mineB]);
+        check("雷格未被翻开", !ms.open[mineA] && !ms.open[mineB]);
+    }
+
+    private static int countOpened(Minesweeper ms) {
+        int n = 0;
+        for (int i = 0; i < ms.open.length; i++) {
+            if (ms.open[i]) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /** 世界坐标：棋盘左上角 = actor.x - boardW/2，取格子中心。 */
+    private static int cx(Minesweeper ms, int idx) {
+        int c = idx % ms.cols;
+        return (int) (ms.actor.x - ms.boardW / 2f + c * ms.cell + ms.cell / 2f);
+    }
+
+    private static int cy(Minesweeper ms, int idx) {
+        int r = idx / ms.cols;
+        return (int) (ms.actor.y - ms.boardH / 2f + r * ms.cell + ms.cell / 2f);
     }
 
     /**

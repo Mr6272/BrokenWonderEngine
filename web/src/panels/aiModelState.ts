@@ -26,7 +26,7 @@ import type { AiModelEntry } from "../core/host.ts";
  * | incomplete  | 配置不全（缺 url/模型名）| 补配置          |
  * | mock        | 本地演示，不发网络请求  | 无需处理        |
  */
-export type ModelStateKind = "configured" | "needs-key" | "incomplete" | "mock";
+export type ModelStateKind = "configured" | "needs-key" | "key-broken" | "incomplete" | "mock";
 
 export interface ModelState {
   kind: ModelStateKind;
@@ -34,11 +34,23 @@ export interface ModelState {
   short: string;
   /** 为什么不可用 / 为什么还不能确认可用（给 tooltip） */
   why: string;
-  /** chip 的样式类（pro = 正常，warn = 需要处理，flash = 演示） */
+  /** chip 的样式类（pro = 正常，warn = 需要处理，danger = 配置坏了，flash = 演示） */
   cls: string;
+  /** 是否应该立刻给「重新填 Key」入口（key-broken 专用） */
+  needsReKey?: boolean;
 }
 
-/** 由一条模型条目（+ 当前是否 mock 模式）算出展示语义。 */
+/**
+ * 由一条模型条目（+ 当前是否 mock 模式）算出展示语义。
+ *
+ * ⚠ **`needsKeyMissing` 与 `keyUndecryptable` 是两件完全不同的事**，
+ * 必须分开（用户实际踩过）：
+ *   · `needsKeyMissing` = 用户**从来没填过** → 「待填 key」
+ *   · `keyUndecryptable` = 用户**填过了**，但这次启动 Electron 安全存储解不开
+ *     → 「⚠ Key 失效」+ **必须给一键重填入口**
+ *   如果把后者显示成「待填 key」，用户会以为是自己忘了填 ——
+ *   实际他填了好几次，越填越困惑（这是我们客户端的问题，不是他的）。
+ */
 export function modelStateOf(entry: AiModelEntry | null, mock: boolean): ModelState {
   if (mock || !entry) {
     return {
@@ -46,6 +58,19 @@ export function modelStateOf(entry: AiModelEntry | null, mock: boolean): ModelSt
       short: "本地演示",
       why: "本地模板回答，不发网络请求",
       cls: "flash"
+    };
+  }
+  // Key 解不开**优先于**其它判断：这种情况 ready 也可能是 false，
+  // 但根因只有一个是「解密失败」，说清楚别的配置问题只会误导。
+  if (entry.keyUndecryptable) {
+    return {
+      kind: "key-broken",
+      short: "⚠ Key 失效",
+      why:
+        "你的 API Key 已加密保存，但本次启动解不开（Electron 安全存储失效）。"
+        + "请重新粘贴一次 Key —— 填完立即生效。这不是你忘了填。",
+      cls: "danger",
+      needsReKey: true
     };
   }
   if (entry.needsKeyMissing) {
@@ -78,6 +103,7 @@ export function modelStateOf(entry: AiModelEntry | null, mock: boolean): ModelSt
 
 /** 下拉项后缀：只说"缺什么"，不说"能不能用"。 */
 export function modelStateSuffix(entry: AiModelEntry): string {
+  if (entry.keyUndecryptable) return "Key 失效，需重新粘贴";
   if (entry.needsKeyMissing) return "需要填 API Key";
   if (!entry.ready) return entry.reason ? `配置不全：${truncate(entry.reason, 32)}` : "配置不全";
   return "";
@@ -89,14 +115,27 @@ export function modelStateSuffix(entry: AiModelEntry): string {
  * 面板侧不许再直接读 `entry.needsKeyMissing` —— 那会重新变成"两端各自判断"
  * （`needsKey`（供应商类型需要 key）与 `needsKeyMissing`（这一条缺 key）混淆过一次，
  *   把已填 key 的 DeepSeek 误标成"需要填 key"）。所有判断都从这里走。
+ *
+ * 注意：**`key-broken` 不算 `needs-key`** —— 那种情况要弹的是「重新粘贴」而不是
+ * 「填 key」，两者提示语不同。
  */
 export function isNeedsKey(entry: AiModelEntry | null): boolean {
   return modelStateOf(entry, false).kind === "needs-key";
 }
 
+/** 是否需要立刻弹「重填 Key」输入框（key-broken 专用入口）。 */
+export function needsReKey(entry: AiModelEntry | null): boolean {
+  return modelStateOf(entry, false).kind === "key-broken";
+}
+
 /** 清单里"待填 key"的条数（计数文案用，同样不许面板自己 filter 原始字段）。 */
 export function countNeedsKey(entries: AiModelEntry[]): number {
   return entries.filter((m) => modelStateOf(m, false).kind === "needs-key").length;
+}
+
+/** 清单里"Key 失效需重填"的条数（与 needs-key 分开统计，提示语不同）。 */
+export function countKeyBroken(entries: AiModelEntry[]): number {
+  return entries.filter((m) => modelStateOf(m, false).kind === "key-broken").length;
 }
 
 /** 「这条现在能不能直接发请求」的唯一判断入口（不要用 entry.ready 直接判）。 */

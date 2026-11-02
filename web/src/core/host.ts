@@ -101,8 +101,17 @@ export type AiEvent =
 
 export interface AiStatus {
   provider: "deepseek" | "openai-compatible" | "mock";
+  /** 宿主整体是否「现在就能发请求」。**不能拿它判定「是不是 mock」** —— 见下方 mode 注释。 */
   ready: boolean;
-  /** desktop = 真的有宿主并且配了 key；mock = 无宿主 / 无 key 的演示模式 */
+  /**
+   * `desktop` = 有桌面宿主；`mock` = **确实没有宿主，或确实在走本地演示**。
+   *
+   * ⚠ 这是 2026-11-02 修过的真实缺陷：UI 原先用 `mode === "mock" || !ready` 判 mock，
+   * 于是「key 解不开 → ready:false」被显示成「本地演示」——
+   * 用户明明配了模型、填过 key，看到的却是「本地演示」，完全看不出真正原因。
+   * **判 mock 只能看 `mode`，不能看 `ready`。**
+   * `ready:false` 但 `mode:"desktop"` 的正确文案是「有宿主，但当前模型配置不完整」。
+   */
   mode: "desktop" | "mock";
   message?: string;
   models: { flash: string; pro: string };
@@ -112,6 +121,36 @@ export interface AiStatus {
     cacheReadTokens: number;
     outputTokens: number;
   };
+  /** 当前会话 id 与总数（状态栏直接用，不用自己数）。 */
+  activeSession?: string;
+  sessionCount?: number;
+  /**
+   * 当前 key 是**明文落盘**的（系统加密存储不可用，`settings.mjs` 降级保存）。
+   *
+   * UI 用途：安全告知，不是「能不能用」。所以**不要放进模型 chip**（chip 只回答可用性），
+   * 而是在面板顶部放一行可关闭的小字 —— 它是**持久状态**，每次启动都该提示一次。
+   */
+  insecure?: boolean;
+  /** 有几个模型的 key 需要用户重新粘贴（供批量提示用，缺省视为 0）。 */
+  keyUndecryptableCount?: number;
+  /**
+   * 一份**精确清单**：哪些位置的 key 解不开。
+   *
+   * 与 `keyUndecryptableCount` 是**两个统计源**，关系应该恒等式：
+   *   `keyUndecryptableEntries.length === keyUndecryptableCount`
+   * 它们存在的意义就是**互相校验**——一旦漂移，用户会看到「红条说 1 个，点进去却是 2 个」。
+   * 所以 UI 应同时读两者：**红条的条数以逐条清单为准**（更精确），
+   * 不一致时在「输出」面板留一次痕（属于我们的内部问题，不该让用户看到）。
+   *
+   * `scope` 区分老结构（顶层单个 key）与新结构（每个模型条目各自的 key）。
+   */
+  keyUndecryptableEntries?: { scope: "top-level" | "model"; id?: string }[];
+  /**
+   * key 是**降级成明文**保存的（加密不可用 → 明文 + 标记）。
+   * 与 `insecure` 的区别：`insecure` 说「现在存的是明文」，
+   * 这个说「它本来是加密的、因为解不开才降级」—— 措辞上要让用户知道发生了什么。
+   */
+  keyPlaintextFallback?: boolean;
 }
 
 export interface AiChatRequest {
@@ -149,6 +188,17 @@ export interface AiModelEntry {
   needsKey: boolean;
   /** 这条是否真的缺 key。UI 的「需要填 API Key」提示必须用这个字段。 */
   needsKeyMissing?: boolean;
+  /**
+   * 这条 key **填过但本次启动解不开**（Electron safeStorage/DPAPI 失效）。
+   *
+   * ⚠ 与 `needsKeyMissing` 是**两件完全不同的事**，UI 必须分开处理：
+   *   needsKeyMissing  → 用户真没填，下一步是「去填 key」
+   *   keyUndecryptable → 用户填过、密文还在，但客户端解不开，下一步是「重新粘贴一次 key」
+   * 两者混成一句「需要填 key」，用户会以为自己忘了填 —— 而实际上是我们解不开。
+   * 这是 2026-11-02 用户实机踩到的：重启编辑器后 key 解不开 → 静默变空 → 请求 400，
+   * 界面上却显示「本地演示」，完全看不出真正原因。
+   */
+  keyUndecryptable?: boolean;
   /** 这条是否已经有 key（可以据此在 UI 上显示「已配置」而不是「需要填」）。 */
   hasApiKey?: boolean;
   /** 为什么不可用（UI 唯一的提示来源）。 */

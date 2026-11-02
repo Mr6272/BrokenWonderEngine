@@ -420,6 +420,284 @@ test("E: start/end 按 callId 配对（同名两次调用不会配错）", async
   assert.equal(new Set(starts.map((e) => e.callId)).size, 2, "两个 start 的 callId 应不同");
 });
 
+// ---------------------------------------------------------------------------
+// F. 协议合规：reasoning_content 回传 + 一条 assistant 带全部 tool_calls
+// ---------------------------------------------------------------------------
+
+/**
+ * 起一个**严格校验协议**的假服务（复刻 DeepSeek/Kimi 的真实行为）：
+ *
+ * 每次请求都检查 messages，违反以下任一条就返回 **400**（与真实服务一致）：
+ *   1. 若某条 assistant 带 tool_calls，则它**必须**有非空 reasoning_content
+ *      （思考模式要求原样回传，缺了必 400 —— 这就是用户截图里的报错）
+ *   2. tool 消息必须紧跟一条带 tool_calls 的 assistant，且 tool_call_id 能对上
+ *      （拆成多条 assistant 会让服务端认为对不上）
+ *
+ * 这样测试能真正覆盖"协议违规"，而不是只测"我们发了什么"。
+ */
+async function startStrictModel(plan) {
+  let turn = 0;
+  const violations = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => {
+      body += d;
+    });
+    req.on("end", () => {
+      turn += 1;
+      let parsed = null;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        parsed = null;
+      }
+      const messages = (parsed?.messages ?? []);
+      const hasTools = Array.isArray(parsed?.tools) && parsed.tools.length > 0;
+
+      // ---- 协议校验（与真实服务同规则）----
+      const localViolations = [];
+      for (let i = 0; i < messages.length; i += 1) {
+        const m = messages[i];
+        if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+          // ① 带 tool_calls 的 assistant 必须有 reasoning_content
+          if (!m.reasoning_content) {
+            localViolations.push(`第 ${i} 条 assistant 带 tool_calls 但缺 reasoning_content`);
+          }
+        }
+        // ② tool 消息必须能对上前面最近的 assistant tool_calls
+        if (m.role === "tool") {
+          const prev = [...messages.slice(0, i)].reverse().find((x) => x.role === "assistant" && x.tool_calls);
+          const ids = (prev?.tool_calls ?? []).map((c) => c.id);
+          if (!ids.includes(m.tool_call_id)) {
+            localViolations.push(`第 ${i} 条 tool 的 tool_call_id(${m.tool_call_id}) 找不到对应的 assistant tool_calls`);
+          }
+        }
+      }
+      if (localViolations.length > 0) {
+        violations.push({ turn, v: localViolations });
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: `The \`reasoning_content\` in the thinking mode must be passed back to the API. (${localViolations.join("; ")})`,
+              type: "invalid_request_error",
+              code: "invalid_request_error"
+            }
+          })
+        );
+        return;
+      }
+
+      const chunks = plan(turn, hasTools, messages);
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      for (const c of chunks) res.write(`data: ${JSON.stringify(c)}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const port = server.address().port;
+  return {
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    close: () => new Promise((r) => server.close(r)),
+    get turns() {
+      return turn;
+    },
+    get violations() {
+      return violations;
+    }
+  };
+}
+
+/** 带 reasoning_content 的工具调用流（思考模式的真实形态）。 */
+function toolCallWithReasoning({ id, name, args = {}, reasoning = "我需要先读取脚本内容再判断。", text = "" }) {
+  const chunks = [];
+  // 先吐 reasoning 增量
+  chunks.push({ choices: [{ index: 0, delta: { reasoning_content: reasoning } }] });
+  if (text) chunks.push({ choices: [{ index: 0, delta: { content: text } }] });
+  chunks.push({
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            { index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }
+          ]
+        }
+      }
+    ]
+  });
+  chunks.push({
+    choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+    usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 }
+  });
+  return chunks;
+}
+
+test("F: 协议合规 —— 工具轮内回传 reasoning_content，且一条 assistant 带全部 tool_calls", async () => {
+  // 第一轮：返回 2 个 tool_call（必须合成一条 assistant，且带 reasoning）
+  // 第二轮（工具结果回来后）：给正文
+  const fake = await startStrictModel((turn) => {
+    if (turn === 1) {
+      // 两个工具调用放在**同一轮**：这是"拆成多条 assistant"缺陷的触发场景
+      return [
+        { choices: [{ index: 0, delta: { reasoning_content: "我需要读脚本并查 API。" } }] },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  { index: 0, id: "call_f1", type: "function", function: { name: "SceneDigest", arguments: "{}" } }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  { index: 1, id: "call_f2", type: "function", function: { name: "ReadFile", arguments: JSON.stringify({ path: "package.json" }) } }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 }
+        }
+      ];
+    }
+    return textChunks("两个工具都调完了，结论是工程正常。");
+  });
+
+  const { bridge, events } = await makeBridge({ baseUrl: fake.baseUrl });
+  await bridge.aiChat({
+    requestId: "proto-1",
+    messages: [{ role: "user", text: "读一下 package.json 并看看工程" }],
+    context: { sceneDigest: "工程「协议测试」2 场景" }
+  });
+  await bridge.whenIdle();
+  await fake.close();
+
+  // ★ 核心：假服务若发现协议违规会返回 400
+  assert.equal(fake.violations.length, 0, `不该有协议违规，实际：${JSON.stringify(fake.violations)}`);
+  const errs = events.filter((e) => e.type === "error");
+  assert.equal(errs.length, 0, `不该有 error 事件，实际：${JSON.stringify(errs.map((e) => e.message))}`);
+  const done = events.filter((e) => e.type === "done");
+  assert.equal(done.length, 1);
+  assert.ok(String(done[0].text).length > 0, "最终正文应非空");
+});
+
+test("F2: 多轮对话的第二轮 —— buildMessages 重放历史时也带 reasoning_content", async () => {
+  // 三轮：
+  //   turn 1：用户问 → 模型调工具（带 reasoning）
+  //   turn 2：工具结果回来 → 模型给正文（带 reasoning）
+  //   turn 3：**用户再问一句** → 走 buildMessages 重放历史 → 必须仍然合规
+  const fake = await startStrictModel((turn) => {
+    if (turn === 1) {
+      return toolCallWithReasoning({ id: "call_m1", name: "SceneDigest", args: {}, reasoning: "先看工程摘要。" });
+    }
+    if (turn === 2) {
+      // 工具结果回来后的正文轮：也带 reasoning（思考模型通常会有）
+      return [
+        { choices: [{ index: 0, delta: { reasoning_content: "摘要看完了，可以作答。" } }] },
+        ...textChunks("工程有 2 个场景，没有问题。")
+      ];
+    }
+    return textChunks("第二次提问的回答：基于上一轮结论，建议保持现状。");
+  });
+
+  const { bridge, events } = await makeBridge({ baseUrl: fake.baseUrl });
+
+  // 第一次对话（含工具调用）
+  await bridge.aiChat({
+    requestId: "multi-1",
+    messages: [{ role: "user", text: "看看工程有没有问题" }],
+    context: { sceneDigest: "工程「多轮测试」2 场景" }
+  });
+  await bridge.whenIdle();
+  assert.ok(events.some((e) => e.type === "done"), "第一轮应完成");
+
+  // 第二次对话：同一会话再问一句 → buildMessages 重放历史
+  await bridge.aiChat({
+    requestId: "multi-2",
+    messages: [{ role: "user", text: "那要不要改点什么" }],
+    context: { sceneDigest: "工程「多轮测试」2 场景" }
+  });
+  await bridge.whenIdle();
+  await fake.close();
+
+  // ★ 核心断言：第三轮请求（重放历史）也不能有协议违规
+  assert.equal(
+    fake.violations.length,
+    0,
+    `多轮重放时不该有协议违规（缺 reasoning_content 会让真实服务 400），实际：${JSON.stringify(fake.violations)}`
+  );
+  assert.ok(fake.turns >= 3, `应至少发生 3 次请求，实际 ${fake.turns}`);
+});
+
+test("F3: 工具轮的真实历史（落盘后）能被重放成合规的 tool_calls + tool 序列", async () => {
+  // 这一条不看网络，只看 buildMessages 产出的形状：
+  // 从"带 tool-result 块"的历史里重放，必须还原 assistant(tool_calls) + N 条 tool
+  const fake = await startStrictModel((turn) => {
+    if (turn === 1) {
+      return toolCallWithReasoning({ id: "call_h1", name: "SceneDigest", args: {}, reasoning: "需要工程摘要。" });
+    }
+    return textChunks("看完了，没问题。");
+  });
+
+  const { bridge, events } = await makeBridge({ baseUrl: fake.baseUrl });
+  await bridge.aiChat({
+    requestId: "hist-1",
+    messages: [{ role: "user", text: "看工程" }],
+    context: { sceneDigest: "工程「历史重放」3 场景" }
+  });
+  await bridge.whenIdle();
+  await fake.close();
+
+  // 这次工具轮已被 stop：如果重放不还原 tool_calls，第二轮请求就会 400
+  assert.equal(fake.violations.length, 0, `历史重放不该违规：${JSON.stringify(fake.violations)}`);
+  assert.ok(fake.turns >= 2, `应有至少 2 次请求（工具轮 + 作答轮），实际 ${fake.turns}`);
+  assert.ok(events.some((e) => e.type === "done"), "应有 done");
+});
+
+test("G: 400 错误被映射成人话（不把整段 JSON 甩给用户）", async () => {
+  // 用户截图里界面上显示的是整段 {"error":{"message":"The `reasoning_content`..."}}
+  // 直接甩 JSON 毫无帮助 —— 用户只会以为软件坏了。
+  const fake = await startStrictModel(() => []);
+  // 让假服务永远 400（plan 返回空也会走 200；这里改为直接构造一个 400 响应）
+  await fake.close();
+
+  const raw = '模型接口返回 400：{"error":{"message":"The `reasoning_content` in the thinking mode must be passed back to the API.","type":"invalid_request_error"}}';
+  // 通过公开能力间接验证：发一个必然 400 的请求，看 error 事件文案
+  const server400 = createServer((req, res) => {
+    req.on("data", () => {});
+    req.on("end", () => {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "The `reasoning_content` in the thinking mode must be passed back to the API.", type: "invalid_request_error" } }));
+    });
+  });
+  await new Promise((r) => server400.listen(0, "127.0.0.1", r));
+  const port400 = server400.address().port;
+
+  const { bridge, events } = await makeBridge({ baseUrl: `http://127.0.0.1:${port400}/v1` });
+  await bridge.aiChat({ requestId: "e400", messages: [{ role: "user", text: "测试" }], context: {} });
+  await bridge.whenIdle();
+  await new Promise((r) => server400.close(r));
+
+  const err = events.find((e) => e.type === "error");
+  assert.ok(err, "应有 error 事件");
+  const msg = String(err.message);
+  // 核心：必须是人话，不是整段 JSON
+  assert.ok(!msg.trim().startsWith("{"), `不该把裸 JSON 甩给用户，实际：${msg.slice(0, 120)}`);
+  assert.ok(/思考模式|回传|推理/.test(msg), `应说明是思考模式的 reasoning 回传问题，实际：${msg.slice(0, 160)}`);
+});
+
 for (const c of cases) {
   try {
     await c.fn();

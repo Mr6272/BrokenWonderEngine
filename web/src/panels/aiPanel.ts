@@ -19,7 +19,7 @@ import { store } from "../core/store.ts";
 import { isUiScene, scriptLang, scriptNamesOfLang, type Project, type SceneModel } from "../core/model.ts";
 import { allProblems } from "../core/diagnostics.ts";
 import { appendOutput } from "../core/output.ts";
-import { modelStateOf, modelStateSuffix, isNeedsKey, countNeedsKey, canUseNow, probeModelOf, type ProbeResult } from "./aiModelState.ts";
+import { modelStateOf, modelStateSuffix, isNeedsKey, needsReKey, countNeedsKey, countKeyBroken, canUseNow, probeModelOf, type ProbeResult } from "./aiModelState.ts";
 import { beginThinking, applyThinkingEvent, endThinking, currentThinking, thinkingText, thinkingNeedsStop, freezeThinkingForDemo } from "./aiThinking.ts";
 import {
   aiStatus,
@@ -42,6 +42,8 @@ import {
 } from "../core/host.ts";
 import { error, info, modal, ok, warn } from "../ui/toast.ts";
 import { renderSessionSwitcher } from "./aiSessions.ts";
+import { presentError, type ErrorPresentation } from "./aiErrorView.ts";
+import { reconcileKeyBroken } from "./keyBrokenReconcile.ts";
 
 // ============================================================================
 // 工程摘要（契约 §4.5）—— 唯一允许进入 prompt 的工程信息
@@ -216,6 +218,12 @@ interface ChatTurn {
   streaming: boolean;
   model?: AiModel;
   reason?: string;
+  /** 结构化后的错误（不拼进 text —— 原始 JSON 不该出现在正文里） */
+  error?: ErrorPresentation;
+  /** 原始错误文本（只在「技术详情」折叠区展示，含 request_id） */
+  errorRaw?: string;
+  /** 是否可重试（决定要不要给重试按钮） */
+  recoverable?: boolean;
 }
 
 interface PendingEdit {
@@ -228,6 +236,14 @@ const HISTORY_MAX = 40;
 let turns: ChatTurn[] = [];
 let status: AiStatus | null = null;
 let statusLoaded = false;
+/**
+ * 演示模式：注入的 status 不被 `refreshStatus` 的真实拉取覆盖。
+ * 为什么需要：demo 注入后 `renderAiPanel` 会重新调 `refreshStatus`，
+ * 而它无条件 `status = await aiStatus()` —— 注入值立刻被冲掉。
+ */
+let statusPinnedForDemo = false;
+/** 「统计源不一致」只记一次痕，避免每次重绘都往输出面板刷一行 */
+let keyBrokenWarned = false;
 let currentRequest = "";
 let lastUsage: TokenUsage | null = null;
 let lastCacheHit = 0;
@@ -436,20 +452,23 @@ function handleAiEvent(ev: AiEvent): void {
       return;
     }
     case "error": {
+      // **不要把原始错误拼进正文**。
+      // 用户截图里那段 400 JSON 就是被拼进气泡的：占一大块、看不懂，
+      // 而且它留在 text 里之后，"正文是否为空"的判断也被污染了。
+      // 正确做法：正文保持原样（AI 真说了什么就留什么），错误走独立的结构化字段。
       if (live) {
         live.streaming = false;
-        live.text = live.text ? `${live.text}\n\n（中断：${ev.message}）` : `（失败：${ev.message}）`;
+        live.error = presentError(ev.message);
+        live.errorRaw = String(ev.message ?? "");
+        live.recoverable = Boolean(ev.recoverable);
       }
       currentRequest = "";
       endThinking();
       hooks?.renderThread();
-      // recoverable=true 表示"再试一次可能成功"（网络抖动 / 限流等）。
-      // 给明确的重试入口，而不是让用户自己琢磨要不要再点一次。
-      if (ev.recoverable) {
-        hooks?.appendSystemNote(`这次调用失败：${ev.message}。这个问题可能可以重试解决。`, () =>
-          hooks?.retryLastUserMessage()
-        );
-      }
+      // **不再额外追加系统提示条**：
+      // 错误气泡本身已经给了「结论 + 建议 + 重试按钮」，
+      // 再补一条同样内容的提示条就是**重复说同一件事**（截图里实测到了）。
+      // 沉默不好，但啰嗦地重复也不好 —— 一处说清就够。
       hooks?.renderThinking?.();
       hooks?.updateMeter();
       return;
@@ -507,6 +526,33 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
   mockHint.style.padding = "6px 12px 0";
   mockHint.style.display = "none";
   wrap.appendChild(mockHint);
+
+  // 明文存储告知条（**只在 insecure:true 时出现，可关闭**）。
+  //
+  // 为什么放在这里而不是 chip 上：
+  //   chip 回答的是「这条模型能不能用」，而明文存储是**安全相关的告知**，
+  //   两者语义不同。塞进 chip 会让人以为"明文存储导致模型不可用"（不是）。
+  // 为什么可关闭：这是持久状态，每次打开面板都提示是对的，
+  //   但用户知道了之后应该能收起，否则会变成长期噪音。
+  // 收起后按会话记忆（sessionStorage），下次启动会再提示一次 ——
+  //   安全告知不该永久消失。
+  const insecureHint = el("div", { class: "ai-insecure-hint" });
+  insecureHint.dataset.aiInsecure = "1";
+  insecureHint.style.display = "none";
+  wrap.appendChild(insecureHint);
+
+  // Key 失效批量提示条（**阻断级**：key 解不开 = 功能完全不可用）。
+  //
+  // 为什么是常驻条而不是"点开才看到"：
+  //   这是阻断级问题，不能藏在二级菜单里 —— 用户打开 AI 面板第一眼就该看到。
+  // 为什么不做成两层导航（顶部条 + 点开列表）：
+  //   「1 个 key 失效」是最常见的情况，为一件事造两层导航是过度设计。
+  //   所以 count===1 时「去重填」直接定位到唯一那条；
+  //   count>=2 时才在条内展开成小列表（每行一个模型 + 各自重填按钮）。
+  const keyBrokenHint = el("div", { class: "ai-keybroken-hint" });
+  keyBrokenHint.dataset.aiKeybroken = "1";
+  keyBrokenHint.style.display = "none";
+  wrap.appendChild(keyBrokenHint);
 
   // 「测试连接」结果区宿主：常驻但默认空，探测后才有内容。
   // 必须在 thread 之前创建并赋值，否则 renderProbeArea 拿不到它（早前漏了赋值，
@@ -710,10 +756,173 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
 
   // ---------------- 顶部状态 ----------------
 
+  /**
+   * 明文存储告知条。
+   *
+   * `insecure` 是**持久状态**（系统加密存储不可用 → key 落成明文），
+   * 属于安全告知，必须让用户知道；但它**不代表模型不可用**（能用，只是不安全）。
+   * 所以：
+   *   · 不进 chip（chip 只回答"能不能用"）
+   *   · 一行小字 + 带 ×，可收起（持久提示不该变成长期噪音）
+   *   · 收起记在 sessionStorage —— 下次启动会再提示一次（安全告知不该永久消失）
+   */
+  /**
+   * Key 失效批量提示条。
+   *
+   * 数量来自 `aiStatus().keyUndecryptableCount`（主进程算好的，UI 不自己数）。
+   *
+   * 两级形态（**按数量自动选，不是两级导航**）：
+   *   · count === 1 → 一条提示 + 「去重填」，点了直接弹那一条的填 key 框
+   *   · count >= 2 → 同一条提示 + 「去重填」展开成小列表，每行一个模型 + 各自按钮
+   *   · count === 0 → 完全不出现
+   */
+  function renderKeyBrokenHint(st: AiStatus | null): void {
+    const host = document.querySelector("[data-ai-keybroken]") as HTMLElement | null;
+    if (!host) return;
+
+    // ---- 两份统计源交叉校验 ----
+    // `count`（主进程算的总数）与「逐条模型自己的 keyUndecryptable」是两个独立源。
+    // 显示用**逐条数出来的**（红条说几条，列表里就得能点到几条）；
+    // 不一致只在「输出」面板留痕，**不为它设计 UI**（用户不该看到我们的内部不一致）。
+    //
+    // 清单未加载时**抛错**（由下方 try/catch 兜底并记输出面板）：
+    // 曾因为这里读到 null 清单 → countKeyBroken([]) 恒为 0 → 提示条永远隐藏。
+    let perEntry = 0;
+    try {
+      perEntry = countKeyBroken(requireModels("renderKeyBrokenHint").models);
+    } catch (e) {
+      // 写「输出」面板的 error 级（红色），并在控制台也打一份 ——
+      // 这类顺序错误必须**看得见**，否则又会变成"静默渲染成空"。
+      // 不向上抛：一个提示条不该把整个面板打死（生产环境的取舍），
+      // 但开发时看输出面板/控制台立刻就能发现。
+      appendOutput("AI", `[顺序错误] ${(e as Error).message}`, "error");
+      console.error("%c[AI 面板 / 顺序错误]", "color:#c33;font-weight:bold", (e as Error).message);
+    }
+    const check = reconcileKeyBroken(perEntry, st?.keyUndecryptableCount, st?.keyUndecryptableEntries);
+    if (check.warning && !keyBrokenWarned) {
+      keyBrokenWarned = true;   // 只记一次，不刷屏
+      appendOutput("AI", check.warning, "warn");
+    }
+
+    const count = check.shown;
+    if (!count) {
+      host.style.display = "none";
+      return;
+    }
+    host.replaceChildren();
+    host.style.display = "";
+
+    const head = el("div", { class: "ai-keybroken-head" });
+    head.appendChild(svg(I.warn, 13));
+    head.appendChild(
+      el("span", { class: "ai-keybroken-text" }, `${count} 个模型的 API Key 需要重新粘贴`)
+    );
+    head.appendChild(el("div", { class: "spacer" }));
+    const goBtn = button(count === 1 ? "去重填" : "查看并重填", () => void rekeyAll(count), {
+      size: "sm",
+      variant: "primary",
+      iconPath: I.lock,
+      title: count === 1 ? "切到该模型并粘贴 Key" : "逐个重新粘贴"
+    });
+    goBtn.dataset.aiRekeyAll = "1";
+    head.appendChild(goBtn);
+    host.appendChild(head);
+
+    // count >= 2 才展开列表（1 个时直接由「去重填」处理，不占高度）
+    if (count >= 2) {
+      const list = el("div", { class: "ai-keybroken-list" });
+      const brokenEntries = (modelsState?.models ?? []).filter((m) => m.keyUndecryptable);
+      for (const m of brokenEntries) {
+        const row = el("div", { class: "ai-keybroken-row" });
+        row.dataset.aiKeybrokenItem = m.id;
+        row.appendChild(el("span", { class: "ai-keybroken-name" }, m.label || m.id));
+        const rb = button("重填", () => {
+          keyDialogFor = m;
+          renderKeyDialog();
+        }, { size: "sm", variant: "ghost", iconPath: I.lock, title: `重新粘贴「${m.label || m.id}」的 Key` });
+        rb.dataset.aiRekey = "1";
+        row.appendChild(rb);
+        list.appendChild(row);
+      }
+      // 若主进程只给了 count 但清单里没标 keyUndecryptable（字段未同步），
+      // 就退化成"逐个尝试"—— 不假装知道是哪几条。
+      if (!brokenEntries.length) {
+        list.appendChild(
+          el("div", { class: "hint ai-keybroken-empty" }, "逐条检查模型可找到需要重填的那几条。")
+        );
+      }
+      host.appendChild(list);
+    }
+  }
+
+  /**
+   * 「去重填」：count===1 时直接定位唯一那条；>=2 时展开/收起列表。
+   * 为什么不让用户自己去下拉里找：key 解不开是阻断级问题，替他多走一步。
+   */
+  async function rekeyAll(count: number): Promise<void> {
+    if (!modelsState) await loadModels();
+    const broken = (modelsState?.models ?? []).filter((m) => m.keyUndecryptable);
+    if (broken.length === 1) {
+      keyDialogFor = broken[0];
+      renderKeyDialog();
+      return;
+    }
+    if (broken.length >= 2) {
+      // 展开/收起列表（不二次跳转）
+      const list = document.querySelector(".ai-keybroken-list") as HTMLElement | null;
+      if (list) {
+        list.style.display = list.style.display === "none" ? "" : "none";
+      } else {
+        renderKeyBrokenHint(status);   // 首次点：让它按 >=2 的形态渲染出列表
+        document.querySelector(".ai-keybroken-list")!.scrollIntoView({ block: "nearest" });
+      }
+      return;
+    }
+    // 清单里没有标记（字段未同步）：退到下拉，让用户自己选
+    info("请在下拉里选择要重填 Key 的模型");
+  }
+
+  function renderInsecureHint(st: AiStatus | null): void {
+    const host = document.querySelector("[data-ai-insecure]") as HTMLElement | null;
+    if (!host) return;
+    const insecure = Boolean(st?.insecure);
+    const dismissed = sessionStorage.getItem("bwe.ai.insecureDismissed") === "1";
+    if (!insecure || dismissed) {
+      host.style.display = "none";
+      return;
+    }
+    host.replaceChildren();
+    host.style.display = "";
+    host.appendChild(svg(I.lock, 12));
+    // 两种来源，两种措辞 —— 用户的判断和后续动作不同：
+    //   · insecure（这台机器加密不可用）→ "我这台机器是不是有问题"
+    //   · keyPlaintextFallback（key 曾经加密过、因解不开才降级）
+    //     → "我的 key 出事过，但现在已经能用（明文）"
+    // 两个都为 true 时用降级版（信息更全，含"曾经加密"这层）。
+    // **不新增第二条提示条** —— 一句话说清就够（沉默不好，啰嗦也不好）。
+    const fallback = Boolean(st?.keyPlaintextFallback);
+    host.appendChild(
+      el(
+        "span",
+        { class: "ai-insecure-text" },
+        fallback
+          ? "你之前保存的 API Key 无法解密，已以明文保存（系统加密存储不可用）。仅建议在单人使用的机器上这样配置。"
+          : "当前 API Key 以明文保存（系统加密存储不可用）。仅建议在单人使用的机器上这样配置。"
+      )
+    );
+    const closeBtn = button("×", () => {
+      sessionStorage.setItem("bwe.ai.insecureDismissed", "1");
+      host.style.display = "none";
+    }, { size: "sm", variant: "ghost", title: "知道了，本次运行不再提示" });
+    closeBtn.dataset.aiInsecureClose = "1";
+    host.appendChild(closeBtn);
+  }
+
   async function refreshStatus(bar: HTMLElement, hintBox: HTMLElement): Promise<void> {
     bar.replaceChildren();
     try {
-      status = await aiStatus();
+      // 演示模式下保留注入的 status（否则注入值立刻被真实值覆盖）
+      if (!statusPinnedForDemo) status = await aiStatus();
       statusLoaded = true;
     } catch {
       status = null;
@@ -725,11 +934,38 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       return;
     }
 
-    const mock = status.mode === "mock" || !status.ready;
+    // ⚠ 「宿主整体是否就绪」≠「这条模型没问题」。
+    // 用户实际踩坑：key 解密失败时 status.ready 可能是 false，于是整条 chip
+    // 被显示成「本地演示」—— 用户明明配了 kimi/flash，界面却说本地演示，
+    // 完全看不出真正的原因（Key 解不开）。
+    //
+    // 所以：`status.ready === false` 时**仍然要看条目自身状态**。
+    // 只有真正没有宿主/没有模型（mode === "mock" 或清单为空）才算"本地演示"。
+    const hostMockOnly = status.mode === "mock";
+    const mock = hostMockOnly;
 
-    // 模型清单必须先加载：下面要根据当前条目的 ready/needsKeyMissing 决定 chip 文案。
-    // （早前是先画 chip 后 loadModels，导致 activeEntry() 恒为 null，chip 永远显示默认"已连接"）
+    // ========================================================================
+    // ⚠ 渲染顺序约定（**违反过一次，真机才抓到**）
+    //
+    //   凡是读取 `modelsState` / `activeEntry()` / `countXxx(modelsState)` 的渲染，
+    //   必须在 `await loadModels()` **之后**。
+    //
+    //   历史三次同类事故：
+    //     1. chip 在 loadModels 前构建 → `activeEntry()` 恒为 null → chip 永远显示默认态
+    //     2. `entryHint` 判 `reachable`（该字段从不产出）→ 死分支
+    //     3. `renderKeyBrokenHint` 在 loadModels 前调 → `modelsState` 是 null
+    //        → `countKeyBroken([])` 恒为 0 → 批量提示条**永远 display:none**
+    //        （真机 probe 出 rect 0x0 / visible:false / text 空）
+    //
+    //   前两次的教训是"看起来实现了、实际恒为空"，第三次又栽在同一个坑上。
+    //   所以这里把顺序写在代码里，并且让 `requireModels()` 在未加载时**抛错** ——
+    //   开发期立刻炸，而不是静默渲染成空（静默降级才是这类 bug 反复出现的直接原因）。
+    // ========================================================================
     await loadModels();
+
+    // 清单就绪后才渲染"依赖逐条数据"的提示
+    renderInsecureHint(status);
+    renderKeyBrokenHint(status);
 
     // 常驻状态标识：不只弹一次性 toast。
     // 为什么必须常驻：用户可能过一会儿才发下一条消息，那时才会失败；
@@ -759,11 +995,40 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       stateChip.style.gap = "6px";
       stateChip.appendChild(probeBtn);
     }
+    // ⚠ Key 失效（填过但解不开）：**必须给一键重填入口**，
+    // 不许让用户去别处找。这条是用户实际踩坑点 ——
+    // 他填过 key，重启后解不开，如果 UI 只显示「待填 key」，
+    // 他会以为是自己忘了填，反复去设置页折腾。
+    if (st.kind === "key-broken" && entryForState) {
+      const rekeyBtn = button("重新粘贴 Key", () => {
+        keyDialogFor = entryForState;
+        renderKeyDialog();
+      }, {
+        size: "sm",
+        variant: "primary",
+        iconPath: I.lock,
+        title: st.why
+      });
+      rekeyBtn.dataset.aiRekey = "1";
+      stateChip.style.display = "inline-flex";
+      stateChip.style.alignItems = "center";
+      stateChip.style.gap = "6px";
+      stateChip.appendChild(rekeyBtn);
+    }
     bar.appendChild(stateChip);
     bar.appendChild(el("div", { class: "spacer" }));
 
-    if (mock) {
+    // mock 提示条：只在**真的没有宿主**（mode === "mock"）时才显示。
+    // ⚠ 不能用 `mock`（那个是"chip 该不该说本地演示"）——
+    //   否则 key 解密失败时（status.ready=false 但 mode 仍是 desktop）
+    //   会挂出"没有可用的 AI 宿主，当前是本地演示模式"，
+    //   把"Key 解不开"误导成"你没配 AI"，正好掩盖真正的根因。
+    if (hostMockOnly) {
       hintBox.textContent = status.message || "没有可用的 AI 宿主，当前是本地演示模式。";
+      hintBox.style.display = "";
+    } else if (!status.ready) {
+      // 宿主在、但整体没就绪：说清楚是模型配置问题，不是"本地演示"
+      hintBox.textContent = "有桌面宿主，但当前模型的配置还不完整（详见下方模型状态）。";
       hintBox.style.display = "";
     } else {
       hintBox.style.display = "none";
@@ -984,6 +1249,24 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     }
   }
 
+  /**
+   * 取清单，**未加载就抛错**。
+   *
+   * 为什么抛错而不是返回空：这类 bug 的形态是「看起来实现了、实际恒为空」
+   * —— 静默降级成空值，UI 只是少显示一块，没人会发现。
+   * 前面已经因此栽过三次（chip 恒 null / reachable 死分支 / 批量条恒隐藏）。
+   *
+   * 抛错能让开发期**立刻炸**（控制台一片红），而不是静默渲染成空。
+   * 生产环境由调用方 try/catch 兜底（渲染不该因为一个提示条把整个面板打死）。
+   */
+  function requireModels(where: string): AiModelsState {
+    if (!modelsState) {
+      throw new Error(`[AI 面板] ${where} 在 modelsState 未加载时被调用 —— `
+        + `凡是读取清单/activeEntry/countXxx 的渲染必须在 await loadModels() 之后。`);
+    }
+    return modelsState;
+  }
+
   /** 当前模型条目。 */
   function activeEntry(): AiModelEntry | null {
     if (!modelsState) return null;
@@ -1033,6 +1316,14 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
         renderKeyDialog();
         return;
       }
+      // Key 失效（填过但这次启动解不开）也**直接弹重填框**：
+      // 这是用户唯一的自救路径，不能让他先切过去再失败一次才看到提示。
+      if (needsReKey(picked)) {
+        sel.value = active?.id ?? "";
+        keyDialogFor = picked;
+        renderKeyDialog();
+        return;
+      }
       void applyModel(picked.id);
     });
     box.appendChild(sel);
@@ -1061,8 +1352,14 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     // 模型计数：原生 select 折叠时只显示当前项，用户看不到"还有几个可选"。
     // 这行小字同时解决了产品上的信息缺失与验收截图的自证需求。
     const needsKey = countNeedsKey(models);
+    const broken = countKeyBroken(models);
+    // 「待填 key」和「Key 失效」必须分开写：前者用户没填过，后者填过但解不开，
+    // 合并成一个数字会让人以为"所有都要重填"，也看不出是客户端故障。
+    const bits: string[] = [];
+    if (needsKey) bits.push(`${needsKey} 个待填 key`);
+    if (broken) bits.push(`${broken} 个 Key 失效`);
     const countText = models.length
-      ? `共 ${models.length} 个模型${needsKey ? `（${needsKey} 个待填 key）` : ""}`
+      ? `共 ${models.length} 个模型${bits.length ? `（${bits.join("、")}）` : ""}`
       : "没有可用模型（桌面版可导入）";
     const countHint = el("span", { class: "hint ai-model-count" }, countText);
     countHint.dataset.aiModelCount = "1";
@@ -1120,7 +1417,13 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
             "div",
             { class: "hint" },
             `这个模型来自 ${m.provider}（${m.baseUrl || "未提供地址"}）。\n`
-            + "它还没有 API Key，所以现在发不出请求。填好保存后即可使用。\n"
+            // ⚠ 文案必须区分两种原因 —— 说错会让用户白折腾：
+            //   · key-broken：用户填过，但本次启动 Electron 安全存储解不开
+            //   · needs-key：用户从来没填过
+            + (needsReKey(m)
+              ? "你的 Key 已经加密保存过，但本次启动解不开（Electron 安全存储失效）。\n"
+                + "重新粘贴一次就能恢复 —— 填完立即生效，不需要重启。\n"
+              : "它还没有 API Key，所以现在发不出请求。填好保存后即可使用。\n")
             + "提示：从其他编辑器（如 Trae）导入的 Key 通常是设备绑定的、无法导出，需要在这里手动填。"
           )
         );
@@ -1485,14 +1788,29 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
 
     for (const t of turns) {
       if (t.role === "user") {
+        // 用户消息为空就不渲染（防御：上游 trim 过就不该出现空节点）
+        if (!String(t.text ?? "").trim()) continue;
         thread.appendChild(el("div", { class: "ai-msg user" }, t.text));
         continue;
       }
-      const bubble = el("div", { class: "ai-msg assistant" });
-      bubble.appendChild(el("span", { class: "ai-text" }, t.text));
-      if (t.streaming) bubble.appendChild(el("span", { class: "ai-cursor" }));
-      thread.appendChild(bubble);
+
+      // **空助手消息完全不渲染**。
+      // 用户截图里那几条"极淡的空白横线"就是它：一个只有边框/背景、
+      // 没有文字的气泡。空消息没有任何信息量，留着只会让人以为加载失败。
+      const hasText = String(t.text ?? "").trim().length > 0;
+      const hasTools = Array.isArray(t.tools) && t.tools.length > 0;
+      const hasError = Boolean(t.error);
+      if (!hasText && !hasTools && !hasError && !t.streaming) continue;
+
+      if (hasText || t.streaming) {
+        const bubble = el("div", { class: "ai-msg assistant" });
+        bubble.appendChild(el("span", { class: "ai-text" }, t.text));
+        if (t.streaming) bubble.appendChild(el("span", { class: "ai-cursor" }));
+        thread.appendChild(bubble);
+      }
       for (const tool of t.tools) thread.appendChild(toolBlock(tool));
+      // 错误用**独立的结构化气泡**（人话在上、技术详情折叠、request_id 可复制）
+      if (t.error) thread.appendChild(errorBubble(t.error, t.errorRaw, t.recoverable));
     }
 
     // diff 预览追加在对话之后，跟随最新一次编辑
@@ -1618,6 +1936,73 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
   }
 
   /**
+   * 错误气泡（结构化）。
+   *
+   * 起因：用户截图里 400 的原始 JSON 原样挂在对话区，占一大块且完全看不懂，
+   * 而真正有用的 `request_id` 反而藏在里面。
+   *
+   * 结构（三层，按"用户需要多少"排序）：
+   *   1. **标题行**：人话结论 + 谁的问题（`⚠ 请求被服务端拒绝` / `API Key 无效`…）
+   *   2. **建议行**：现在该做什么
+   *   3. **技术详情**：默认折叠，展开后是原始错误 + 单独的 request_id（等宽、可复制）
+   */
+  function errorBubble(err: ErrorPresentation, raw: string | undefined, recoverable?: boolean): HTMLElement {
+    const box = el("div", { class: "ai-error" });
+    box.dataset.aiError = err.kind;
+
+    const head = el("header");
+    head.appendChild(svg(I.warn, 13));
+    head.appendChild(el("span", { class: "ai-error-title" }, err.title));
+    box.appendChild(head);
+
+    if (err.hint) box.appendChild(el("div", { class: "ai-error-hint" }, err.hint));
+
+    // 服务端给的原始消息（已从 JSON 抽出，不是整坨 JSON）—— 放正文位置，
+    // 因为它通常就是一句人话（如 "The reasoning_content … must be passed back"）
+    if (err.rawMessage) {
+      box.appendChild(el("div", { class: "ai-error-msg" }, err.rawMessage));
+    }
+
+    // 技术详情：默认折叠（用户不查就不该看到 JSON）
+    const details = el("details", { class: "ai-error-detail" });
+    details.appendChild(el("summary", null, "技术详情"));
+    const pre = el("pre", { class: "ai-error-pre mono" }, String(raw ?? err.rawMessage ?? ""));
+    details.appendChild(pre);
+
+    // request_id 单独一行、等宽、可复制 —— 贴给服务商排查时必须要有它，
+    // 但不能让它占主体。
+    if (err.requestId) {
+      const ridRow = el("div", { class: "ai-error-rid" });
+      ridRow.appendChild(el("span", { class: "ai-error-rid-label" }, "request_id"));
+      const rid = el("code", { class: "ai-error-rid-value mono" }, err.requestId);
+      rid.title = "点击复制";
+      rid.style.cursor = "pointer";
+      rid.addEventListener("click", () => {
+        void navigator.clipboard?.writeText(err.requestId).then(
+          () => info("request_id 已复制"),
+          () => info(`复制失败，请手动选中：${err.requestId}`)
+        );
+      });
+      ridRow.appendChild(rid);
+      details.appendChild(ridRow);
+    }
+    box.appendChild(details);
+
+    // 可重试才给按钮（客户端缺陷/Key 无效这类重试也没用）
+    if (recoverable !== false && err.retryable) {
+      const retryBtn = button("重试", () => retryLastUserMessage(), {
+        size: "sm",
+        variant: "ghost",
+        iconPath: I.redo,
+        title: "重发上一条消息"
+      });
+      retryBtn.dataset.aiRetry = "1";
+      box.appendChild(retryBtn);
+    }
+    return box;
+  }
+
+  /**
    * 在对话区插一条系统提示。
    *
    * 用途：`done` 但正文为空 / 出错可重试 —— 这两种都是**"AI 什么都没说就停了"**
@@ -1647,15 +2032,35 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
   }
 
   /** 重发上一条用户消息（用于「重试」按钮）。 */
+  /**
+   * 重发上一条用户消息。
+   *
+   * ⚠ **不能直接 `send()`**：`send()` 会 `turns.push(user)`，于是同一句用户消息
+   * 在对话区出现**两次**（一次来自历史、一次来自重试）—— 用户截图里就是这个现象。
+   *
+   * 正确做法：**删掉失败的那一轮**（末尾的空/失败助手回合），
+   * 然后重发 —— 复用已有的那条用户消息，不新增。
+   * 判据：重试 N 次之后，同一条用户消息只出现 1 次。
+   */
   function retryLastUserMessage(): void {
     if (currentRequest) return;   // 正在跑就别重复发
-    for (let i = turns.length - 1; i >= 0; i--) {
-      const t = turns[i];
-      if (t.role === "user") {
-        void send("chat", t.text);
-        return;
-      }
+
+    // 从末尾往回吃掉"没有正文的助手回合"（失败/空的那些），保留用户消息
+    while (turns.length > 0) {
+      const last = turns[turns.length - 1];
+      if (last.role !== "assistant") break;
+      const hasText = String(last.text ?? "").trim().length > 0;
+      // 有正文的助手回合不该被重试吞掉（那是有效回答）
+      if (hasText) break;
+      turns.pop();
     }
+    if (!turns.length || turns[turns.length - 1].role !== "user") return;
+
+    const text = turns[turns.length - 1].text;
+    // 复用已有的那条 user：**先 pop 再从 send 里 push 回来**，
+    // 这样 turns 里始终只有一份，不会累积重复。
+    turns.pop();
+    void send("chat", text);
   }
 
   /**
@@ -2212,6 +2617,162 @@ export function demoToolFailure(): void {
     cacheHitRate: 0,
     savedUsdApprox: 0
   } as AiEvent);
+}
+
+/**
+ * 验收出口：构造一条 400 错误（用户实际遇到的 kimi `reasoning_content` 那条）。
+ *
+ * 走 `handleAiEvent` 的真实渲染路径，证明"UI 收到 error 事件后会这样显示"，
+ * 而不是"样式能画出来"。
+ */
+export function demoServerError(raw?: string): void {
+  const rid = "__demo_error__";
+  const text = raw
+    ?? '400 {"error":{"message":"The `reasoning_content` in the thinking mode must be passed back to the API.","type":"invalid_request_error","code":"invalid_request_error"},"request_id":"req_9f2c7a1b4e6d8850"}';
+  turns.push({ role: "user", text: "把这个场景的性能问题找出来", tools: [], streaming: false });
+  turns.push({ role: "assistant", text: "", tools: [], streaming: true });
+  currentRequest = rid;
+  handleAiEvent({ type: "error", requestId: rid, message: text, recoverable: true } as AiEvent);
+}
+
+/**
+ * 验收出口：构造「Key 填过但本次启动解不开」的模型状态。
+ *
+ * 为什么需要：这是用户实际踩的坑 ——
+ * 他真填了 key（`encryptedApiKey` 有内容），但重启后 Electron 安全存储解不开，
+ * 请求带空 key → 400/401 → 「跑了两下就寄」。
+ * UI 若显示成「待填 key」，用户会以为是自己忘了填，反复折腾。
+ *
+ * 这里通过 `__BWE__.demoKeyBroken()` 注入一条带 `keyUndecryptable` 的模型，
+ * 走**真实的状态判定 + chip 渲染**（不是直接拼 DOM），证明"UI 会这样显示"。
+ */
+/**
+ * 验收出口：构造「key 以明文保存」（insecure:true）的状态。
+ *
+ * 为什么需要：`insecure` 只在系统加密存储不可用时出现，
+ * 普通环境复现不了；而这是**安全告知**，必须有图自证它会显示、且可关闭。
+ */
+/**
+ * 验收出口：「明文降级」文案（key 曾经加密、因解不开才降级成明文）。
+ *
+ * 与 `demoInsecure` 的差别只在**措辞**：
+ *   · insecure → 「当前 API Key 以明文保存」
+ *   · + keyPlaintextFallback → 「你之前保存的 API Key 无法解密，已以明文保存」
+ * 为什么必须区分：前者让用户想「我这台机器是不是有问题」，
+ * 后者让他知道「我的 key 出事过，但现在已经能用」。判断和后续动作不同。
+ */
+export function demoPlaintextFallback(): void {
+  status = {
+    provider: "openai-compatible",
+    ready: true,
+    mode: "desktop",
+    models: { flash: "deepseek-flash", pro: "deepseek-flash" },
+    insecure: true,
+    keyPlaintextFallback: true
+  } as AiStatus;
+  statusLoaded = true;
+  statusPinnedForDemo = true;
+  sessionStorage.removeItem("bwe.ai.insecureDismissed");
+  const panelHost = document.querySelector(".ai-panel")?.parentElement as HTMLElement | null;
+  if (panelHost) renderAiPanel(panelHost, requestRepaint);
+  console.log("[demo] 已注入明文降级状态");
+}
+
+export function demoInsecure(): void {
+  status = {
+    provider: "openai-compatible",
+    ready: true,
+    mode: "desktop",
+    models: { flash: "deepseek-flash", pro: "deepseek-flash" },
+    // ★ 关键：明文存储标记（AiStatus.insecure 尚未并入 host.ts 类型）
+    insecure: true
+  } as unknown as AiStatus;
+  statusLoaded = true;
+  statusPinnedForDemo = true;
+  // 清掉"已关闭"标记，保证截图时能看到提示条
+  sessionStorage.removeItem("bwe.ai.insecureDismissed");
+  const panelHost = document.querySelector(".ai-panel")?.parentElement as HTMLElement | null;
+  if (panelHost) renderAiPanel(panelHost, requestRepaint);
+  console.log("[demo] 已注入明文存储状态");
+}
+
+export function demoKeyBroken(): void {
+  // 直接走现成的 `injectModelsForDemo`（模块内函数），而不是 `__BWE__.demoModels`
+  // —— 后者是无参的、固定那份演示清单，传不进去自定义状态。
+  // 必须同时把 status 伪造成「desktop 宿主在、但整体未就绪」——
+  // 否则真实 mock 状态下 chip 会走「本地演示」分支，看不到 key-broken。
+  // 这正是用户真实处境的形状：宿主在、模型配了、但 key 解不开。
+  status = {
+    provider: "openai-compatible",
+    ready: false,
+    mode: "desktop",
+    message: "当前模型不可用（详见面板状态）",
+    models: { flash: "kimi-k3", pro: "deepseek-flash" },
+    // 批量提示条用（主进程算好的数量，UI 不自己数）
+    keyUndecryptableCount: 1
+  } as unknown as AiStatus;
+  statusLoaded = true;
+  statusPinnedForDemo = true;
+
+  injectModelsForDemo({
+    models: [
+      {
+        id: "kimi-k3",
+        label: "kimi-k3",
+        provider: "openai-compatible",
+        baseUrl: "https://api.moonshot.cn/v1",
+        model: "kimi-k3",
+        ready: false,
+        // ★ 关键：填过（有加密内容）但本次启动解不开
+        keyUndecryptable: true,
+        hasApiKey: false,
+        needsKey: true,
+        needsKeyMissing: true,
+        reason: "API Key 无法解密（本次启动安全存储不可用）",
+        source: "manual"
+      } as unknown as AiModelEntry,
+      {
+        id: "deepseek-flash",
+        label: "deepseek-flash",
+        provider: "openai-compatible",
+        baseUrl: "https://api.deepseek.com",
+        model: "deepseek-chat",
+        ready: true,
+        hasApiKey: true,
+        needsKey: false,
+        needsKeyMissing: false,
+        source: "manual"
+      } as unknown as AiModelEntry
+    ],
+    active: "kimi-k3"
+  } as unknown as AiModelsState);
+  // 顶部条要重画才能反映新状态（demo 是在面板已渲染后点触发的）。
+  // 用已有的重画出口：`refreshStatus` 是闭包内的，靠 hooks 通知不到，
+  // 所以直接重建整个面板（demo 场景下代价可以忽略）。
+  const panelHost = document.querySelector(".ai-panel")?.parentElement as HTMLElement | null;
+  if (panelHost) renderAiPanel(panelHost, requestRepaint);
+  console.log("[demo] 已注入 Key 失效模型");
+}
+
+/** 验收出口：连点两次「重试」，验证同一条用户消息仍只出现一次。 */
+export function demoRetryTwice(raw?: string): void {
+  const rid = "__demo_retry__";
+  const text = raw
+    ?? '400 {"error":{"message":"The `reasoning_content` in the thinking mode must be passed back to the API.","type":"invalid_request_error"}}';
+  turns.length = 0;   // 从干净状态开始，证据才清楚
+  turns.push({ role: "user", text: "把这个场景的性能问题找出来", tools: [], streaming: false });
+  turns.push({ role: "assistant", text: "", tools: [], streaming: true });
+  currentRequest = rid;
+  handleAiEvent({ type: "error", requestId: rid, message: text, recoverable: true } as AiEvent);
+  // 模拟用户点两次「重试」（每次都是失败），断言用户消息不累积
+  for (let i = 0; i < 2; i++) {
+    currentRequest = "";
+    hooks?.retryLastUserMessage();
+    currentRequest = `${rid}_${i}`;
+    handleAiEvent({ type: "error", requestId: currentRequest, message: text, recoverable: true } as AiEvent);
+  }
+  currentRequest = "";
+  console.log("[demo] retry 后 turns 里的 user 条数:", turns.filter((t) => t.role === "user").length);
 }
 
 /** 验收出口：只截「done 但正文为空」的系统提示（不含工具块）。 */

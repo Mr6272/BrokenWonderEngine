@@ -137,11 +137,26 @@ export const IPC_CONTRACT = {
     params: "无",
     returns: [
       "provider", "intendedProvider", "ready", "mode", "message", "models", "activeModelId",
-      "activeModel", "modelList", "usage", "storage", "activeSession", "sessionCount", "insecure"
+      "activeModel", "modelList", "usage", "storage", "activeSession", "sessionCount", "insecure",
+      "keyUndecryptable", "keyUndecryptableCount", "keyUndecryptableEntries", "keyPlaintextFallback"
     ],
     notes:
       "`ready` 只表示**配置齐全**，不含连通性（探 use bwe:ai-probe-model）。"
       + " 缺 key 时 provider=mock 但 intendedProvider 保留意图（UI 据此提示「想用 X 但缺 key」）。"
+      + "\\n\\n**`keyUndecryptable` 与 `needsKeyMissing` 是两种不同状态，UI 必须分开处理：**"
+      + "\\n  · needsKeyMissing = 用户**真没填** → 下一步「去填 API Key」"
+      + "\\n  · keyUndecryptable = **填过但本次启动解不开** → 下一步「**重新粘贴一次**」（可用一条就生效）"
+      + "\\n成因：Electron safeStorage 在 Windows 上可能「isEncryptionAvailable()=true 但 decryptString 失败」"
+      + "（DPAPI 上下文在进程/会话重启后不一致，或 Electron 升级后参数变化）。"
+      + "此时磁盘密文还在，但内存里 apiKey 为空 —— 若按「没填」提示，用户明明填过却看到「待填」，"
+      + "发请求带空 key 必然 401，而用户完全不知道去哪修。"
+      + "\\n`keyUndecryptableEntries` 指出具体哪些条目：`[{scope:\"top-level\"|\"model\", id}]`。"
+      + "\\n`keyPlaintextFallback=true` 表示上次保存因加密不可用而**降级成明文** —— UI 可据此提示「当前 key 未加密存储」。"
+      + "\\n\\n**三源恒等式（必须始终成立）**："
+      + "\\n  `keyUndecryptableCount === keyUndecryptableEntries.length === ai-models 里 keyUndecryptable:true 的条数`"
+      + "\\n  这是**刻意的冗余统计**，用来互相校验 —— 一旦漂移，用户会看到「红条说 1 个，点进去却是 2 个」。"
+      + "\\n  主进程 --ipc-probe 有自检通道 `bwe:key-state-consistency` 断言这条恒等式；"
+      + "\\n  另有一条语义约束：`keyUndecryptable` 与 `needsKeyMissing` **不可同时为 true**（解不开不算没填）。"
   },
   "bwe:ai-chat": {
     preload: "aiChat",

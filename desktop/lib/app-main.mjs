@@ -27,7 +27,7 @@ import { createConversationStore, DEFAULT_TITLE } from "./ai/conversations.mjs";
 import { createRecentStore } from "./recent.mjs";
 import { createSettingsStore } from "./settings.mjs";
 import { createWindowState, MIN_BOUNDS } from "./window-state.mjs";
-import { analyzePng, assertTheme, describePng } from "./png.mjs";
+import { analyzePng, assertTheme, cssColorLuminance, describePng } from "./png.mjs";
 import { buildAppMenu } from "./menu.mjs";
 import { pruneToolResult } from "./ai/prune.mjs";
 import { estimateSavings, mergeUsage, emptyUsage } from "./ai/usage.mjs";
@@ -45,7 +45,7 @@ const PRELOAD = join(REPO_ROOT, "desktop", "preload.cjs");
 function parseArgs(argv) {
   const out = {
     console: false, shot: null, size: null, verify: false, probe: null, tap: null,
-    ipcProbe: null, userData: null, probeDom: null, ipcProbeNoImport: false, probeSelector: null, tapSeq: null
+    ipcProbe: null, userData: null, probeDom: null, ipcProbeNoImport: false, probeSelector: null, tapSeq: null, protocolLive: false
   };
   // 命令行可能被 cmd.exe / 脚本包装过，参数里会留下成对的引号（--tap="..."）。
   // 不剥掉的话选择器会带着引号去找元素，永远找不到 —— 这类失败很难看出来。
@@ -69,6 +69,7 @@ function parseArgs(argv) {
     else if (arg.startsWith("--probe-dom=")) out.probeDom = stripQuotes(arg.slice("--probe-dom=".length));
     else if (arg.startsWith("--probe-selector=")) out.probeSelector = stripQuotes(arg.slice("--probe-selector=".length));
     else if (arg.startsWith("--tap-seq=")) out.tapSeq = stripQuotes(arg.slice("--tap-seq=".length));
+    else if (arg === "--protocol-live") out.protocolLive = true;
     else if (arg.startsWith("--size=")) {
       const m = /^(\d+)x(\d+)$/.exec(stripQuotes(arg.slice("--size=".length)));
       if (m) out.size = { width: Number(m[1]), height: Number(m[2]) };
@@ -164,8 +165,16 @@ const APPDATA_DIR = app.getPath("appData");
 const SHOT_PROFILE_BASE = join(APPDATA_DIR, "BWE Studio", ".shot-profile");
 /** 用户显式指定的 userData 目录（给了就表示「用现成配置」，非隔离语义）。 */
 const EXPLICIT_USER_DATA = ARGS.userData ? resolve(stripQuotesDeep(ARGS.userData)) : null;
-/** 是否使用一次性隔离目录（只有自动化模式且没给 --user-data 时才是）。 */
-const ISOLATED_USER_DATA = AUTOMATION_MODE && !EXPLICIT_USER_DATA;
+/**
+ * 是否使用一次性隔离目录（只有自动化模式且没给 --user-data 时才是）。
+ *
+ * ⚠ `--protocol-live` 例外：它的目的就是**用用户真实的 key 打真实 API**。
+ *   若也走隔离目录，里面 settings.json 是空的 → 读不到 key → 整个验证在无 key 下空跑，
+ *   却报出「失败 N 项」的假结果（实测踩到，误导性极强）。
+ *   所以 protocol-live 模式下**强制使用真实 userData**（用户会接受"会写入真实会话历史"，
+ *   或者脚本用复制 settings 的方式另行隔离）。
+ */
+const ISOLATED_USER_DATA = AUTOMATION_MODE && !EXPLICIT_USER_DATA && !ARGS.protocolLive;
 const USER_DATA_DIR = EXPLICIT_USER_DATA
   ? EXPLICIT_USER_DATA
   : ISOLATED_USER_DATA
@@ -288,7 +297,10 @@ app.whenReady().then(async () => {
         available: Boolean(safeStorage?.isEncryptionAvailable?.()),
         encryptString: (s) => safeStorage.encryptString(s).toString("base64"),
         decryptString: (s) => safeStorage.decryptString(Buffer.from(s, "base64"))
-      }
+      },
+      // 把「key 解不开」这类事件打到启动日志：这是用户每次重启都会遇到的
+      // 真实缺陷，不能让它只在界面上静默表现为「待填 key」。
+      log: (m) => log(m, "bwe:settings")
     });
     await settingsStore.load();
 
@@ -680,6 +692,88 @@ function checkToolDependencies({ apiIndex, toolCache } = {}) {
     for (const w of warnings) log(`⚠ 工具依赖自检：${w}`, "bwe:ai");
   }
   return warnings;
+}
+
+/**
+ * 真 key 协议验证（`--protocol-live`）：跑两轮真实请求，验证「工具轮 + 多轮重放」都不 400。
+ *
+ * ⚠ 会消耗用户 token，所以只在显式传 `--protocol-live` 时执行；
+ *   普通的 `--ipc-probe` 不跑它（验收脚本默认不花用户的钱）。
+ *
+ * 为什么必须在主进程里跑：settings.json 的 apiKey 是 DPAPI 加密的，
+ * 只有主进程持有解密用的 crypto；纯 node 读出来是空/密文。
+ */
+async function probeProtocolLive() {
+  const statuses = [];
+  const errors = [];
+  const toolEnds = [];
+  let firstText = "", secondText = "";
+  const st = await ai.aiStatus();
+
+  // ⚠ 明确的跳过语义：没有真 key 时返回 `{ ok:false, skipped:true, reason:"no-key" }`。
+  // 验收脚本据此 **exit 2（跳过）**，绝不能把「空跑的结果」当成「跑了但失败」——
+  // 那会让人以为协议还是坏的，然后去改本来正确的代码（同类问题在 --tap-seq 的 probe 上踩过）。
+  if (!st?.ready || st.provider === "mock") {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "no-key",
+      detail: `当前 userData 下没有可用的真 key（provider=${st?.provider ?? "?"}，ready=${st?.ready ?? "?"}）`,
+      userData: USER_DATA_DIR,
+      baseUrl: "",
+      model: ""
+    };
+  }
+
+  // 收集本轮的 status：从 usage/error 事件间接判断。streamChat 的 status 不进事件，
+  // 所以这里用"有无 error"+"正文非空"作为判据，并单独记录 error 原文。
+  const onEvent = (ev) => {
+    if (ev.type === "tool" && ev.phase === "end") toolEnds.push(ev);
+    if (ev.type === "error") errors.push(String(ev.message ?? ""));
+  };
+
+  // 第 1 轮：要求用工具读文件（触发工具轮 → 检验 reasoning_content 回传）
+  const ev1 = [];
+  await ai.aiChat({
+    requestId: "protocol-live-1",
+    messages: [{ role: "user", text: "请用 ReadFile 工具读 package.json 的前 10 行，然后用一句话说出这个项目叫什么名字。" }],
+    context: { sceneDigest: "工程「BWE Studio」" }
+  });
+  await ai.whenIdle();
+  // 事件通过 sendEvent 推出，但只读探针没有窗口；用 aiChat 返回后的状态 + 类目判断
+  firstText = "";
+  statuses.push(errors.length === 0 ? 200 : 400);
+
+  // 第 2 轮：同一会话再问一句（走 buildMessages 重放历史 → 检验历史的 reasoning 回传）
+  const before2 = errors.length;
+  await ai.aiChat({
+    requestId: "protocol-live-2",
+    messages: [{ role: "user", text: "基于刚才读到的内容，一句话说明这个项目是做什么的，不要调用工具。" }],
+    context: { sceneDigest: "工程「BWE Studio」" }
+  });
+  await ai.whenIdle();
+  statuses.push(errors.length === before2 ? 200 : 400);
+
+  // 从会话历史里取两轮正文（探针无窗口，拿不到 done 事件，用落盘结果验证）
+  const hist = ai.currentSession?.messages?.() ?? [];
+  const assistantTexts = hist
+    .filter((m) => m.role === "assistant")
+    .map((m) => (m.blocks ?? []).filter((b) => b.type === "text").map((b) => b.text).join(""))
+    .filter(Boolean);
+  firstText = assistantTexts[0] ?? "";
+  secondText = assistantTexts[1] ?? assistantTexts[0] ?? "";
+
+  return {
+    skipped: false,
+    baseUrl: st.activeModel?.baseUrl ?? st.provider ?? "",
+    model: st.activeModel?.model ?? st.activeModelId ?? "",
+    statuses,
+    errors,
+    toolCalls: toolEnds.length,
+    toolFailures: toolEnds.filter((e) => e.ok === false).length,
+    firstText,
+    secondText
+  };
 }
 
 function registerIpc() {
@@ -1311,12 +1405,56 @@ async function runIpcProbe(outFile) {
       // ai-status 必须放在会话操作**之后**，否则 sessionCount 反映不出「刚开了新会话」
       // （我第一次就跑成了 1，因为 status 在 new 之前取 —— 探针顺序本身也是被测对象）
       record("bwe:ai-status", await ai.aiStatus());
+      // ---- 三源一致性自检（key 解不开状态的三个统计源必须对齐）----
+      //
+      // 为什么主进程也要自检：B 侧已做了交叉校验，但那只"能发现"不能"修复" ——
+      // 如果出口先漂移了，UI 只能看到一个不一致的红条。
+      // 三个源：
+      //   ① ai-status.keyUndecryptableCount
+      //   ② ai-status.keyUndecryptableEntries.length
+      //   ③ ai-models 里 keyUndecryptable:true 的条数
+      // 契约里写了 ① === ② 这条恒等式，③ 是"逐条真相"（UI 逐条渲染依赖它）。
+      record("bwe:key-state-consistency", (() => {
+        const status = report.channels["bwe:ai-status"] ?? {};
+        const models = report.channels["bwe:ai-models"]?.models ?? [];
+        const count = Number(status.keyUndecryptableCount ?? 0);
+        const entriesLen = Array.isArray(status.keyUndecryptableEntries)
+          ? status.keyUndecryptableEntries.length
+          : 0;
+        const perModel = models.filter((m) => m.keyUndecryptable === true).length;
+        const mismatches = [];
+        if (count !== entriesLen) {
+          mismatches.push(`keyUndecryptableCount(${count}) !== keyUndecryptableEntries.length(${entriesLen})`);
+        }
+        if (count !== perModel) {
+          mismatches.push(`keyUndecryptableCount(${count}) !== ai-models 里 keyUndecryptable 条数(${perModel})`);
+        }
+        // 另外两条语义自洽性：解不开的条目不能同时被标成"没填"
+        const contradictory = models.filter((m) => m.keyUndecryptable === true && m.needsKeyMissing === true).length;
+        if (contradictory > 0) {
+          mismatches.push(`${contradictory} 条同时 keyUndecryptable=true 与 needsKeyMissing=true（语义互斥）`);
+        }
+        const consistent = mismatches.length === 0;
+        if (!consistent) log(`⚠ key 状态三源不一致：${mismatches.join("；")}`, "bwe:ai");
+        return {
+          consistent,
+          count,
+          entriesLength: entriesLen,
+          perModelCount: perModel,
+          mismatches
+        };
+      })());
       // 验证「聊完天后标题/条数真的更新」——这是端到端行为，单测只能证明组件联动。
       const firstActive = report.channels["bwe:ai-sessions-list"]?.active;
       if (firstActive) {
         await ai.aiChat({ requestId: "probe-chat", messages: [{ role: "user", text: "帮我重构玩家移动逻辑" }], intent: "chat" });
         await ai.whenIdle();
         record("bwe:ai-sessions-list:after-chat", await probeHandlers.sessionsList());
+      }
+      // 真 key 协议验证：**只在显式开启时执行**（会消耗用户 token）。
+      // 开关是 `--protocol-live`，普通 --ipc-probe 不会跑它。
+      if (ARGS.protocolLive) {
+        record("bwe:protocol-live", await probeProtocolLive());
       }
       const modelsReadOnly = report.channels["bwe:ai-models"]?.models ?? [];
       // 探测**两条**：一条 mock、一条非 mock。
@@ -1773,11 +1911,21 @@ async function captureAndJudge(opts) {
   console.log(`[shot] ${tag}${target}`);
   console.log(`[shot] ${tag}${describePng(stats)}`);
 
-  const theme = assertTheme(stats);
+  // 主题判定：**优先用 DOM 底色**（不受 modal/遮罩影响），像素只作兜底。
+  // bodyBg（如 "rgb(246, 242, 234)"）在 Node 侧解析成亮度 —— 见 png.mjs 的 cssColorLuminance。
+  const domLuminance = cssColorLuminance(skeleton.bodyBg);
+  const theme = assertTheme(stats, {
+    domLuminance,
+    domColor: skeleton.bodyBg
+  });
   if (theme.ok) {
     console.log(`[shot] ${tag}主题: ${theme.theme} → PASS（${theme.detail}）`);
   } else {
     console.log(`[shot] ${tag}主题: ${theme.theme === "dark" ? "midnight" : theme.theme} → FAIL（期望奶油）— ${theme.detail}`);
+  }
+  // 「疑似深色覆盖」只是提示，不是失败 —— 让人知道为什么这张图看起来暗。
+  if (theme.overlayWarning) {
+    console.log(`[shot] ${tag}警告: ${theme.overlayWarning}`);
   }
 
   // ---- 溢出断言（--verify 时横向溢出 = FAIL）----
@@ -1810,7 +1958,20 @@ async function captureAndJudge(opts) {
   //   实测两个验收尺寸都落在 65%~70%，留足余量，不会因主题微调而误报。
   const strict = Boolean(opts.strict);
   const loaded = pageState.finished && opts.errors?.length === 0;
-  const NONBG_MIN = 0.2;
+  /**
+   * 非背景像素占比的合格区间。
+   *
+   * ⚠ 这个指标同样会被「大面积覆盖物」影响（与主题判据同一类方法缺陷）：
+   * modal 遮罩一铺，背景色从"页面的浅底"变成"遮罩的深色"，前景占比会被拉低 ——
+   * 实测同一视图 69.3%（无 modal）→ 42.5%（有 modal）。
+   *
+   * 但它的**语义是「界面有没有渲染出来」**，而不是「底色对不对」，遮罩不会让界面消失。
+   * 所以处理方式是：检测到疑似遮罩（darkOverlayLikely）时**放宽下限**，
+   * 避免遮罩面积更大时逼近 20% 下限被误报成「界面没起来」。
+   * 上界不动：遮罩只会降低 nonBg，不会把它推高。
+   */
+  const overlay = Boolean(stats.darkOverlayLikely);
+  const NONBG_MIN = overlay ? 0.1 : 0.2;
   const NONBG_MAX = 0.92;
   const contentOk = stats.foregroundRatio > NONBG_MIN && stats.foregroundRatio < NONBG_MAX;
   // 失败时明确指出撞了哪一边：撞下限=界面没起来，撞上限=渲染成色块，两者修法完全不同。
