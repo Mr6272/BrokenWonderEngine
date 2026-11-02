@@ -816,21 +816,33 @@ async function scenarioS3() {
     `done.extra 可读出轮次与工具次数：rounds=${JSON.stringify(rounds)}，toolCalls.length=${toolCalls ? toolCalls.length : "缺失"}，其中名称=${(toolCalls ?? []).map((t) => t?.name).join(",")}`
   );
 
+  // ★ 2026-11-02 起工具**没有次数上限**（用户明确要求）：不再有 roundsMax/callsMax，
+  //   停止原因由 stopReason 表达。断言按新语义写，同时**锁死**"上限不该回来"。
   report(
     sub(),
     Boolean(budget)
       && typeof budget.roundsUsed === "number"
-      && typeof budget.roundsMax === "number"
       && typeof budget.callsUsed === "number"
-      && typeof budget.callsMax === "number"
-      && typeof budget.budgetExhausted === "boolean",
-    `done.extra.toolBudget 五个字段齐全且类型正确：${JSON.stringify(budget)}`
+      && typeof budget.elapsedMs === "number"
+      && typeof budget.budgetExhausted === "boolean"
+      && "stopReason" in budget,
+    `done.extra.toolBudget 含 roundsUsed/callsUsed/elapsedMs/stopReason，且无上限字段：${JSON.stringify(budget)}`
   );
 
   report(
     sub(),
-    Boolean(budget) && budget.budgetExhausted === true && okReads.length >= 10,
-    `预算耗尽被如实上报：budgetExhausted=${JSON.stringify(budget?.budgetExhausted)}，callsUsed=${JSON.stringify(budget?.callsUsed)}/${JSON.stringify(budget?.callsMax)}，roundsUsed=${JSON.stringify(budget?.roundsUsed)}/${JSON.stringify(budget?.roundsMax)}，实际执行成功的工具调用 ${okReads.length} 次`
+    Boolean(budget) && budget.roundsMax === undefined && budget.callsMax === undefined,
+    `确认上限概念已删除（不该再有 roundsMax/callsMax）：roundsMax=${JSON.stringify(budget?.roundsMax)}，callsMax=${JSON.stringify(budget?.callsMax)}`
+  );
+
+  // ★ 新语义：跑了 ≥10 次工具调用却没有被任何次数上限掐断。
+  //   这个场景里模型在两个文件之间来回读（A→B→A→B…），属于**真绕圈**，
+  //   所以 stopReason 应为 "stalled"（而不是 "budget"——那个原因已经不存在了）。
+  report(
+    sub(),
+    Boolean(budget) && budget.budgetExhausted === false && okReads.length >= 10,
+    `未因次数而停止：budgetExhausted=${JSON.stringify(budget?.budgetExhausted)}，callsUsed=${JSON.stringify(budget?.callsUsed)}（无上限），实际成功调用 ${okReads.length} 次`
+      + `；stopReason=${JSON.stringify(budget?.stopReason)}`
       + `；兜底伪轮=${fallbackPseudo.length ? "出现（" + fallbackPseudo.length + " 条 final-answer-fallback）" : "未出现"}`
   );
 
@@ -838,7 +850,7 @@ async function scenarioS3() {
     sub(),
     okReads.length >= 10 && budget?.callsUsed >= 10,
     `「工具有次数限制」的真实额度：旧实现 3 轮封顶（@HEAD 实测仅 4 次成功调用后被迫收尾），`
-      + `当前成功调用 ${okReads.length} 次、callsUsed=${budget?.callsUsed}（callsMax=${budget?.callsMax}），未被 3 轮硬上限截断`
+      + `当前成功调用 ${okReads.length} 次、callsUsed=${budget?.callsUsed}（**不存在 callsMax**：次数上限已删除），未被任何次数上限截断`
   );
 
   summarizeScenario();

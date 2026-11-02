@@ -23,23 +23,40 @@ import { makeMessage, messageText } from "./session.mjs";
 import { createToolRunner } from "./tools.mjs";
 
 /**
- * **工具轮次预算**（这是用户报「AI 调用工具居然有次数限制」的那条限制）。
+ * **不设工具轮次/次数上限**（用户明确要求：「工具不该有次数限制」）。
  *
- * 历史取值 3 轮 —— 真实任务（读 1408 行脚本、查 API、改写、复查）根本不够：
- * 模型在第 4 轮就被掐断，一句正文都没产出，用户看到的就是「跑两下就寄了，什么都没交付」。
+ * 历史沿革：3 轮（被用户报「调用工具居然有次数限制」）→ 12 轮/24 次 → **无上限**。
+ * 用户的原话是「跑两下就寄了、什么都没交付」，所以真正的敌人是**过早掐断**；
+ * 正常任务该跑多少轮由任务本身决定，而不是由一个拍脑袋的数字决定。
  *
- * 现在的语义：
- *   · MAX_TOOL_ROUNDS = 模型往返次数上限（一轮 = 一次请求 + 可能的一批工具调用）
- *   · MAX_TOOL_CALLS  = 工具**执行次数**上限（一轮可以有多个调用，这才是真正的成本）
- * 两个独立上限：只限轮数会被"一轮调 8 个工具"绕过；只限调用数会让"每轮 1 个工具"跑很久。
+ * 但「完全没有终止条件」是另一种事故（同一形态在上一次报障里出现过：
+ * 工具一直失败 → 模型一直重试 → 跑很久没有任何交付，还烧掉大量 token）。
+ * 所以这里保留**两个非次数型的终止条件**，它们只在"真的没进展"时触发：
  *
- * 预算耗尽**不是失败**：会进入兜底作答（不带 tools 再问一次），并把
- * `done.extra.toolBudget.budgetExhausted = true` 告诉界面 —— 界面据此提示
- * 「本轮工具预算用完，已基于已有信息作答」，用户才知道发生了什么。
- * 静默截止是最糟的做法（用户只看到答案很短，不知道为什么）。
+ *   ① **无进展检测**（`STALL_ROUNDS`）：连续多轮的「工具名+参数」集合与自己拿到的结果
+ *      完全没变化、也没有任何正文产出 —— 这才是死循环，跟跑了几轮无关。
+ *      只要模型在换参数、换文件、或者开始写正文，计数就归零。
+ *   ② **看门狗**（`MAX_WALL_CLOCK_MS`）：本轮总耗时超时。这是防止"挂死"的最后一道，
+ *      正常情况下几十分钟才可能碰到（不是给正常任务设的限）。
+ *
+ * 两者触发时都**不会**静默：进入兜底作答（不带 tools 再问一次），并把原因写进
+ * `done.extra.toolBudget.stopReason`（`"stalled"` / `"timeout"` / null），界面据此提示。
  */
-const MAX_TOOL_ROUNDS = 12;
-const MAX_TOOL_CALLS = 24;
+const STALL_ROUNDS = 6;
+/**
+ * 无进展检测的历史窗口（保留最近多少轮的签名）。
+ *
+ * 取 12：能抓到周期 ≤12 的任何重复循环（A→B→A、A→B→C→A… 都算），
+ * 而正常任务里"12 轮前的调用与这一轮完全一样、结果也一模一样"几乎不可能发生。
+ */
+const STALL_WINDOW = 12;
+/** 单轮对话的看门狗（毫秒）。取 45 分钟：远高于任何正常任务，只拦真正的挂死。 */
+const MAX_WALL_CLOCK_MS = 45 * 60 * 1000;
+
+/**
+ * 兜底作答本身是否要限制次数：**不限**，但兜底是"不带 tools 再问一次"，
+ * 它天然只会发生一次（进入兜底后循环已退出），所以不需要计数器。
+ */
 
 /**
  * `finish_reason === "length"` 时自动续写的次数上限。
@@ -528,15 +545,22 @@ export function createAiBridge(opts) {
    *
    * @param {string} [partialText]  本轮已产出的正文（可能只是开场白）。
    *   有它时要求模型**接着写**而不是从零重答 —— 否则用户会看到两段重复内容。
-   * @param {object} [budget]       预算账单，写进 nudge 让模型知道"为什么不能再调工具"
+   * @param {{roundsUsed?:number, callsUsed?:number, stopReason?:string|null}} [stats]
+   *   本轮跑了多少，写进 nudge 让模型知道"为什么这次不给工具"。
+   *   ⚠ 措辞必须按 stopReason 区分：**次数不是停止理由**，不能说成"次数到上限"。
    */
-  async function finalAnswerFallback({ resolved, settings, messages, requestId, controller, ai, partialText = "", budget = null }) {
-    const budgetLine = budget
-      ? `（本轮已用 ${budget.roundsUsed}/${budget.roundsMax} 轮对话、${budget.callsUsed}/${budget.callsMax} 次工具调用，预算已用完）`
+  async function finalAnswerFallback({ resolved, settings, messages, requestId, controller, ai, partialText = "", stats = null }) {
+    const why = stats?.stopReason === "stalled"
+      ? "（上一轮反复做同样的工具调用、拿到的结果没有变化，判定为绕圈，已停止工具循环）"
+      : stats?.stopReason === "timeout"
+        ? "（本轮耗时过长，已停止工具循环）"
+        : "";
+    const statsLine = stats
+      ? `（本轮共 ${stats.roundsUsed ?? 0} 轮、${stats.callsUsed ?? 0} 次工具调用${why}）`
       : "";
     const nudge = {
       role: "user",
-      content: `工具调用预算已用完${budgetLine}，**请不要再请求工具**（这次请求也不给你工具）。`
+      content: `这次请求**不给你工具**${statsLine}，请直接用文字作答。`
         + (partialText.trim()
           ? "你刚才已经开始作答但没写完。请**从这里接着写完**，不要重复已经写过的内容：\n"
             + `---\n${partialText.trim()}\n---\n`
@@ -744,12 +768,39 @@ export function createAiBridge(opts) {
 
     let finalText = "";
     let usage = emptyUsage("no-usage");
-    /** 已发起的请求轮数（工具轮 + 续写轮都算，防止任何一种变成死循环）。 */
+    /** 已发起的请求轮数（工具轮 + 续写轮都算）。**只是记账**，不作为停止条件。 */
     let rounds = 0;
-    /** 已**实际执行**的工具调用次数（真正花钱/耗时的量，轮数只是外层的次数）。 */
+    /** 已**实际执行**的工具调用次数。同样只是记账（给界面显示"跑了多少"）。 */
     let toolCallsUsed = 0;
-    /** 预算耗尽（轮数或调用数任一触顶）。这不是失败，只是要如实告诉界面。 */
-    let budgetExhausted = false;
+    /**
+     * 循环为什么停下来的：
+     *   null        = 正常结束（模型自己不再请求工具）
+     *   "stalled"   = 连续多轮无进展（同一批调用 + 同样结果 + 无正文）→ 死循环
+     *   "timeout"   = 看门狗（本轮总耗时超 MAX_WALL_CLOCK_MS）
+     *   "aborted"   = 用户取消
+     * ⚠ **没有** "budget" 这一种：次数不是停止理由。
+     */
+    let stopReason = null;
+    /**
+     * 无进展轮数：连续多少轮的「工具名+参数指纹集合」与自己拿到的结果**完全一致**，
+     * 且这一轮没有产出正文。任一条件不满足即归零。
+     * 它检测的是**死循环**（同样的调用反复拿到同样的东西），不是"跑太多轮"。
+     */
+    let stallStreak = 0;
+    /** 无进展轮数的**峰值**（stallStreak 会归零，但峰值要留下来给 done.extra 排查用）。 */
+    let stallPeak = 0;
+    /** 上一轮的调用签名（用于比较"这一轮是不是又问了同一批问题"）。 */
+    let lastCallSignature = "";
+    /** 上一轮的工具结果签名（结果没变化 = 这一轮白跑）。 */
+    let lastResultSignature = "";
+    /**
+     * 最近若干轮的「调用签名 + 结果签名」历史。
+     *
+     * ⚠ 必须用**历史窗口**而不是"只比上一轮"：模型完全可以在 A/B 两个文件之间来回读，
+     *   相邻两轮签名永不相等 → 单步比较永远抓不到 → 无限循环直到 OOM（实测踩到）。
+     *   窗口内命中即视为重复自己，周期 1/2/3… 都能抓到。
+     */
+    const roundSigHistory = [];
     /** 输出因 max_tokens 被截断且自动续写次数用尽（半句话的直接成因）。 */
     let truncated = false;
     /** 本轮（最后一次请求）产出的正文/推理 —— 续写与回填都要按"轮"来分。 */
@@ -866,26 +917,24 @@ export function createAiBridge(opts) {
 
     // ---- 4. 主循环（工具调用 + max_tokens 截断续写）----
     //
-    // 这个循环要同时处理两件以前被忽略的事：
-    //
-    // ① **工具预算**（用户报「调用工具居然有次数限制」）。
-    //    旧上限是 3 轮：读一个大脚本 + 查 API + 改写，第 4 轮就被掐断，一句正文都没有。
-    //    现在 MAX_TOOL_ROUNDS=12 / MAX_TOOL_CALLS=24，且触顶时会进入兜底作答并
-    //    把 budgetExhausted 报给界面（**静默截止是最糟的**）。
-    //
-    // ② **输出被 max_tokens 截断**（用户报「答半句就寄」）。
-    //    思考模型的 reasoning_content 与 content **共享** max_tokens：4096 预算常在
-    //    "想完"之后所剩无几，正文写到一半被截断，`finish_reason === "length"`。
-    //    旧代码完全不看 finish_reason → 半句话当正常完成落盘。
-    //    现在：截断时用「继续」续写（最多 AUTO_CONTINUE_LIMIT 次），仍截断则如实标记 truncated。
+    // **不设工具轮次/次数上限**（用户明确要求：工具不该有次数限制）。
+    // 循环只在下面三种"真的该停"的情况下退出：
+    //   · 模型自己不再请求工具（正常结束）
+    //   · abort（用户取消）
+    //   · 无进展（同一批「工具名+参数」连续多轮、且结果没有变化）或超时看门狗
+    // 前两种是正常语义；后一种才是**死循环**，而它跟"跑了几轮"无关。
     while (!controller.signal.aborted) {
-      // 预算检查放在**发起请求之前**：模型这一轮还没花钱，先判定要不要继续。
-      if (rounds >= MAX_TOOL_ROUNDS || toolCallsUsed >= MAX_TOOL_CALLS) {
-        budgetExhausted = true;
-        log(
-          `工具预算用完（轮 ${rounds}/${MAX_TOOL_ROUNDS}、调用 ${toolCallsUsed}/${MAX_TOOL_CALLS}），`
-          + `停止工具循环${finalText.trim() ? "并保留已产出的正文" : "并进入兜底作答"}`
-        );
+      // 看门狗：只拦真正的挂死（45 分钟），不是给正常任务设的限。
+      if (Date.now() - runStartedAt > MAX_WALL_CLOCK_MS) {
+        stopReason = "timeout";
+        log(`看门狗超时（${Math.round((Date.now() - runStartedAt) / 1000)}s），停止工具循环并进入兜底作答`);
+        break;
+      }
+      // 无进展检测：连续 STALL_ROUNDS 轮「同一批调用 + 同样结果 + 无正文」才算死循环。
+      // 只要换了参数、换了文件、或者开始写正文，就归零 —— 正常任务永远不会触发。
+      if (stallStreak >= STALL_ROUNDS) {
+        stopReason = "stalled";
+        log(`连续 ${stallStreak} 轮无进展（同样的工具调用且结果未变化），判定为死循环并进入兜底作答`);
         break;
       }
       rounds += 1;
@@ -895,7 +944,6 @@ export function createAiBridge(opts) {
       thinkingPhase = "connecting";
       reasoningChars = 0;
       sawAnyOutput = false;
-
       let result;
       if (!resolved.ready || resolved.provider === "mock") {
         // ---- mock 分支：本地模板流，事件形状与真模型完全一致 ----
@@ -1028,15 +1076,13 @@ export function createAiBridge(opts) {
       // ---- 4.2 工具调用 ----
       if (result.toolCalls?.length) {
         emit({ type: "usage", requestId, usage });
-        // 调用数预检：这一轮要执行的数量若会超预算，只执行到上限为止，
-        // 剩下的以"未执行"告知模型 —— 比让它们全部执行再截断更诚实（且省 token）。
-        const remaining = Math.max(0, MAX_TOOL_CALLS - toolCallsUsed);
-        const todo = result.toolCalls.slice(0, remaining);
-        const skipped = result.toolCalls.slice(remaining);
-        toolCallsUsed += todo.length;
+        // ⚠ **没有 "剩余额度" 预检**：用户明确要求工具不该有次数限制，
+        //    所以这里不再有 todo/skipped 的切分 —— 模型要调几个就执行几个。
+        //    真正防止死循环的是上面的「无进展检测」，不是次数。
+        toolCallsUsed += result.toolCalls.length;
         const executed = await runTools(
           requestId,
-          todo,
+          result.toolCalls,
           (key) => toolFailureStreak.get(key) ?? 0,
           (key, ok) => {
             // 成功一次即清零：只有**连续**失败才止损（偶发失败重试一次是合理的）
@@ -1045,10 +1091,43 @@ export function createAiBridge(opts) {
           },
           (call) => argFingerprint(call.name, call.arguments)
         );
-        if (skipped.length) {
-          budgetExhausted = true;
-          log(`工具调用预算用完：本轮 ${result.toolCalls.length} 个调用，只执行了 ${todo.length} 个`);
+
+        // ---- 无进展检测（死循环判定）----
+        //
+        // 判据三件套同时成立才算"这一轮白跑"：
+        //   ① 本轮的调用集合与上一轮**完全相同**（同样的工具 + 同样的参数）
+        //   ② 本轮拿到的工具结果与上一轮**完全相同**
+        //   ③ 本轮没有任何正文产出
+        // 只要模型换了参数/换了文件/开始写正文，计数归零 —— 正常任务永不触发。
+        //
+        // ⚠ 当前实现里 ReadFile 会自动续读游标（见 tools.mjs readCursor），
+        //   所以"同一个不带 from 的调用"每次拿到的结果其实是**不同**的 → ②不成立 → 不会误判成死循环。
+        //
+        // ⚠⚠ 必须检测**任意周期**的循环，不能只比"相邻两轮"。
+        //   实践反例（取消次数上限后实测踩到 OOM）：模型在两个文件之间来回读
+        //   （A → B → A → B … 每轮拿到的内容都"与前一轮不同"），于是相邻轮比较永不相等，
+        //   检测永不触发 → 消息数组无限增长 → 进程 OOM。
+        //   所以保留最近 STALL_HISTORY 轮的签名，只要当前签名**在这段历史里出现过**，
+        //   就说明它在重复自己（周期 1/2/3… 都能抓到）。
+        const callSig = result.toolCalls
+          .map((c) => argFingerprint(c.name, c.arguments))
+          .sort()
+          .join("\n");
+        const resultSig = executed
+          .map(({ prune, out }) => (out?.error ? `ERR:${out.error}` : prune?.text ?? ""))
+          .join("\n");
+        const producedText = String(turnText ?? "").trim().length > 0;
+        const roundSig = `${callSig}\u0000${resultSig}`;
+        if (!producedText && roundSigHistory.includes(roundSig)) {
+          stallStreak += 1;
+          stallPeak = Math.max(stallPeak, stallStreak);
+        } else {
+          stallStreak = 0;
         }
+        roundSigHistory.push(roundSig);
+        if (roundSigHistory.length > STALL_WINDOW) roundSigHistory.shift();
+        lastCallSignature = callSig;
+        lastResultSignature = resultSig;
 
         // ---- 回填工具结果 ----
         //
@@ -1064,8 +1143,7 @@ export function createAiBridge(opts) {
         //    否则第二轮必然 400（报错原文："The `reasoning_content` in the thinking mode must be passed back to the API"）。
         //    ⚠ 只在**非空**时添加：空字符串会被某些实现当作「传了空 reasoning」而不是「没有思考」。
         //
-        // ③ 被预算跳过的那几个调用**也必须**出现在 assistant 的 tool_calls 里并配上 tool 消息 ——
-        //    否则 tool_calls 与 tool 响应对不上，同样 400。它们的 tool 消息写"未执行"。
+        // ③ **reasoning_content 必须原样回传**（见上）。
         const assistantTurn = {
           role: "assistant",
           // 模型可能同时有正文和 tool_calls —— 别把正文丢了
@@ -1087,16 +1165,6 @@ export function createAiBridge(opts) {
             content: out.error ? `工具失败：${out.error}` : prune.text
           });
         }
-        for (const call of skipped) {
-          const stopText = `本轮工具调用次数已达上限（${MAX_TOOL_CALLS}），这个调用未执行。`
-            + "请基于已有信息直接作答；如果确实缺少信息，请说明缺什么、以及用户可以怎么做。";
-          messages.push({ role: "tool", tool_call_id: call.id, content: stopText });
-          emit({
-            type: "tool", requestId, callId: call.id, name: call.name, phase: "end",
-            detail: stopText, ok: false, error: stopText, ms: 0
-          });
-        }
-
         // 工具结果落到会话历史（无损：原文在 toolCache，预览在 blocks）
         //
         // ⚠ reasoning 也要存：下一轮对话（用户再问一句）时 buildMessages 重放历史，
@@ -1105,26 +1173,15 @@ export function createAiBridge(opts) {
         await session.append(
           makeMessage("assistant", turnText || "", {
             reasoning: turnReasoning || "",
-            blocks: [
-              ...executed.map(({ call, prune, out }) => ({
-                type: "tool-result",
-                name: call.name,
-                arguments: call.arguments,
-                preview: prune.text,
-                fullSha1: prune.fullSha1,
-                pruned: prune.pruned,
-                error: out.error ?? null
-              })),
-              ...skipped.map((call) => ({
-                type: "tool-result",
-                name: call.name,
-                arguments: call.arguments,
-                preview: "（未执行：本轮工具调用次数已达上限）",
-                fullSha1: "",
-                pruned: false,
-                error: "本轮工具调用次数已达上限"
-              }))
-            ]
+            blocks: executed.map(({ call, prune, out }) => ({
+              type: "tool-result",
+              name: call.name,
+              arguments: call.arguments,
+              preview: prune.text,
+              fullSha1: prune.fullSha1,
+              pruned: prune.pruned,
+              error: out.error ?? null
+            }))
           })
         );
         continue; // 再流一轮，让模型基于工具结果作答
@@ -1134,25 +1191,24 @@ export function createAiBridge(opts) {
 
     if (controller.signal.aborted) {
       // 取消也要记账：已产生的 token 是真花钱的，不能装作 0。
+      stopReason = "aborted";
       usage = { ...usage, reason: "aborted" };
     }
 
-    // ---- 5. 预算耗尽 / 无产出兜底 ----
+    // ---- 5. 无产出兜底 ----
     //
-    // 走到这里有两种情况需要兜底：
-    //   a) 工具预算用完（`budgetExhausted`）但一句正文都没有 —— 常见于模型一直在调工具；
-    //   b) 正常退出但 `finalText` 为空 —— 模型这一轮只吐了工具调用，或空响应。
+    // 走到这里的情况：循环因为「模型不再要工具」/「无进展」/「看门狗」而结束，
+    // 或者被用户取消。需要兜底的只有一种：**最终正文是空的** ——
+    // 模型这一轮只吐了工具调用，或返回了空响应。
     //
     // 以前这里直接落盘 + done → 用户看到「AI 说半句就消失」。
     // 现在**强制再问一次**（不带 tools），保证用户一定能拿到答复 ——
     // 「没交付任何东西」是用户最不能接受的失败形态，比慢或短更糟。
-    const needFallback =
-      !controller.signal.aborted
-      && (!finalText.trim() || (budgetExhausted && finalText.trim().length < 20));
+    const needFallback = !controller.signal.aborted && !finalText.trim();
     if (needFallback) {
       log(
-        `预算/产出兜底：（轮 ${rounds}/${MAX_TOOL_ROUNDS}、调用 ${toolCallsUsed}/${MAX_TOOL_CALLS}、`
-        + `正文 ${finalText.trim().length} 字${budgetExhausted ? "、预算已用完" : ""}）触发兜底作答`
+        `无产出兜底：（轮 ${rounds}、调用 ${toolCallsUsed}、正文 ${finalText.trim().length} 字、`
+        + `停止原因=${stopReason ?? "模型自己收尾"}）触发兜底作答`
       );
       const fb = await finalAnswerFallback({
         resolved,
@@ -1163,7 +1219,7 @@ export function createAiBridge(opts) {
         ai,
         // 把「已产出的部分」也交给兜底：让它接着写，而不是从零重答（否则用户会看到两段重复）。
         partialText: finalText,
-        budget: { roundsUsed: rounds, roundsMax: MAX_TOOL_ROUNDS, callsUsed: toolCallsUsed, callsMax: MAX_TOOL_CALLS }
+        stats: { roundsUsed: rounds, callsUsed: toolCallsUsed, stopReason }
       });
       if (fb.text.trim()) {
         // 兜底结果**追加**在已有正文之后（已有正文可能只是开场白，不该被丢掉）。
@@ -1232,19 +1288,28 @@ export function createAiBridge(opts) {
         toolCalls: toolTrace,
         promptVersion: PROMPT_VERSION,
         /**
-         * 本轮的工具预算账单。
+         * 本轮"跑了多少"的账单。
          *
-         * ⚠ 必须如实给出 `budgetExhausted`：静默截止会让用户只看到"答案怎么这么短"，
-         * 完全不知道发生了什么（这正是用户报「跑两下就寄、什么都没交付」时的体感）。
-         * 界面据此显示「本轮工具预算用完，已基于已有信息作答」。
+         * ⚠ 语义已变（用户明确要求「工具不该有次数限制」）：这里**不再有上限概念**。
+         *   · `roundsUsed` / `callsUsed` / `elapsedMs` 只是记账，给界面显示"跑了多少"。
+         *   · `stopReason` 才是**为什么停下来**：
+         *       null        = 模型自己收尾（正常结束）
+         *       "stalled"   = 连续多轮做同样的调用、结果没变化（死循环）
+         *       "timeout"   = 看门狗（本轮耗时超过 45 分钟）
+         *       "aborted"   = 用户取消
+         *   · `budgetExhausted` 恒为 false，**保留字段仅为向后兼容**（旧界面据此显示
+         *     「本轮工具预算用完」—— 那条提示已经不该出现，因为不存在这个状态）。
+         *   界面请按 `stopReason` 决定提示，不要再看 `budgetExhausted`。
          */
         toolBudget: {
           roundsUsed: rounds,
-          roundsMax: MAX_TOOL_ROUNDS,
           callsUsed: toolCallsUsed,
-          callsMax: MAX_TOOL_CALLS,
-          budgetExhausted,
-          elapsedMs: Date.now() - runStartedAt
+          elapsedMs: Date.now() - runStartedAt,
+          stopReason,
+          /** @deprecated 恒 false，仅为向后兼容保留。次数上限已移除。 */
+          budgetExhausted: false,
+          /** 无进展轮数的峰值（排查死循环用；正常任务恒 0）。 */
+          stallStreak: stallPeak
         },
         /**
          * 输出被 max_tokens 截断（自动续写用尽）。界面据此提示"回答被截断"，

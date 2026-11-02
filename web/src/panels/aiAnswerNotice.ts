@@ -20,7 +20,7 @@
  * 查得太多才没说」，那是错误归因。
  */
 
-export type AnswerNoticeKind = "budget" | "truncated";
+export type AnswerNoticeKind = "budget" | "truncated" | "stalled";
 
 /** 提示条数据（渲染层只负责摆 DOM，不在这里做任何文案判断）。 */
 export interface AnswerNotice {
@@ -100,6 +100,49 @@ function budgetNotice(tb: Record<string, unknown>): AnswerNotice {
 }
 
 /**
+ * 绕圈中止条（`toolBudget.stopReason === "stalled"`）。
+ *
+ * 2026-11-02 起**工具不再有次数上限**（用户明确要求），唯一剩下的中止条件是
+ * 「连续多轮做完全相同的调用、且拿到的结果没有变化」—— 那是真死循环，不是"跑太多"。
+ * 文案必须把这个区别说清：用户最怕的是「它又半路停了」，所以要让用户知道
+ * **正常使用永远不会触发**，且已基于已有信息作答。
+ */
+function stalledNotice(tb: Record<string, unknown>): AnswerNotice {
+  const rounds = countOf(tb["roundsUsed"]);
+  const calls = countOf(tb["callsUsed"]);
+  const usage = rounds !== null || calls !== null
+    ? `本轮跑了 ${rounds ?? "?"} 轮、${calls ?? "?"} 次工具调用，`
+    : "";
+  return {
+    kind: "stalled",
+    tone: "warn",
+    title: "检测到工具调用在原地绕圈，已中止",
+    detail:
+      `${usage}其中连续多轮做的是**完全相同**的调用、拿到的结果也没有变化，`
+      + "因此判定为绕圈并直接作答（工具本身没有次数上限，正常探索不会触发这个）。"
+      + "下一步：把问题描述得更具体（例如指出文件名与行号），或让我换一个角度重新查。"
+  };
+}
+
+/**
+ * 超时看门狗条（`toolBudget.stopReason === "timeout"`）。
+ * 45 分钟的看门狗，只拦真正的挂死；文案不要写成"额度用完"（没有额度）。
+ */
+function timeoutNotice(tb: Record<string, unknown>): AnswerNotice {
+  const minutes = countOf(tb["elapsedMs"]) !== null
+    ? Math.round(Number(tb["elapsedMs"]) / 60000)
+    : null;
+  return {
+    kind: "stalled",
+    tone: "warn",
+    title: "本轮耗时过长，已停止工具循环",
+    detail:
+      `${minutes !== null ? `本轮已跑 ${minutes} 分钟，` : ""}达到超时看门狗后停止继续查证并直接作答。`
+      + "下一步：把任务拆小一点再问一轮（新一轮重新计时），或告诉我具体文件/函数名以缩小范围。"
+  };
+}
+
+/**
  * 从 `done.extra` 推出该显示哪些提示条。
  *
  * 入参刻意是 `unknown`：主进程字段可能缺省、可能是老版本、可能被序列化成
@@ -115,7 +158,20 @@ export function answerNotices(extra: unknown): AnswerNotice[] {
   if (extra["truncated"] === true) out.push(truncatedNotice(countOf(extra["autoContinued"])));
 
   const tb = extra["toolBudget"];
-  if (isRecord(tb) && tb["budgetExhausted"] === true) out.push(budgetNotice(tb));
+  if (isRecord(tb)) {
+    /**
+     * ⚠ 自 2026-11-02 起工具**没有次数上限**：`budgetExhausted` 已恒为 false，
+     * 只作为向后兼容字段保留（老宿主/旧主进程仍可能发 true）。
+     * 所以这里要**同时**支持两种语义：
+     *   · 新：看 `stopReason`（stalled / timeout）
+     *   · 旧：仍然看 `budgetExhausted`（老主进程发 true 时，那条预算提示依然该显示）
+     * 顺带把「跑了几轮」统一用 `roundsUsed`——新版没有 `roundsMax`，别再拼 `3/undefined`。
+     */
+    const stopReason = tb["stopReason"];
+    if (stopReason === "stalled") out.push(stalledNotice(tb));
+    else if (stopReason === "timeout") out.push(timeoutNotice(tb));
+    else if (tb["budgetExhausted"] === true) out.push(budgetNotice(tb));
+  }
 
   return out;
 }

@@ -58,7 +58,7 @@ function expectNotices(name: string, extra: unknown, count: number): AnswerNotic
     check(`${name}：第 ${i + 1} 条标题非空`, typeof n.title === "string" && n.title.trim().length > 0, n.title);
     check(`${name}：第 ${i + 1} 条正文非空`, typeof n.detail === "string" && n.detail.trim().length > 0, n.detail);
     check(`${name}：第 ${i + 1} 条是警告视觉`, n.tone === "warn", n.tone);
-    check(`${name}：第 ${i + 1} 条 kind 合法`, n.kind === "budget" || n.kind === "truncated", n.kind);
+    check(`${name}：第 ${i + 1} 条 kind 合法`, n.kind === "budget" || n.kind === "truncated" || n.kind === "stalled", n.kind);
     // 拼接错误最典型的表现就是文案里出现原始 JS 值
     check(
       `${name}：第 ${i + 1} 条不含 undefined/NaN/null`,
@@ -191,6 +191,51 @@ console.log("== 兼容主进程未来/过去的额外字段（不该影响判定
   }, 2);
   check("未知字段不产生多余条", list.length === 2, String(list.length));
 }
+
+console.log("== 新语义：工具没有次数上限，只有 stopReason（stalled / timeout）==");
+{
+  // ★ 2026-11-02 起工具不再有次数上限（用户明确要求）。budgetExhausted 恒 false，
+  //   界面要按 stopReason 提示。这两类提示必须**能区分**且都能渲染出来。
+  const NEW_STALLED = { roundsUsed: 9, callsUsed: 9, elapsedMs: 21000, stopReason: "stalled", budgetExhausted: false, stallStreak: 6 };
+  const NEW_TIMEOUT = { roundsUsed: 41, callsUsed: 60, elapsedMs: 45 * 60 * 1000, stopReason: "timeout", budgetExhausted: false, stallStreak: 0 };
+
+  const stalled = expectNotices("stopReason=stalled", { toolBudget: NEW_STALLED }, 1);
+  check("stalled：kind 是 stalled", stalled[0]?.kind === "stalled", stalled[0]?.kind);
+  check("stalled：标题说到绕圈", /绕圈/.test(stalled[0]?.title ?? ""), stalled[0]?.title);
+  // 必须说清「不是次数限制」——否则用户会以为又被限制了（这正是他报的问题）
+  check("stalled：正文明确说明工具没有次数上限", /没有次数上限/.test(stalled[0]?.detail ?? ""), stalled[0]?.detail);
+  check("stalled：正文给出可操作下一步", /下一步/.test(stalled[0]?.detail ?? ""), stalled[0]?.detail);
+  // 报出跑了多少轮/多少次（用户想知道"到底跑了多久才停的"）
+  check("stalled：带出轮数与调用数", /9 轮/.test(stalled[0]?.detail ?? "") && /9 次/.test(stalled[0]?.detail ?? ""), stalled[0]?.detail);
+
+  const timeout = expectNotices("stopReason=timeout", { toolBudget: NEW_TIMEOUT }, 1);
+  check("timeout：kind 是 stalled（同一类警告视觉）", timeout[0]?.kind === "stalled", timeout[0]?.kind);
+  check("timeout：标题说到耗时", /耗时/.test(timeout[0]?.title ?? ""), timeout[0]?.title);
+  check("timeout：正文换算成分钟", /45 分钟/.test(timeout[0]?.detail ?? ""), timeout[0]?.detail);
+
+  // 正常收尾（stopReason=null + 无截断）→ 一条提示都不该有
+  expectNotices("stopReason=null（正常收尾）", { toolBudget: { roundsUsed: 3, callsUsed: 4, stopReason: null, budgetExhausted: false } }, 0);
+
+  // 向后兼容：**旧**主进程仍会发 budgetExhausted=true（那时上限还在）→ 老提示不能丢
+  expectNotices("旧宿主 budgetExhausted=true 仍显示预算条", { toolBudget: FULL_BUDGET }, 1);
+  // 新主进程恒 false → 不显示
+  expectNotices("新主进程 budgetExhausted=false 不显示预算条", {
+    toolBudget: { roundsUsed: 12, callsUsed: 24, budgetExhausted: false, stopReason: null }
+  }, 0);
+  // stopReason 类型不对（字符串别的值 / 数字）→ 不猜、不渲染
+  expectNotices("stopReason=未知值", { toolBudget: { roundsUsed: 1, stopReason: "something-else" } }, 0);
+  expectNotices("stopReason=数字", { toolBudget: { roundsUsed: 1, stopReason: 1 } }, 0);
+  // stalled 时即使 budgetExhausted 也被误置 true，也只出一条（不能同一件事说两遍）
+  expectNotices("stalled + budgetExhausted 同时为真：只出一条", {
+    toolBudget: { ...NEW_STALLED, budgetExhausted: true }
+  }, 1);
+
+  // 三者同时成立时的固定顺序：truncated（最根本）→ stalled/timeout → budget(旧)
+  const both = expectNotices("truncated + stalled 同时", { truncated: true, autoContinued: 2, toolBudget: NEW_STALLED }, 2);
+  check("顺序：truncated 在前", both[0]?.kind === "truncated", both[0]?.kind);
+  check("顺序：stalled 在后", both[1]?.kind === "stalled", both[1]?.kind);
+}
+
 
 console.log("== 纯函数：同一输入两次调用结果一致（无隐藏状态）==");
 {

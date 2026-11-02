@@ -130,6 +130,22 @@ export function createToolRunner(opts) {
   const repoRoot = resolve(opts.repoRoot);
   const workspaceRoot = opts.workspaceRoot ? resolve(opts.workspaceRoot) : null;
 
+  /**
+   * 本进程内的 ReadFile 阅读游标：文件绝对路径 → 已经读过的最远行号。
+   *
+   * 为什么需要（实测 20:04 那轮对话）：模型连续发出 **6 次** `ReadFile({"path": ".../world.js"})`，
+   * args 里**根本没有 from**；它嘴上说「翻页参数被忽略了，一直返回前 400 行」，
+   * 实际是它自己没传 —— 工具每次都老实从头读，于是永远看到同一段。
+   * 这是纯粹的浪费：6 次调用、每次 400 行，全是同一批字节。
+   *
+   * 修法不是"限制它少调用"（用户明确说不要限制），而是让工具**默认接着往下读**：
+   *   · 没给 `from` 且这个文件已经读过 → 从上次结束处继续；
+   *   · 结果里明确告诉它「本次读的是第 X-Y 行，剩下还有 Z 行」。
+   * 这样即使模型忘了 from，"读文件"这个动作也不会原地打转。
+   * 给了 `from` 时完全尊重参数（不猜、不擅自改变语义）。
+   */
+  const readCursor = new Map();
+
   function insideRoot(candidate) {
     const roots = [repoRoot, workspaceRoot].filter(Boolean);
     return roots.some((root) => {
@@ -157,13 +173,54 @@ export function createToolRunner(opts) {
       throw new Error(`ReadFile 只读文本文件，${rel} 是二进制（${ext}）。看图片请让用户自己打开。`);
     }
     const limit = Math.min(MAX_READ_LINES, Math.max(1, Number(args?.lines) || DEFAULT_READ_LINES));
-    const from = Math.max(1, Number(args?.from) || 1);
+    /**
+     * 是否**显式**给了 from。
+     * ⚠ 判 "undefined/null/空串" 都算没给 —— 模型经常传 from: null 或 from: ""。
+     */
+    const wantsFrom =
+      args?.from !== undefined && args?.from !== null && String(args.from).trim() !== "";
+
+    // ---- 没给 from 时接着上次读到的地方继续（见 readCursor 注释）----
+    // 只对「同一文件 + 之前读过」生效；给了 from 一律以参数为准，不擅自改语义。
+    const prevCursor = readCursor.get(target) ?? null;
+    let from = 1;
+    let autoContinued = false;
+    if (wantsFrom) {
+      from = Math.max(1, Math.floor(Number(args.from)) || 1);
+    } else if (prevCursor && Number.isFinite(prevCursor.next) && prevCursor.next > 1) {
+      from = prevCursor.next;
+      autoContinued = true;
+    }
+
     const text = await readFile(target, "utf8");
     const all = text.split(/\r?\n/);
-    const slice = all.slice(from - 1, from - 1 + limit).join("\n");
-    const header = `ReadFile(${rel}) 第 ${from}-${Math.min(all.length, from - 1 + limit)} 行 / 共 ${all.length} 行`;
-    const footer = from - 1 + limit >= all.length ? "" : `\n…（还有 ${all.length - (from - 1 + limit)} 行，用 from=${from + limit} 继续）`;
-    return { text: `${header}\n${slice}${footer}`, meta: { file: rel, from, lines: limit, totalLines: all.length } };
+
+    // from 超过末尾：说明已经读完了，别返回空片段让模型以为"文件没了/读取坏了"。
+    if (from > all.length) {
+      readCursor.set(target, { next: 1, total: all.length });
+      return {
+        text:
+          `ReadFile(${rel}) 已经读完了：全文共 ${all.length} 行，你请求的 from=${from} 超出末尾。\n`
+          + `（已重置：下次不带 from 读本文件会从头开始；要读中间某段请显式给 from。）`,
+        meta: { file: rel, from: 1, lines: 0, totalLines: all.length, eof: true }
+      };
+    }
+
+    const endLine = Math.min(all.length, from - 1 + limit);
+    const slice = all.slice(from - 1, endLine).join("\n");
+    readCursor.set(target, { next: endLine + 1, total: all.length });
+
+    const header = `ReadFile(${rel}) 第 ${from}-${endLine} 行 / 共 ${all.length} 行`;
+    const autoNote = autoContinued
+      ? `\n（本次没给 from，已自动从第 ${from} 行继续读；接着往下读本文件不必再传参数）`
+      : "";
+    const tail = endLine < all.length
+      ? `\n…（还有 ${all.length - endLine} 行。**下次不带 from 会自动从这里接着读**，也可显式给 from=${endLine + 1}）`
+      : "\n（已读到文件末尾）";
+    return {
+      text: `${header}${autoNote}\n${slice}${tail}`,
+      meta: { file: rel, from, lines: endLine - from + 1, totalLines: all.length, autoContinued }
+    };
   }
 
   async function sceneDigestTool(args) {

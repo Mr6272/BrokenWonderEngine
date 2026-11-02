@@ -186,19 +186,27 @@ async function makeBridge({ baseUrl, maxTokens = 16384 }) {
 // H. 工具预算
 // ---------------------------------------------------------------------------
 
-test("H1: 工具预算从 3 轮放宽到 12 轮 —— 6 轮工具调用能跑完（旧实现第 4 轮就被掐断）", async () => {
-  // 模型前 6 轮都在调工具（每轮 1 个不同参数的 ReadFile），第 7 轮才给正文。
-  // 旧上限 MAX_TOOL_ROUNDS=3（`rounds <= 3` 实际只跑 4 次）→ 第 5 次请求被拒，正文永远出不来。
+ /**
+ * H1：**工具没有次数上限**（用户明确要求「工具不该有次数限制」）。
+ *
+ * 历史三档：3 轮（用户报「调用工具有次数限制」）→ 12 轮/24 次 → **无上限**。
+ * 这条用"远超任何旧上限"的轮数（20 轮）来证明：模型要调 20 次工具照样能跑完，
+ * 且结束后仍能产出正文 —— 而不是被某个数字掐断。
+ */
+test("H1: 工具没有次数上限 —— 20 轮工具调用也能跑完并产出正文", async () => {
+  // 模型前 20 轮都在调工具（每轮 1 个不同参数的 ReadFile），第 21 轮才给正文。
+  // 若实现里还有任何次数上限（3 / 12 / 24），这条会红。
+  const TOOL_ROUNDS = 20;
   const fake = await startFake((turn, hasTools) => {
-    if (hasTools && turn <= 6) {
+    if (hasTools && turn <= TOOL_ROUNDS) {
       return toolCall({
         id: `call_h1_${turn}`,
         name: "ReadFile",
-        args: { path: "package.json", from: turn * 10, lines: 5 },
-        reasoning: `第 ${turn} 轮：读第 ${turn * 10} 行。`
+        args: { path: "package.json", from: turn * 3 + 1, lines: 3 },
+        reasoning: `第 ${turn} 轮：读第 ${turn * 3 + 1} 行。`
       });
     }
-    return textStream("六轮工具调用之后给出的结论：脚本问题在 player.js 的 unstick 段。");
+    return textStream("20 轮工具调用之后给出的结论：脚本问题在 player.js 的 unstick 段。");
   });
 
   const { bridge, events } = await makeBridge({ baseUrl: fake.baseUrl });
@@ -212,29 +220,38 @@ test("H1: 工具预算从 3 轮放宽到 12 轮 —— 6 轮工具调用能跑�
 
   const done = events.filter((e) => e.type === "done");
   assert.equal(done.length, 1, "应有一次 done");
-  assert.ok(String(done[0].text).trim().length > 0, "6 轮工具后必须仍有正文（旧实现在这里会空）");
+  assert.ok(String(done[0].text).trim().length > 0, "20 轮工具后必须仍有正文（有任何次数上限这里就会空）");
 
-  const budget = done[0].extra?.toolBudget;
-  assert.ok(budget, "done.extra.toolBudget 必须存在（界面据此提示预算状态）");
-  assert.ok(budget.roundsUsed >= 6, `应真的跑了 ≥6 轮，实际 ${budget.roundsUsed}`);
-  assert.ok(budget.roundsMax >= 12, `轮数上限应 ≥12（旧实现是 3），实际 ${budget.roundsMax}`);
-  assert.ok(budget.callsUsed >= 6, `应记录了 ≥6 次工具调用，实际 ${budget.callsUsed}`);
-  assert.equal(budget.callsUsed, budget.callsUsed, "callsUsed 必须是数字");
-  assert.equal(typeof budget.elapsedMs, "number");
-  assert.ok(budget.elapsedMs >= 0);
-  // 这一轮没触顶，所以 budgetExhausted 必须是 false（否则界面会误报"预算用完"）
-  assert.equal(budget.budgetExhausted, false, "没触顶时 budgetExhausted 必须为 false");
+  const stats = done[0].extra?.toolBudget;
+  assert.ok(stats, "done.extra.toolBudget 必须存在（界面据此显示跑了多少）");
+  assert.ok(stats.roundsUsed >= TOOL_ROUNDS, `应真的跑了 ≥${TOOL_ROUNDS} 轮，实际 ${stats.roundsUsed}`);
+  assert.ok(stats.callsUsed >= TOOL_ROUNDS, `应记录 ≥${TOOL_ROUNDS} 次工具调用，实际 ${stats.callsUsed}`);
+  // ★ 核心：**不存在"触顶"这回事**
+  assert.equal(stats.budgetExhausted, false, "没有次数上限，budgetExhausted 必须恒为 false");
+  assert.equal(stats.roundsMax, undefined, "不该再有 roundsMax（上限概念已删除）");
+  assert.equal(stats.callsMax, undefined, "不该再有 callsMax（上限概念已删除）");
+  assert.equal(stats.stopReason, null, `正常收尾时 stopReason 应为 null，实际 ${stats.stopReason}`);
+  assert.equal(typeof stats.elapsedMs, "number");
   assert.equal(fake.violations.length, 0, `不该有协议违规：${JSON.stringify(fake.violations)}`);
 });
 
-test("H2: 触顶时 budgetExhausted=true，且仍然给出兜底正文（不是静默结束）", async () => {
-  // 模型永远只调工具（带 tools 的请求一律返回 tool_call），兜底请求（不带 tools）才给正文。
-  // ⚠ 按"请求里有没有 tools"判断，而不是按轮次号 —— 不依赖具体上限数值。
+/**
+ * H2：唯一的终止条件是**无进展**（死循环），不是次数。
+ *
+ * 构造：模型每一轮都发**完全相同**的工具调用，而那个工具每次都返回**完全相同**的内容
+ * （SearchApi("physics") 是纯查询，同一 query 结果恒定）。
+ * → 这是真死循环，必须被中止；且中止后要给出兜底正文，不能静默结束。
+ *
+ * ⚠ 注意判据是"同一调用 + 同一结果 + 无正文"三件套：只要结果会变（比如 ReadFile 自动翻页），
+ *   就不会被判成绕圈 —— 见 H3 的反向锁。
+ */
+test("H2: 反复做同一调用且结果不变 → 判定为绕圈中止（但仍有兜底正文）", async () => {
   const fake = await startFake((turn, hasTools) => {
     if (hasTools) {
+      // 每一轮都是**一模一样**的调用（同 name 同参数）
       return toolCall({ id: `call_h2_${turn}`, name: "SearchApi", args: { query: "physics" }, reasoning: "再查一次。" });
     }
-    return textStream("预算用尽，基于已查到的信息给出结论：先看 bwe.physics.on 的碰撞回调。");
+    return textStream("已停止工具循环（绕圈），基于已查到的信息给出结论：先看 bwe.physics.on 的碰撞回调。");
   });
 
   const { bridge, events } = await makeBridge({ baseUrl: fake.baseUrl });
@@ -244,14 +261,64 @@ test("H2: 触顶时 budgetExhausted=true，且仍然给出兜底正文（不是�
 
   const done = events.filter((e) => e.type === "done");
   assert.equal(done.length, 1);
-  assert.ok(String(done[0].text).trim().length > 0, "预算耗尽后必须有正文（兜底作答）");
-  const budget = done[0].extra?.toolBudget;
-  assert.equal(budget?.budgetExhausted, true, "真触顶时必须如实标记 budgetExhausted");
-  assert.ok(budget.roundsUsed >= budget.roundsMax, `触顶时 roundsUsed(${budget.roundsUsed}) 应到 roundsMax(${budget.roundsMax})`);
+  assert.ok(String(done[0].text).trim().length > 0, "中止后必须有正文（兜底作答）");
+
+  const stats = done[0].extra?.toolBudget;
+  assert.equal(stats?.budgetExhausted, false, "不是次数触顶（那条概念已删除）");
+  // ★ 核心：停止原因必须是"绕圈"，并如实上报
+  assert.equal(stats?.stopReason, "stalled", `应如实报 stopReason=stalled，实际 ${stats?.stopReason}`);
+  assert.ok(stats.roundsUsed > 0, "应记录跑了几轮");
+  // 不能无限跑下去：绕圈检测必须在合理轮数内触发（不是几百轮）
+  assert.ok(stats.roundsUsed <= 30, `绕圈应尽早被识别，实际跑了 ${stats.roundsUsed} 轮`);
   assert.equal(fake.violations.length, 0, `兜底轮也不能协议违规：${JSON.stringify(fake.violations)}`);
 });
 
-// ---------------------------------------------------------------------------
+/**
+ * H3：**反向锁** —— ReadFile 自动翻页时，同一个"不带 from"的调用每轮拿到的是**新内容**，
+ * 所以**不能**被误判成绕圈。这是 H2 判据的关键反面（否则用户正常读文件会被中断）。
+ */
+test("H3: 反向锁 —— 同一 ReadFile 调用（不带 from）自动翻页时每轮内容不同，不得判为绕圈", async () => {
+  // 模型每一轮都发**完全相同的** ReadFile(path) 调用（不带 from），
+  // 靠工具自动游标读 400 行 → 401-800 → 801-1200 …（package.json 只有 46 行，改用 world.js）
+  const fake = await startFake((turn, hasTools) => {
+    if (hasTools && turn <= 6) {
+      return toolCall({
+        id: `call_h3_${turn}`,
+        name: "ReadFile",
+        args: { path: "web/examples/city/scripts/world.js" },
+        reasoning: `第 ${turn} 轮：继续读 world.js。`
+      });
+    }
+    return textStream("已经把 world.js 读完了，结论：交通 AI 在 trafficTick 段。");
+  });
+
+  const { bridge, events } = await makeBridge({ baseUrl: fake.baseUrl });
+  await bridge.aiChat({ requestId: "h3", messages: [{ role: "user", text: "读 world.js" }], context: {} });
+  await bridge.whenIdle();
+  await fake.close();
+
+  const done = events.filter((e) => e.type === "done");
+  assert.equal(done.length, 1);
+  assert.ok(String(done[0].text).trim().length > 0, "应正常收尾并产出正文");
+  const stats = done[0].extra?.toolBudget;
+  // ★ 核心：没被判成绕圈（否则用户正常翻页会被"死循环保护"打断）
+  assert.equal(
+    stats?.stopReason,
+    null,
+    `自动翻页每轮内容不同，不该判为绕圈（stopReason=${stats?.stopReason}，stallPeak=${stats?.stallStreak}）`
+  );
+  // 而且每轮真的读到了**不同内容**（证明自动游标生效，这也是 stopReason 为 null 的原因）
+  const toolEnds = events.filter((e) => e.type === "tool" && e.phase === "end" && e.name === "ReadFile");
+  assert.ok(toolEnds.length >= 6, `应真的调用了 6 次，实际 ${toolEnds.length}`);
+  // detail 形如「ReadFile world.js · 402 行 / 14.0K 字符」——行数/字符数应随翻页变化。
+  // 若 6 次摘要完全相同，说明游标没生效（那时 stopReason 为 null 也是假的）。
+  const sizes = [...new Set(toolEnds.map((e) => String(e.detail ?? "")))];
+  assert.ok(
+    sizes.length >= 2,
+    `6 次相同调用应读到不同内容（至少 2 种摘要），实际只有 ${sizes.length} 种：${sizes[0]}`
+  );
+});
+
 // I. max_tokens 截断续写
 // ---------------------------------------------------------------------------
 
