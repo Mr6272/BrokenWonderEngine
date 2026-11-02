@@ -42,7 +42,9 @@ npm run verify:ui
 | 锚点 | 位置 | 用途 |
 |---|---|---|
 | `data-panel-tab="problems"` / `="output"` / `="ai"` | 底部面板的三个标签按钮 | 切到指定底部面板（**推荐用这个，不要用 `nth-child`**，标签顺序变了会点错） |
-| `data-sidebar-collapse` | 侧边栏头部的「折叠」按钮 | 折叠侧边栏后截图，验证画布是否拿满宽度 |
+| `data-sidebar-collapse` | 侧边栏头部的折叠/展开按钮（**二态**，文案与 `aria-expanded` 随状态变） | 折叠或展开侧边栏；折叠后截图验证画布拿满宽度 |
+| `data-sidebar-toggle` | **折叠态**的常驻窄条 `22px`（`.sidebar-rail`，只在折叠时可见） | ★ **折叠后唯一的鼠标入口**。删了它用户就困在折叠态（Ctrl+B 是键盘加速，不能当唯一入口） |
+| `data-panel-toggle` | 底部面板的折叠/展开按钮（二态） | 折叠/展开底部面板；折叠后标题条仍保留它（y≈948 可点） |
 | `data-command-palette-trigger` | 顶栏「搜索命令」按钮 | 打开 Ctrl+Shift+P 命令面板 |
 | `data-command-palette` | 命令面板浮层根节点 | 探针判断"浮层真的弹出来了" |
 | `data-cp-input` | 命令面板的输入框 | 需要往命令面板输入过滤词时定位它 |
@@ -57,6 +59,35 @@ npm run verify:ui
 | `data-ai-add-model` | 「+ 添加模型」按钮 | 手动添加 Trae 里没有的模型用例 |
 | `data-ai-probe-model` | 顶部 chip 里的「测试连接」按钮 | 连通性探测用例（loading 态 / 四类结果） |
 | `data-ai-probe-result` | 探测结果区容器 | 断言结果区已渲染（结论 / 下一步 / 细节） |
+| `data-sidebar-script` | 活动栏「剧本」入口 | 打开剧本视图（比 `[data-activity=script]` 更稳定的契约名） |
+| `data-tab="script"` | 编辑区「剧本」标签（由 `btn.dataset.tab` 生成） | 切到剧本标签；`.js-code` 只在这个视图里存在 |
+| `data-ai-thinking` | AI 面板的「正在思考」提示 | 断言思考态出现（见 P2） |
+| `data-demo-thinking-slow` | 顶栏隐形触发器 | 演示模式下提前触发 `slow` 阶段文案（**仅验收用**） |
+| `data-ai-sessions` | AI 面板顶部条「历史」按钮 | 打开会话切换器浮层 |
+| `data-ai-sessions-pop` | 会话浮层根节点 | 断言浮层真的弹出（而非只是点了按钮） |
+| `data-ai-session-item` | 会话行（带 `data-session-id`） | 读某一行的整体文本（标题+条数+当前标记） |
+| `data-ai-session-pick` | 会话行里可点击的按钮（**带 `data-ai-session-pick="<会话id>"`**） | 精确点到指定会话 |
+| `data-ai-session-new` | 浮层底部「+ 新建会话」 | 新建会话用例 |
+| `data-ai-session-delete` | 每行右侧的删除按钮（悬停才可见，带 `data-session-id`） | 删除用例（会弹原生 `confirm`） |
+
+### ⚠ 会话列表**只能用身份定位，不能用位置定位**
+
+会话锚点里有一条必须单独记住：**`data-ai-session-pick` 是"按身份定位"的锚点，
+验收时绝不能用 `:nth-child` / `:nth-of-type` 去点列表项。**
+
+理由：会话列表按 `updatedAt` **动态降序排序**（这是刻意的产品行为 ——
+用户打开历史想找的是"刚才那个对话"）。所以：
+
+- 新建一个会话后，新会话排到**第 1 位**，原来第 1 位变成第 2 位；
+- 聊完一轮后，那条会话的 `updatedAt` 更新，又会**跳到第 1 位**；
+- 于是 `:nth-of-type(2)` 指向哪一条**完全取决于上次操作顺序**。
+
+这不是理论风险，是实测踩过的：写验收时用 `:nth-of-type(2)` 点"另一个会话"，
+结果点到了当前会话本身（因为顺序变了），probe 看起来"切换没生效"。
+改成 `[data-ai-session-pick="<id>"]` 之后一次通过。
+
+**通用规则：验收锚点不能用位置，只能用身份。**
+凡是被排序、筛选、增删改过的列表，位置类锚点必然漂移。
 
 ### ⚠ `data-demo-*` 两个锚点的特殊说明（仅验收用演示出口）
 
@@ -67,6 +98,8 @@ npm run verify:ui
 |---|---|---|
 | `data-demo-interaction-states` | 给工具条按钮套上常态 / hover / active 三档 | `--shot` 抓不到瞬时 hover 状态；不这么做，"hover 文字是否还看得清"永远无法截图自证 |
 | `data-demo-models` | 注入一份**与门面形状完全一致的**假模型清单 | `--shot` 用隔离的临时 profile，settings 是空的，模型清单永远是 mock 两条；不注入就永远无法自证多模型渲染 |
+| `data-measure-editor` | 点一下把 `.js-code / .js-source / .editor-body / .js-main / .js-workbench` 的实际 `getBoundingClientRect` 打进控制台（`--console` 可见） | `--probe-selector` 需要在启动时就给选择器，拿不到"点开剧本标签之后"的状态；这个触发器在正确的视图下才量，数字才可信 |
+| `data-load-js-demo` | 点一下载入内置「俯视角 JS 示例」工程并切到 JS 语言页 | `.js-code` 只有在工程里有 JS 脚本时才渲染；空工程只能量到 `null`，会误判成"元素不存在" |
 
 两条共同的关键约束（后来人别理解错）：
 

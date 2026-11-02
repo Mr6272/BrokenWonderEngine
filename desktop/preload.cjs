@@ -173,6 +173,41 @@ const host = {
     return invoke("bwe:ai-probe-model", { id: String(id ?? "") });
   },
 
+  // ---------- 多会话 / 历史 ----------
+  /** 会话列表 + 当前 active（每项含 id/title/createdAt/updatedAt/messageCount）。 */
+  aiSessionsList() {
+    return invoke("bwe:ai-sessions-list");
+  },
+  /** 开新会话（**当前会话保留**；会先中止在途请求，返回 aborted 数）。 */
+  aiSessionNew(title) {
+    return invoke("bwe:ai-session-new", title === undefined ? {} : { title: String(title) });
+  },
+  /** 切换会话，返回目标会话的完整 messages（UI 直接替换对话区）。 */
+  aiSessionSwitch(id) {
+    return invoke("bwe:ai-session-switch", { id: String(id ?? "") });
+  },
+  /** 删除会话（删到当前会话时会落到另一个会话，active 不会悬空）。 */
+  aiSessionDelete(id) {
+    return invoke("bwe:ai-session-delete", { id: String(id ?? "") });
+  },
+
+  // ---------- 脚本语言服务（补全 / 悬浮提示） ----------
+  /**
+   * 补全。`offset` 必须是 **UTF-16 code unit 偏移** ——
+   * 直接传 `textarea.selectionStart` 即可，两边口径天然一致，不要自己按字符数算
+   * （中英混排时会错位，这是这类功能最容易埋的雷）。
+   */
+  scriptComplete(source, offset) {
+    return invoke("bwe:script-complete", { source: String(source ?? ""), offset: Number(offset ?? 0) });
+  },
+  /**
+   * 悬浮提示。返回 `{ ok, info }`，其中 `info` 可能是 **null**（光标处没有符号，
+   * 例如在括号/空白处）—— 那是正常结果，隐藏提示框即可，不要当错误处理。
+   */
+  scriptQuickInfo(source, offset) {
+    return invoke("bwe:script-quickinfo", { source: String(source ?? ""), offset: Number(offset ?? 0) });
+  },
+
   // ---------- 原生菜单 → 渲染侧 ----------
   onMenuCommand(cb) {
     return subscribe("menu:command", cb);

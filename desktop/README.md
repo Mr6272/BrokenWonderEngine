@@ -57,6 +57,21 @@ node desktop/main.mjs [--console] [--shot=<png>] [--size=WxH] [--probe=<json>] [
 - `--size=WxH`：截图窗口尺寸，默认 `1600x1000`。截图模式会**强制 dpr=1**，
   所以这个值就是逻辑像素尺寸（高 DPI 屏上也不会被缩放误导）。
 - `--probe=<json>`：额外输出几何探针（区域宽度、横向溢出、UI 计数、主题令牌），并落盘 JSON。
+- `--tap-seq="click:<sel>|probe:<sel1>,<sel2>|wait:<ms>"`：**多步交互 + 每步取证**（分号分段）。
+  与 `--tap` 的区别：`--tap` 是「点一次→截图→退出」，拿不到前后对比；`--tap-seq` 在**同一次运行**
+  里做多步，把每步结果按顺序追加到 `--probe-dom` JSON 的 `sequence` 字段，因此能证明
+  「折叠前 264px → 折叠后 0px → 再展开 0px」这类状态变化（排除用户手速/缓存/随机布局等中间变量）。
+  - `click:<selector>` 点击（会先 scrollIntoView），默认点后等 **250ms**（折叠动画/面板重建需要时间落定）；
+    可用 `click:<selector>|800` 覆盖等待时长（上限 5000ms）。
+  - `probe:<sel1>,<sel2>` 读每个选择器**第一个**匹配元素的 rect + 文本（与 `--probe-selector` 同构）。
+  - `wait:<ms>` 纯等待。
+  - **找不到元素不判死**：打印 `未找到` 并继续后续步骤（验收最怕第 2 步失败导致后面证据全丢）。
+  - `--verify` 忽略 `--tap-seq`（自检只跑干净默认视图）。
+- `--probe-selector=<sel[,sel]>`：配合 `--probe-dom`，按逗号分隔的选择器逐个读**第一个**匹配元素的
+  `getBoundingClientRect()`（x/y/width/height，CSS 像素）+ 前 200 字文本，写进 JSON 的 `selectors`。
+  用于「某个元素实际多大」的取证 —— 截图量像素会被缩放/DPI 干扰，探针读数是可靠证据
+  （例：B 改脚本编辑器高度前后，`.js-code` 的 `height` 从 N 变成 M）。
+- `--user-data=<绝对目录>`：用一份**现成**的用户配置做验收（非隔离语义，见下文）。
 - `--tap=<sel[,sel]>`：截图前依次点击这些元素（逗号分隔），用来打开非默认标签。
   每次点击后等 250ms。**找不到元素不判死**（打印 `[tap] 未找到 …`，截图照出）。
 - `--verify`：严格模式。**非奶油主题 = FAIL**、**横向溢出 = FAIL**、**非背景像素不在 20%~92% = FAIL**。
@@ -219,6 +234,24 @@ B 侧按 `aiProbeModel(id)` 期望 `{kind, httpStatus, ms}`，而主进程实际
   注意 `bwe:ai-probe-model` 有 **mock 与真实两个分支**，两个都必须查 —— 只查 mock 的话，
   真实分支的字段名被改坏测不出来（我用注入断裂验证过这个盲区）。
 
+### `--tap-seq` 用法示例（多步取证）
+
+折叠按钮类 bug 的标准取证命令（同一次运行拿到折叠前/后/再展开三组宽度）：
+
+```bash
+node desktop/main.mjs --shot=.tmp_desk/collapse.png --size=1600x1000   --probe-dom=.tmp_desk/collapse.json   --tap-seq="probe:.sidebar,.panel; click:[data-sidebar-collapse]; probe:.sidebar,.panel; wait:200; probe:.sidebar,.panel"
+```
+
+实测输出（BWE 编辑器，2026-11-02）：
+```
+[seq] #1 probe → .sidebar: x=48 y=40 264x710（匹配 1 个）
+[seq] #2 click:[data-sidebar-collapse] → 已点击 <BUTTON.btn ghost sm sidebar-collapse-btn> @ 136,45 59x24
+[seq] #3 probe → .sidebar: x=48 y=40 0x710（匹配 1 个）
+[seq] #5 probe → .sidebar: x=48 y=40 0x710（匹配 1 个）      ← 折叠后在 200ms 内未恢复
+```
+JSON 里 `sequence[]` 每项含 `{step, phase, selector, found, rect{x,y,width,height}, text, visible, error}`，
+直接按 step 顺序对比即可；`visible` 由 `rect.width && rect.height` 推导，折叠后为 `false`。
+
 ### 验收工具只读原则
 
 `verify-models.mjs` 用 `--ipc-probe-no-import`（只读模式）读被测目录，**不修改被测状态**。
@@ -262,7 +295,16 @@ node desktop/test/trae-import.test.mjs   # Trae 导入（12 项：去重/模型�
 node desktop/test/models.test.mjs        # 模型清单（20 项：向后兼容/按 id 取/每模型独立 key）
 node desktop/test/modelCatalog.test.mjs   # 清单写操作（18 项：判重/id/apiKey 三态）
 node desktop/test/probe.test.mjs         # 连通性探测（18 项：三态分类/降级/cause 链）
-node desktop/test/ipc-contract.test.mjs  # IPC 契约一致性（11 项：通道/字段/语义，含真进程运行时校验）
+node desktop/test/ipc-contract.test.mjs  # IPC 契约一致性（14 项：通道/字段/语义/事件清单，含真进程运行时校验）
+node desktop/test/thinking.test.mjs      # 思考状态机（8 项：connecting/answering 顺序、只发一次、字段白名单）
+node desktop/test/tapSeq.test.mjs        # --tap-seq 解析器（16 项：三段语法/等待上限/错误不静默）
+node desktop/test/script-language.test.mjs # 补全/提示（14 项：UTF-16 offset/性能/insertText/kind/降级）
+node desktop/test/conversations.test.mjs   # 多会话存储（20 项：迁移/新建/切换/删除/标题/自愈）
+node desktop/test/session-title.test.mjs   # 标题随对话生成（5 项：零 token/不覆盖用户标题/不串会话）
+node desktop/test/ai-session-switch.test.mjs # 切会话时 abort 在途请求（4 项：不串会话）
+
+# ── 5f. 脚本编辑器（含 Yarn）尺寸与「新建后不再空态」回归 ──
+node desktop/tools/verify-script-editor.mjs
 
 # ── 4. 打包 + 产物自检（双尺寸断言）───────────────────────────
 node desktop/tools/package.mjs --verify
@@ -284,6 +326,9 @@ node desktop/tools/verify-models.mjs
 
 # ── 5d. 探测三态的真实网络验证（可选，需外网；无网加 --allow-offline）──
 node desktop/tools/verify-probe-scenarios.mjs
+
+# ── 5e. 思考事件序列取证（不需要网络与 key）──
+node desktop/tools/verify-thinking-events.mjs
 #   期望：cryptoAvailable=true；ai-import-trae 的 ok=true、providers 含 siliconflow、
 #        uniqueModels=2、reachable=true/reachableStatus=401；
 #        ai-models 每项 ready=false + needsKey=true（导入的模型没 key）；
@@ -404,6 +449,199 @@ desktop/
 
 **mock 模式**：没配 API Key 时也推完整流式事件（route → delta… → done，带 usage/cacheHitRate），
 所以无 key 环境下界面可演示、可截图。`aiStatus()` 会返回 `provider:"mock"` + 一段中文说明。
+
+## 脚本补全与悬浮提示
+
+编辑器代码框的**补全**与**悬浮提示**由 TypeScript LanguageService 提供，
+**不引入 monaco / codemirror** —— 仓库已有 `web/src/js/bwe.d.ts`（271 条完整类型声明），
+`/api/js-check` 本来就在用它做诊断，同一个 service 直接能出补全与提示。
+
+### 唯一实现：`web/tools/script-language.mjs`
+
+```js
+createScriptLanguage({ bweDts, globalsDts })   // 或 createScriptLanguageFromDisk({ webRoot })
+  → {
+      diagnostics(source)         // 与既有 /api/js-check 完全同一套规则
+      complete(source, offset)    // → { entries: [{name,kind,detail,docs,insertText}], isMemberAccess }
+      quickInfo(source, offset)   // → { display, docs, kind } | null
+      version                     // 版本号（验证「增量更新」生效）
+    }
+```
+
+**四个必须做对的点：**
+
+1. **单实例 + 版本号增量更新**。每次按键都 `createLanguageService` 会重建 program（271 条声明 + lib），
+   卡几百毫秒。正确做法是一个 service 常驻，每次只更新 snapshot 并把 `version` 加一。
+   **实测性能（80 行中文注释 + 40 个函数的长脚本，20 次取中位数）**：
+   ```
+   中位 4.82ms · p95 6.08ms · 最小 3.08ms        （要求 < 30ms）
+   ```
+2. **offset 是 UTF-16 code unit**（TypeScript 约定）。渲染侧 `textarea.selectionStart` 也是 UTF-16，
+   **两边天然一致，直接透传**。⚠ 千万不要按「字符数」算 —— 逐码点遍历与 UTF-16 索引在
+   emoji/生僻字上会错位，表现为「中文或 emoji 之后的补全整体错位」。单测里有 emoji 前缀用例锁住这条。
+3. **`insertText` 只给名字、不带括号**。带不带括号是 UI 的决策（用户可能想先看签名再决定），
+   后端替 UI 决定等于越权。
+4. **`kind` 是粗糙分类**：`function | property | namespace | keyword | constant`
+   （由 `ts.ScriptElementKind` 转），UI 可直接拿来选图标。
+
+### 两条传输通道（同一套语言服务，两边结果必然一致）
+
+| 场景 | 接口 |
+|---|---|
+| 网页版（`npm run serve`） | `POST /api/script-complete` `{ source, offset }` → `{ ok, entries, isMemberAccess }` |
+| 网页版 | `POST /api/script-quickinfo` `{ source, offset }` → `{ ok, info }` |
+| 桌面版（IPC） | `bwe:script-complete` / `bwe:script-quickinfo`（同上形状） |
+
+桌面版**复用同一个 `api-core` 实例**的方法（`core.completeScript` / `core.quickInfoScript`），
+不是另写一套 —— 否则桌面版与网页版的补全结果迟早不一致，那是最难查的一类不一致。
+
+**`info === null` 是正常结果**（光标在括号/空白处没有符号），UI 隐藏提示框即可，不要当错误。
+
+**补全不依赖 `apiDocs.ts`**：它读的是 `bwe.d.ts`（类型声明）。改 `apiDocs.ts` 只会影响剧本面板的
+API 侧栏，**不会**改变补全内容 —— 别以为改那儿能让补全多一条。
+
+### 验收
+
+```bash
+node desktop/test/script-language.test.mjs    # 14 项：UTF-16 offset/性能/insertText/kind/降级
+node desktop/test/ipc-contract.test.mjs       # 运行时校验两个通道的实际返回字段
+```
+
+实测（`bwe.world.fi`）：
+```
+entries = 22 条 · isMemberAccess = true
+前 3 条: clear (function), clearTag (function), clone (function)
+第 1 条 detail: (method) bwe.World.clear(): void
+        docs: 销毁所有实体（包含场景原生对象）
+quickInfo(光标在 world 上) → (method) bwe.World.find(q: bwe.EntityQuery): bwe.Entity | null
+```
+
+## 多会话 / 对话历史
+
+支持「开新对话」「在历史会话间切换」「删除会话」。存储从「单份 history.json」改为：
+
+```
+%APPDATA%\BWE Studio\sessions\<workspaceHash>\
+├── index.json                      [{id,title,createdAt,updatedAt,messageCount,modelId}], active
+└── conversations\<id>\
+    ├── history.json                该会话完整消息（无损）
+    ├── summary.json                该会话压缩摘要 + usage
+    └── meta.json
+```
+
+### 四条实现规矩（改代码前必读）
+
+1. **老数据自动迁移，绝不丢历史。** 首次启动把旧的顶层 `history.json` 整体搬成第一个会话，
+   旧文件**改名归档**（`history.json.migrated`）而不是删除 —— 迁移逻辑万一有 bug 还能手工找回。
+   迁移只发生一次（避免重复 load 产生重复会话）。
+2. **`active` 永不悬空。** 删当前会话时自动落到「最近更新」的下一个；删到只剩 0 个时自动补一个空会话
+   （否则 UI 没有可用会话，下次启动也难恢复）。
+3. **切换会话必须先 abort 在途请求，再换绑 session 对象。** 顺序不能反 ——
+   否则旧请求收尾时会把消息 append 进**新会话**的 history（数据写错地方，且不报错）。
+   这是本功能最危险的一条，有专项单测 `ai-session-switch.test.mjs` 锁住。
+4. **`index.json` 原子写（`.tmp` → rename）。** 半截 JSON 会让用户「所有会话都消失」
+   （内容其实还在磁盘，但 UI 看不到）。
+
+### 标题生成：零 token，且必须**随对话更新**
+
+取**第一条用户消息前 20 字**（多行压成一行、超长加 `…`、空内容回落「新对话」）。
+不调模型生成标题 —— 那是额外开销，而第一条消息本身就是最好的标题（用户自己写的话最贴近意图）。
+
+⚠ **光有 `makeTitle()` 不够**：`bridge` 写盘后必须通知会话存储（`onSessionUpdated` 回调），
+否则标题只在迁移时生成一次，之后永远停在「新对话」，`messageCount` 也永远是 0 ——
+通道全通、数据全对，但**用户看到的历史列表是空的**。
+这是实测发现的真实缺陷（单测能过、端到端才发现），回归锁是 `session-title.test.mjs`。
+
+两条细节：
+- 只在标题**仍是默认值**时用首条消息生成 —— 用户手改过标题后不再覆盖。
+- 用 `basename(sess.dir)` 取会话 id：Windows 路径分隔符是 `\`，按 `/` 分会拿不到 id（踩过）。
+
+### 自愈：索引丢了历史也还在
+
+`index.json` 被删/写坏时，启动会扫 `conversations/<id>/` 把磁盘上还在的会话补回列表。
+**宁可多列一个会话，也不要让用户的历史凭空消失。**
+
+### 四个 IPC 通道
+
+| 通道 | 参数 | 返回 |
+|---|---|---|
+| `bwe:ai-sessions-list` | 无 | `{ ok, sessions:[{id,title,createdAt,updatedAt,messageCount}], active }` |
+| `bwe:ai-session-new` | `{ title? }` | `{ ok, id, sessions, active, aborted }` |
+| `bwe:ai-session-switch` | `{ id }` | `{ ok, sessions, active, messages, aborted }`（messages **不含 system 前缀块**） |
+| `bwe:ai-session-delete` | `{ id }` | `{ ok, sessions, active }` |
+
+`aiStatus()` 增加 `activeSession`（当前会话 id）与 `sessionCount`。
+
+### 验收
+
+```bash
+node desktop/test/conversations.test.mjs    # 20 项：迁移/新建/切换/删除/标题/索引健壮性
+node desktop/test/ai-session-switch.test.mjs # 4 项：切换时 abort 在途请求、不串会话
+```
+
+## 「思考中」事件（thinking）
+
+推理模型（DeepSeek reasoner 等）首字延迟常 2~5 秒。这期间原来只发一个空 delta 做心跳，
+UI 收不到任何可显示内容 —— 用户以为卡死。现在改为**有语义的阶段事件流**：
+
+```ts
+{ type: "thinking", requestId, phase: "connecting" | "reasoning" | "answering" | "slow",
+  chars?: number,   // reasoning 已累计字符数（UI 显示「已思考 N 字」）
+  delta?: string }  // 最近一小段思考文本（供「展开看」，**不是全量**）
+```
+
+| phase | 何时发 | 含义 | UI 应显示 |
+|---|---|---|---|
+| `connecting` | 路由判定后、发起网络前 | 已开始请求，还没有任何返回 | 「正在连接…」 |
+| `reasoning` | 收到 reasoning 增量 | 模型在思考，还没有可显示正文 | 「正在思考（已思考 N 字）」 |
+| `answering` | **收到首个正文 delta 时，只发一次** | 已有正文在流 | 切到正常流式显示 |
+| `slow` | 发起请求后 **8 秒**内无任何 reasoning/delta | 网络慢或模型排队 | 文案升级 + 提供取消出口 |
+
+**三条硬约束（改代码前必读）**：
+1. **四个 phase 不可合并** —— 它们对应四种不同的等待体验，文案与「下一步」都不同。
+2. **`answering` 只发一次** —— 每个 delta 都发会让 UI 每帧做一次状态判断。
+3. **mock 分支也必须发 `connecting`**（人为 400~600ms），否则无 key 时思考态无法演示/截图；
+   **真模型分支不许加任何人为延迟**（真延迟已经存在，再加只会更差）。
+
+事件里**只放契约字段**（phase / chars / delta）—— 文案由 UI 按 phase 决定，
+主进程塞文案会导致两处各写一套措辞（迟早不一致）。
+
+验证：
+```bash
+node desktop/test/thinking.test.mjs                          # 8 项：顺序/只发一次/字段白名单/mock 延迟
+node desktop/tools/verify-thinking-events.mjs                # 打印真实事件序列（取证用）
+```
+实测序列（mock）：
+```
+route → thinking/connecting → thinking/answering → delta(18字) ×13 → done
+thinking 明细：[2ms] connecting  ·  [509ms] answering
+```
+
+### 关于「切会话时中止在途请求」（多会话最危险的一条）
+
+`swapSession()` 是 **async 且内部 `await whenIdle()`** —— 返回时保证在途请求已真正 settle
+（落盘、emit、从 running 表移除都已完成）。调用方必须 `await`。
+
+为什么不能只「发出 abort 就换绑」：`AbortController.abort()` 只是发信号，被中止的 Promise
+在下一个微任务才 reject，而请求的收尾落盘更晚。中间那个窗口会导致
+**「切到 B 会话，A 的回复写进 B 的 history」**（数据错乱且不报错）。
+
+配套的第二道防线：`run()` 在开头就把会话**绑定**成 `targetSession`，落盘只写它，
+与后续 `session` 变量指向谁无关。
+
+测试侧纪律：**不要用 sleep 等异步收尾**。用 `await bridge.swapSession(...)` 或
+`await bridge.whenIdle()` —— sleep 只降低概率，不消除竞态；而且慢机器上会假红。
+（踩过：`ai-session-switch.test.mjs` 曾因断言瞬时状态而 5~12% 随机失败，改为确定性等待后 20/20 稳定。）
+
+### 打包必须扫描依赖，不能硬编码清单
+
+`desktop/tools/package.mjs` 的 `copyApiCore()` 从入口 `api-core.mjs` 递归解析相对 `import`，
+把整条依赖链复制进 `resources/app/web/tools/`。
+
+**这条踩过两次**：先漏 `api-core.mjs`、后来又漏 `script-language.mjs`（都是新增 import 但没更新
+硬编码清单），症状完全相同 —— 主进程在模块加载期 `ERR_MODULE_NOT_FOUND`，
+**Electron 表现为「窗口不出现、进程静默挂死」，不打印栈**，只有打包自检超时才暴露。
+硬编码清单的必然结局是「新增一个 import，就多一次线上挂死」。
 
 ## 已知约束
 

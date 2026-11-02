@@ -188,7 +188,9 @@ const RUNTIME_CHECKED = [
   "bwe:ai-models",
   "bwe:ai-status",
   "bwe:ai-probe-model:mock",
-  "bwe:ai-probe-model:real"
+  "bwe:ai-probe-model:real",
+  "bwe:script-complete",
+  "bwe:script-quickinfo"
 ];
 
 /** 运行时校验键 → 契约声明键（probe-model 的两个分支共用同一份声明）。 */
@@ -280,6 +282,56 @@ test("运行时：probeModel 的 ok 真的是三态（实际返回值可为 null
   assert.ok(
     spec.notes.includes("不代表对话接口失败"),
     "notes 必须写明 unauthorized-on-models 的真实含义（否则 UI 会把可用服务判死）"
+  );
+});
+
+test("ai:event 的事件类型清单包含 thinking，且四个 phase 都写进 notes", () => {
+  const spec = IPC_CONTRACT["ai:event"];
+  assert.ok(Array.isArray(spec.eventTypes), "ai:event 必须有 eventTypes 清单（漏一种 UI 就静默丢弃它）");
+  // 事件类型必须齐全 —— 缺一个不会让任何东西报错，只会静默丢事件
+  for (const t of ["route", "thinking", "delta", "tool", "usage", "done", "error"]) {
+    assert.ok(spec.eventTypes.includes(t), `eventTypes 缺少 ${t}`);
+  }
+  // 四个 phase 的语义必须写在契约里（UI 按 phase 决定文案，语义不清就会撞）
+  for (const phase of ["connecting", "reasoning", "answering", "slow"]) {
+    assert.ok(spec.notes.includes(phase), `notes 缺少 phase「${phase}」的语义说明`);
+  }
+  // 三条硬约束必须在契约里（否则改动时没人知道规矩）
+  assert.ok(spec.notes.includes("只发一次"), "notes 必须写明 answering 只发一次");
+  assert.ok(spec.notes.includes("不是全量"), "notes 必须写明 reasoning delta 不是全量");
+  assert.ok(spec.notes.includes("不许加任何人为延迟"), "notes 必须写明真模型分支不许加人为延迟");
+});
+
+test("thinking 事件只带契约字段（不许扩宽）", async () => {
+  // 主进程的 emitThinking 只允许 phase / chars / delta；
+  // 多加字段（如 mock:true、message:"…"）会让契约失真：调用方要么忽略（白做），
+  // 要么当私有约定用（下次就漂）。
+  const bridge = await readFile(join(DESKTOP, "lib", "ai", "bridge.mjs"), "utf8");
+  assert.ok(bridge.includes("event.chars = extra.chars"), "emitThinking 应按白名单写入 chars");
+  assert.ok(bridge.includes("event.delta = extra.delta"), "emitThinking 应按白名单写入 delta");
+  assert.ok(bridge.includes("只挑契约内的可选字段"), "emitThinking 必须有白名单注释（后人改动时能看懂为什么）");
+});
+
+test("四个 phase 在主进程都有实际发射点（不是只在文档里）", async () => {
+  const bridge = await readFile(join(DESKTOP, "lib", "ai", "bridge.mjs"), "utf8");
+  // 用字符串查找而不是正则：phase 名里没有特殊字符，字符串更稳也更好读。
+  for (const phase of ["connecting", "reasoning", "answering", "slow"]) {
+    assert.ok(
+      bridge.includes(`emitThinking("${phase}"`),
+      `主进程没有发 ${phase}（文档写了但没实现，等于没做）`
+    );
+  }
+  // mock 分支必须发 connecting（否则无 key 时思考态无法演示/截图）
+  const mockIdx = bridge.indexOf("mock 分支：本地模板流");
+  const connectingAfterMock = bridge.indexOf('emitThinking("connecting"', mockIdx);
+  assert.ok(mockIdx >= 0 && connectingAfterMock > mockIdx, "mock 分支必须在吐字之前发 connecting");
+  assert.ok(bridge.includes("MOCK_THINKING_MS"), "mock 的思考延迟应通过常量表达");
+  // 真模型分支不许加人为延迟：bridge 里只允许两处 setTimeout
+  // （slow 兜底定时器 + mock 的思考延迟），多了就说明有人给真模型造了延迟。
+  const setTimeoutCount = (bridge.match(/setTimeout/g) || []).length;
+  assert.ok(
+    setTimeoutCount <= 2,
+    `bridge 里出现了 ${setTimeoutCount} 处 setTimeout（只允许 slow 兜底 + mock 思考延迟这两处）`
   );
 });
 

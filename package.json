@@ -23,12 +23,18 @@
     "verify:all": "npm run verify:apidocs && npm run typecheck && npm run check:scripts && npm run verify:openworld && npm run verify:roundtrip && npm run verify:uiscene",
     "verify:apidocs:soft": "node web/tools/verify-apidocs.mjs",
     "verify:ui": "esbuild web/tools/ui-checks/verify-ui-logic.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/verify.mjs --log-level=warning && node .tmp_ui/verify.mjs",
+    "verify:ui:all": "esbuild web/tools/ui-checks/verify-ui-logic.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/verify.mjs --log-level=warning && node .tmp_ui/verify.mjs && esbuild web/tools/ui-checks/verify-script-complete.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/complete.mjs --log-level=warning && node .tmp_ui/complete.mjs && esbuild web/tools/ui-checks/verify-sessions.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/sessions.mjs --log-level=warning && node .tmp_ui/sessions.mjs",
     "verify:desktop": "node desktop/tools/package.mjs --verify",
     "desk": "node desktop/main.mjs",
     "desk:shot": "node desktop/main.mjs --shot=.tmp_desk/shot.png --size=1600x1000",
     "desk:pack": "node desktop/tools/package.mjs",
     "desk:verify": "node desktop/tools/package.mjs --verify",
-    "desk:test": "node desktop/test/prefix.test.mjs && node desktop/test/router.test.mjs && node desktop/test/session.test.mjs && node desktop/test/usage.test.mjs"
+    "desk:test": "node desktop/test/prefix.test.mjs && node desktop/test/router.test.mjs && node desktop/test/session.test.mjs && node desktop/test/usage.test.mjs && node desktop/test/thinking.test.mjs && node desktop/test/tapSeq.test.mjs && node desktop/test/script-language.test.mjs && node desktop/test/conversations.test.mjs && node desktop/test/session-title.test.mjs && node desktop/test/ai-session-switch.test.mjs && node desktop/test/ipc-contract.test.mjs",
+    "desk:test:all": "node desktop/test/prefix.test.mjs && node desktop/test/router.test.mjs && node desktop/test/session.test.mjs && node desktop/test/usage.test.mjs && node desktop/test/png.test.mjs && node desktop/test/ai-bridge.test.mjs && node desktop/test/thinking.test.mjs && node desktop/test/tapSeq.test.mjs && node desktop/test/script-language.test.mjs && node desktop/test/conversations.test.mjs && node desktop/test/session-title.test.mjs && node desktop/test/ai-session-switch.test.mjs && node desktop/test/ipc-contract.test.mjs && node desktop/test/models.test.mjs && node desktop/test/modelCatalog.test.mjs && node desktop/test/trae-import.test.mjs && node desktop/test/probe.test.mjs && node desktop/test/concurrency.test.mjs",
+    "verify:models": "node desktop/tools/verify-models.mjs",
+    "verify:probe": "node desktop/tools/verify-probe-scenarios.mjs",
+    "verify:thinking": "node desktop/tools/verify-thinking-events.mjs",
+    "verify:script-editor": "node desktop/tools/verify-script-editor.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

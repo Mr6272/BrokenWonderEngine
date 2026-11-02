@@ -23,6 +23,7 @@ import { createRequire } from "node:module";
 import { dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { findRuntimeJdk, packageAndroid, packageBwe, writeQuickBuild } from "./package-bwe.mjs";
+import { createScriptLanguageFromDisk } from "./script-language.mjs";
 
 const defaultWebRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const nodeRequire = createRequire(import.meta.url);
@@ -46,10 +47,6 @@ function decodeToolOutput(buffer) {
   } catch {
     return utf8;
   }
-}
-
-function pathKey(p) {
-  return normalize(String(p)).replace(/\\/g, "/").toLowerCase();
 }
 
 function stripForDownload(name) {
@@ -150,138 +147,71 @@ export function createApiCore(options = {}) {
     }
   }
 
-  // ---------------- /api/js-check ----------------
-
-  let tsModule = null;
-
-  function loadTypeScript() {
-    if (tsModule) return tsModule;
-    try {
-      tsModule = nodeRequire("typescript");
-    } catch (e) {
-      throw new Error(
-        `找不到 TypeScript（node_modules/typescript）。请在项目根目录执行 npm install 后重启服务。（${e?.message || e}）`
-      );
+  // ---------------- 脚本语言服务（诊断 / 补全 / 悬浮提示）----------------
+  //
+  // 三个能力共用**同一个** LanguageService 实例（见 web/tools/script-language.mjs 文件头）：
+  // 每次按键重建 program 会卡几百毫秒，而单实例 + 版本号增量更新后补全只要几毫秒。
+  // 懒初始化：没用到补全的编辑器（或只做打包的场景）不必付这份代价。
+  let scriptLanguagePromise = null;
+  function scriptLanguage() {
+    if (!scriptLanguagePromise) {
+      scriptLanguagePromise = createScriptLanguageFromDisk({ webRoot }).catch((e) => {
+        // 初始化失败时清掉 promise，让下一次调用能重试（而不是永久缓存一个 rejected promise）
+        scriptLanguagePromise = null;
+        throw e;
+      });
     }
-    return tsModule;
+    return scriptLanguagePromise;
   }
 
+  /**
+   * 诊断（原 /api/js-check 的能力）。
+   * 装配与判定规则全部在 script-language.mjs，这里只做「参数校验 + 组织返回」。
+   */
   async function checkJsSource(body) {
     const source = String(body?.source ?? "");
     const name = String(body?.name ?? "script");
-    const ts = loadTypeScript();
-    const virtualRoot = join(projectRoot, "__bwe_jscheck__");
-    // 与打包器一致：按 TypeScript 语法解析（允许类型标注），输出 ES5。
-    const userFile = join(virtualRoot, "user-script.ts");
-    const files = new Map();
-    files.set(pathKey(userFile), source);
+    const lang = await scriptLanguage();
+    const result = lang.diagnostics(source);
+    return { ...result, name };
+  }
 
-    const declarationFiles = [];
-    for (const rel of ["bwe.d.ts", "globals.d.ts"]) {
-      try {
-        const text = await readFile(join(webRoot, "src", "js", rel), "utf8");
-        const virtual = join(virtualRoot, rel);
-        files.set(pathKey(virtual), text);
-        declarationFiles.push(virtual);
-      } catch {
-        // 文件不存在属于正常情况（JS 面板还没落地），继续。
-      }
+  /**
+   * 补全：`{ source, offset }` → `{ ok, entries, isMemberAccess }`。
+   *
+   * ⚠ offset 是 **UTF-16 code unit 偏移**（TypeScript 约定）。渲染侧
+   * `textarea.selectionStart` 同样是 UTF-16，两边天然一致 —— 不要做任何字符数换算，
+   * 中英混排时按码点算会错位（这是这类功能最容易埋的雷）。
+   */
+  async function completeScript(body) {
+    const source = String(body?.source ?? "");
+    const offset = Number(body?.offset ?? 0);
+    if (!Number.isFinite(offset) || offset < 0) {
+      return { ok: false, entries: [], isMemberAccess: false, error: "offset 必须是非负数" };
     }
+    const lang = await scriptLanguage();
+    const result = lang.complete(source, offset);
+    return { ok: true, entries: result.entries, isMemberAccess: result.isMemberAccess };
+  }
 
-    const tsOptions = {
-      target: ts.ScriptTarget.ES5,
-      module: ts.ModuleKind.None,
-      allowJs: true,
-      checkJs: declarationFiles.length > 0,
-      noEmit: true,
-      strict: false,
-      noImplicitAny: false,
-      skipLibCheck: true,
-      types: [],
-      // 标准库用 ES2020：内嵌 Rhino 1.7.15 实测支持 Array.includes / Object.entries /
-      // String.padStart / String.replaceAll / Array.flat / globalThis 等（见 docs/scripting-api.md §0）。
-      // 之前只给 lib.es5，会把 `.includes()` 这类完全能跑的写法报成错误，误导用户。
-      // 仍然不给 DOM/Node 的 lib：window / document / require 在运行时并不存在，让它们通过反而更糟。
-      lib: ["lib.es2020.d.ts"]
-    };
-
-    const host = {
-      getSourceFile(fileName, languageVersion) {
-        const text = files.get(pathKey(fileName));
-        if (text !== undefined) return ts.createSourceFile(fileName, text, languageVersion, true);
-        const disk = ts.sys.readFile(fileName);
-        return disk === undefined ? undefined : ts.createSourceFile(fileName, disk, languageVersion, true);
-      },
-      getDefaultLibFileName: (opts) => ts.getDefaultLibFilePath(opts),
-      writeFile() {},
-      getCurrentDirectory: () => virtualRoot,
-      getDirectories: (dir) => ts.sys.getDirectories(dir),
-      fileExists: (f) => files.has(pathKey(f)) || ts.sys.fileExists(f),
-      readFile: (f) => files.get(pathKey(f)) ?? ts.sys.readFile(f),
-      getCanonicalFileName: (f) => f,
-      useCaseSensitiveFileNames: () => false,
-      getNewLine: () => "\n",
-      getEnvironmentVariable: () => ""
-    };
-
-    const program = ts.createProgram({
-      rootNames: [userFile, ...declarationFiles],
-      options: tsOptions,
-      host
-    });
-    const userSource = program.getSourceFile(userFile);
-    const syntactic = userSource ? program.getSyntacticDiagnostics(userSource) : [];
-    // 没有 bwe.d.ts 时只报语法错：否则 "找不到名称 bwe / ctx" 会刷满屏，把真错误埋掉。
-    const semantic = userSource && declarationFiles.length > 0 ? program.getSemanticDiagnostics(userSource) : [];
-    const raw = [...syntactic, ...semantic].filter((d) => d.file);
-
-    const diagnostics = raw.map((d) => {
-      let line = 1;
-      let col = 1;
-      if (d.file && typeof d.start === "number") {
-        const pos = d.file.getLineAndCharacterOfPosition(d.start);
-        line = pos.line + 1;
-        col = pos.character + 1;
-      }
-      return {
-        line,
-        col,
-        severity: d.category === ts.DiagnosticCategory.Error ? "error" : "warning",
-        message: ts.flattenDiagnosticMessageText(d.messageText, " ")
-      };
-    });
-    // 语法诊断与语义诊断可能重复同一条；按「行:列:消息」去重后按位置排序，面板直接渲染。
-    const seen = new Set();
-    const unique = diagnostics.filter((d) => {
-      const k = `${d.line}:${d.col}:${d.message}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-    unique.sort((a, b) => a.line - b.line || a.col - b.col);
-
-    const transpiled = ts.transpileModule(source, {
-      compilerOptions: {
-        target: ts.ScriptTarget.ES5,
-        module: ts.ModuleKind.None,
-        alwaysStrict: false,
-        newLine: ts.NewLineKind.LineFeed
-      },
-      fileName: `${name || "script"}.ts`,
-      reportDiagnostics: false
-    });
-
-    return {
-      ok: !unique.some((d) => d.severity === "error"),
-      name,
-      hasTypes: declarationFiles.length > 0,
-      diagnostics: unique,
-      // 给编辑器做「降级后长什么样」预览，也让前端能确认 transpile 成功。
-      transpiled: transpiled.outputText ?? ""
-    };
+  /**
+   * 悬浮提示：`{ source, offset }` → `{ ok, info }`（info 为 null 表示该位置没有符号）。
+   *
+   * `info` 为 null 是**正常结果**（例如光标在括号/空白处），不是失败 ——
+   * 调用方据此隐藏提示框即可，不该弹错误。
+   */
+  async function quickInfoScript(body) {
+    const source = String(body?.source ?? "");
+    const offset = Number(body?.offset ?? 0);
+    if (!Number.isFinite(offset) || offset < 0) {
+      return { ok: false, info: null, error: "offset 必须是非负数" };
+    }
+    const lang = await scriptLanguage();
+    return { ok: true, info: lang.quickInfo(source, offset) };
   }
 
   // ---------------- /api/quick-run ----------------
+
 
   function quickRunRunning() {
     const proc = quickRun.proc;
@@ -720,6 +650,24 @@ export function createApiCore(options = {}) {
       }
     }
 
+    // ---------- /api/script-complete：补全 ----------
+    if (path === "/api/script-complete" && method === "POST") {
+      try {
+        return json(200, await completeScript(body));
+      } catch (e) {
+        return json(500, { ok: false, entries: [], isMemberAccess: false, error: e?.message || String(e) });
+      }
+    }
+
+    // ---------- /api/script-quickinfo：悬浮提示 ----------
+    if (path === "/api/script-quickinfo" && method === "POST") {
+      try {
+        return json(200, await quickInfoScript(body));
+      } catch (e) {
+        return json(500, { ok: false, info: null, error: e?.message || String(e) });
+      }
+    }
+
     // ---------- /api/quick-run ----------
     if (path === "/api/quick-run" && method === "POST") {
       if (!body?.project || !Array.isArray(body.project.scenes) || body.project.scenes.length === 0) {
@@ -933,6 +881,11 @@ export function createApiCore(options = {}) {
     handle,
     stopQuickRun,
     killQuickRunSync,
+    // 桌面版直接调这两个（不经 HTTP，但**与 /api/script-complete、/api/script-quickinfo
+    // 共用同一套语言服务**，保证两边结果一致）。
+    completeScript,
+    quickInfoScript,
+    checkJsSource,
     paths: { webRoot, projectRoot, quickRunRoot, quickRunLog, scriptMirrorDir },
     get port() {
       return port;

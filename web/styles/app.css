@@ -2785,14 +2785,18 @@ textarea {
 }
 
 .js-workbench {
+  /* 纵向：代码在上吃满宽度，辅助区在下（可折叠/可拖分割）。
+     原来是横向 wrap 并排，API 速查固定占 190px，实测把代码压到只剩 283px 宽 ≈ 每行 30 字符。 */
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 8px;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0;
 }
 
 .js-main {
-  flex: 1 1 260px;
+  flex: 1 1 auto;
+  min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -2803,8 +2807,11 @@ textarea {
 
 .js-code {
   display: flex;
-  height: 320px;
-  min-height: 180px;
+  /* 高度自适应：吃满父容器剩余空间（父链 .js-main → .js-workbench → wrap → editorBody）。
+     原来写死 320px，1400+ 高的编辑区里代码只占三分之一，用户报「窗口太小」就是它。
+     min-height 保留 160px：窗口极小时不至于完全塌掉，仍能看到几行。 */
+  flex: 1 1 auto;
+  min-height: 160px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--sunken);
@@ -2949,8 +2956,10 @@ textarea {
 /* ---------- API 速查侧栏 ---------- */
 
 .js-api {
-  flex: 0 1 190px;
-  min-width: 168px;
+  /* 现在在辅助区里竖向叠放（不再是右侧等宽栏）：宽度吃满，高度由 .js-api-list 自己滚 */
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -2958,7 +2967,6 @@ textarea {
   border: 1px solid var(--line-soft);
   border-radius: var(--r-md);
   background: var(--surface-2);
-  max-height: 420px;
 }
 
 .js-api-head .group-label {
@@ -4152,4 +4160,515 @@ body .command-palette {
 .ai-panel .ai-probe.unknown .ai-probe-headline {
   color: var(--text-2);
   font-weight: 600;
+}
+
+/* ==========================================================================
+   剧本编辑器：撑满 + 可折叠辅助区（用户报「看代码的窗口太小」的修复）
+   --------------------------------------------------------------------------
+   关键约束：编辑区宿主 .editor-body 是 flex 容器，所以这条链必须一路 flex:1 + min-height:0：
+     .script-editor-wrap → .js-workbench → .js-main → .js-code
+   任何一层缺 min-height:0，flex 子项就会被内容顶高而无法收缩，代码框高度就传不下去。
+   ========================================================================== */
+.script-editor-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* padding 从 10+8 收到 2+2，gap 从 6 收到 4：
+     用户报的就是"看代码的窗口太小"，这 22px 全给代码区。
+     编辑器是"工作区"而不是"卡片"，贴边更符合 IDE 的习惯（VS Code 也是这样）。 */
+  padding: 2px 4px 2px 4px;
+  gap: 4px;
+  overflow: hidden;
+}
+
+/* ---------- 下部辅助区（检查 / 统计 / API 速查） ---------- */
+.js-aux-section {
+  flex: 0 0 190px;
+  display: flex;
+  flex-direction: column;
+  min-height: 30px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.js-aux-section.collapsed {
+  flex: 0 0 28px;
+}
+
+.js-aux-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line-soft);
+  user-select: none;
+}
+
+.js-aux-section.collapsed .js-aux-head {
+  border-bottom: 0;
+}
+
+.js-aux-head .js-aux-caret {
+  flex: 0 0 auto;
+  width: 10px;
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.js-aux-head .js-aux-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.js-aux-head .spacer {
+  flex: 1;
+}
+
+.js-aux-head .js-aux-status {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.js-aux-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  overflow: auto;
+}
+
+.js-aux-section.collapsed .js-aux-body {
+  display: none;
+}
+
+/* 分隔条：行拖拽。交互照抄 shell.ts 的 panel-resizer（row-resize + 双击复位），
+   另外给了键盘可达（方向键调高度、回车复位）—— 拖拽不该是唯一途径。 */
+.js-aux-resizer {
+  flex: 0 0 5px;
+  cursor: row-resize;
+  background: transparent;
+  border-radius: 3px;
+  outline: none;
+  position: relative;
+}
+
+.js-aux-resizer::after {
+  /* 一条 2px 的可见细线，居中：6px 全是透明的话用户不知道往哪拖 */
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 32px;
+  height: 2px;
+  margin: -1px 0 0 -16px;
+  border-radius: 1px;
+  background: var(--line);
+}
+
+.js-aux-resizer:hover::after,
+.js-aux-resizer:focus-visible::after {
+  background: var(--accent);
+}
+
+.js-aux-resizer:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* 辅助区里的三个块不再各占固定高度：让内容自然排，超了由 .js-aux-body 滚 */
+.js-aux-body .js-diag-list {
+  flex: 0 0 auto;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.js-aux-body .js-stats {
+  flex: 0 0 auto;
+}
+
+/* 小窗口：代码区保底 + 辅助区默认折叠（把高度先给代码） */
+@media (max-height: 820px) {
+  .js-code {
+    min-height: 140px;
+  }
+}
+
+/* ---------- 侧边栏折叠后的常驻「展开」窄条 ----------
+   为什么必须有它：侧边栏折叠 = 宽度归零，而折叠/展开按钮在侧边栏内部
+   → 折了就点不到了。这条 24px 竖条挂在主区里（不受侧边栏折叠影响），
+   是折叠态下**唯一**的鼠标展开入口（Ctrl+B 只是加速，不能当唯一入口）。 */
+.sidebar-rail {
+  flex: 0 0 22px;
+  width: 22px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.sidebar-rail:hover {
+  background: var(--surface-3);
+  color: var(--accent);
+}
+
+.sidebar-rail:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 折叠/展开按钮：图标随状态翻转（同一份描边路径，不另画一个图标） */
+.sidebar-collapse-btn .glyph {
+  transition: transform 140ms ease;
+}
+
+.sidebar-collapse-btn.is-collapsed .glyph {
+  transform: rotate(180deg);
+}
+/* ---------- 底部面板折叠后仍可见的「展开」按钮 ----------
+   panel.collapsed 只留 30px 标题条，而「折叠/展开」按钮在 panel-actions 里，
+   所以它天然还在；这里只保证标题条不被压扁、按钮不被挤出视口。 */
+.panel.collapsed .panel-head {
+  height: 30px;
+  overflow: visible;
+}
+
+.panel.collapsed .panel-actions {
+  position: sticky;
+  right: 0;
+}
+
+/* 剧本编辑器标题行：与 VS Code 工具条合并后的紧凑排布（高度 28px，原来是两行约 79px） */
+.script-ed-head {
+  flex: 0 0 auto;
+  height: 24px;
+  gap: 8px;
+}
+
+.script-ed-head .group-label {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.script-ed-head .hint {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 工具条嵌进标题行后不能再带外边距（那会撑高整行） */
+.script-ed-head .row {
+  margin: 0 !important;
+  flex: 0 0 auto;
+}
+
+/* ==========================================================================
+   AI 面板：「正在思考」提示
+   --------------------------------------------------------------------------
+   为什么用三个呼吸点而不是 spinner：面板面积大，转圈在大区域里很吵，
+   而且转圈表达的是"程序在忙"，这里实际是"在等外部响应"——呼吸点更准确也更安静。
+   三点错峰 0.25s 起跳，节奏 1.4s，比转圈慢，不会抢视线。
+   ========================================================================== */
+.ai-panel .ai-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 12px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-3);
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.ai-panel .ai-thinking[data-phase="slow"] {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+  background: var(--warn-soft);
+  color: var(--text-2);
+}
+
+.ai-thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.ai-thinking-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.35;
+  animation: ai-think-breathe 1.4s ease-in-out infinite;
+}
+
+/* 错峰：三点依次起跳，形成"呼吸"而不是全同步闪烁 */
+.ai-thinking-dots i:nth-child(2) {
+  animation-delay: 0.25s;
+}
+
+.ai-thinking-dots i:nth-child(3) {
+  animation-delay: 0.5s;
+}
+
+@keyframes ai-think-breathe {
+  0%, 100% { opacity: 0.25; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+/* 降低动效偏好：完全静止（这不只是偏好问题，前庭功能敏感的用户会被闪烁影响） */
+@media (prefers-reduced-motion: reduce) {
+  .ai-thinking-dots i {
+    animation: none;
+    opacity: 0.7;
+    transform: none;
+  }
+}
+
+.ai-panel .ai-thinking .ai-thinking-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 思考原文：默认折叠（<details> 天然如此），展开后限高滚动，避免长思考把输入框挤出视野 */
+.ai-panel .ai-thinking-detail {
+  flex: 0 0 auto;
+  width: 100%;
+  margin-top: 2px;
+}
+
+.ai-panel .ai-thinking-detail summary {
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: 11px;
+  user-select: none;
+}
+
+.ai-panel .ai-thinking-detail summary:hover {
+  color: var(--text-2);
+}
+
+.ai-panel .ai-thinking-pre {
+  margin: 4px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ==========================================================================
+   脚本补全弹层（scriptComplete.ts）
+   --------------------------------------------------------------------------
+   定位：绝对定位在 `.js-code` 里，坐标由纯函数 caretToPx 算出（已单测）。
+   注意 `.js-code` 有 `overflow: hidden` —— 弹层被限制在编辑器内是**故意的**，
+   比让它飘到编辑器外面去（盖住辅助区/底部面板）更好，也避免要算全局坐标。
+   ========================================================================== */
+.js-code {
+  position: relative;
+}
+
+.sc-pop {
+  position: absolute;
+  z-index: 30;
+  width: 340px;
+  max-height: 240px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.sc-pop-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+/* 分组标题：271 条平铺没法用，必须按命名空间分段 */
+.sc-pop-group {
+  padding: 5px 10px 3px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
+.sc-pop-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sc-pop-row:hover {
+  background: var(--hover-bg);
+}
+
+/* 键盘选中态：必须比 hover 更醒目（用户靠它判断 Enter 会插入哪一条） */
+.sc-pop-row.active {
+  background: var(--active-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.sc-pop-name {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sc-pop-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.sc-pop-empty {
+  padding: 8px 10px;
+}
+
+/* ==========================================================================
+   AI 会话切换器（会话历史 / 新建 / 删除）
+   --------------------------------------------------------------------------
+   浮层挂载在 AI 面板根节点上（不是顶部条），这样不会被顶部条的 flex 布局挤变形。
+   ========================================================================== */
+.ai-panel {
+  position: relative;
+}
+
+.ai-sessions-pop {
+  position: absolute;
+  left: 8px;
+  /* 顶部条在面板**顶部**，所以浮层要向下展开（不是 bottom:100% 往上弹，
+     那样会跑到面板外看不见）。top 由 JS 按顶部条高度设置更稳，这里给个兜底。 */
+  top: 32px;
+  z-index: 40;
+  width: 300px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.ai-sessions-pop .ai-session-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.ai-sessions-pop .ai-session-row.active {
+  background: var(--active-bg);
+}
+
+.ai-sessions-pop .ai-session-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-sessions-pop .ai-session-main:hover {
+  background: var(--hover-bg);
+}
+
+.ai-sessions-pop .ai-session-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.ai-sessions-pop .ai-session-sub {
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.ai-sessions-pop .ai-session-now {
+  color: var(--accent);
+  font-size: 10px;
+}
+
+/* 删除按钮：默认隐藏，悬停/聚焦时出现 —— 否则列表里一片叉号很吓人 */
+.ai-sessions-pop .ai-session-del {
+  flex: 0 0 auto;
+  width: 26px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.ai-sessions-pop .ai-session-row:hover .ai-session-del,
+.ai-sessions-pop .ai-session-del:focus-visible {
+  opacity: 1;
+}
+
+.ai-sessions-pop .ai-sessions-foot {
+  padding: 6px 8px;
+  background: var(--surface-2);
+}
+
+.ai-sessions-pop .ai-sessions-empty {
+  padding: 12px 10px;
 }

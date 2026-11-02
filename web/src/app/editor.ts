@@ -104,6 +104,12 @@ export class Editor {
   private menuAnchor!: HTMLButtonElement;
   private accountBtn!: HTMLButtonElement;
   private zoomLabel!: HTMLElement;
+  /** 侧边栏折叠/展开按钮（文案与 aria 随状态同步） */
+  private sidebarToggleBtn: HTMLButtonElement | null = null;
+  /** 底部面板折叠/展开按钮 */
+  private panelToggleBtn: HTMLButtonElement | null = null;
+  /** 折叠态下侧边栏边缘的常驻「展开」窄条（侧边栏折了之后按钮在里面就点不到了） */
+  private sidebarRailBtn: HTMLButtonElement | null = null;
   private scriptDirtyDot: HTMLElement | null = null;
 
   constructor() {
@@ -116,6 +122,8 @@ export class Editor {
     this.buildBottomPanel();
     this.buildStatus();
     this.registerAllCommands();
+    // 折叠状态 → 按钮文案/图标/aria 同步 + 常驻「展开」窄条显隐
+    this.shell.onLayoutChange((st) => this.syncLayoutAffordances(st));
     this.bindGlobalEvents();
     this.bindDesktopHost();
     this.bindShortcuts();
@@ -263,6 +271,85 @@ export class Editor {
       w.__BWE__?.demoInteractionStates?.();
     });
 
+    // 验收用：载入内置 JS 示例工程（截图脚本面板需要真实 JS 脚本才渲染出编辑器）。
+    const loadDemoProbe = el("button", {
+      type: "button",
+      "data-load-js-demo": "1",
+      "aria-hidden": "true",
+      tabindex: "-1"
+    });
+    loadDemoProbe.style.cssText = "position:absolute;left:-9999px;width:0;height:0;padding:0;border:0;opacity:0";
+    loadDemoProbe.addEventListener("click", () => {
+      // 直接走内置示例（与「文件 → 俯视角 JS 示例」同一个入口）
+      this.loadExampleProject(
+        () => buildExample("topdown-js").project,
+        buildExample("topdown-js").fileName,
+        ""
+      );
+      // 示例里 JS 脚本才是有编辑器的那个；Yarn 页只有空态，量不到 .js-code
+      window.setTimeout(() => requestOpenScriptPanel("js"), 400);
+    });
+    bar.appendChild(loadDemoProbe);
+
+    // 验收用：冻结 AI 面板的「正在思考」态以便截图（思考是瞬时状态，截图抓不到）
+    const thinkPhase = (phase: "connecting" | "reasoning" | "answering" | "slow", chars = 0) => {
+      void import("../panels/aiPanel.ts").then((m) => {
+        m.demoThinking(phase, chars);
+        console.log(`[demo] 思考态冻结为 ${phase}`);
+      });
+    };
+    const mkThink = (id: string, phase: "connecting" | "reasoning" | "answering" | "slow", chars = 0) => {
+      const b = el("button", { type: "button", [id]: "1", "aria-hidden": "true", tabindex: "-1" });
+      (b as HTMLElement).style.cssText = "position:absolute;left:-9999px;width:0;height:0;padding:0;border:0;opacity:0";
+      b.addEventListener("click", () => thinkPhase(phase, chars));
+      bar.appendChild(b);
+    };
+    mkThink("data-demo-thinking", "connecting");
+    mkThink("data-demo-thinking-reasoning", "reasoning", 128);
+    mkThink("data-demo-thinking-slow", "slow");
+
+    // 验收用：量取编辑器几何（点一下就把 .js-code 等实际像素打进控制台，
+    // 配合 --console 就能拿到数字，不必改 A 的 --probe-dom）。
+    const measureProbe = el("button", {
+      type: "button",
+      "data-measure-editor": "1",
+      "aria-hidden": "true",
+      tabindex: "-1"
+    });
+    measureProbe.style.cssText = "position:absolute;left:-9999px;width:0;height:0;padding:0;border:0;opacity:0";
+    measureProbe.addEventListener("click", () => {
+      const w = window as unknown as { __BWE__?: { measureEditor?: (s?: string[]) => unknown } };
+      w.__BWE__?.measureEditor?.();
+    });
+    bar.appendChild(measureProbe);
+
+    // 验收用：在脚本编辑器里模拟输入 `bwe.` 触发补全弹层（截图用）。
+    // 为什么需要触发器：`--tap-seq` 只能 click，无法逐字符打字；
+    // 而补全依赖 input 事件 + 光标位置，只能这样构造真实路径。
+    const completeProbe = el("button", {
+      type: "button",
+      "data-demo-complete": "1",
+      "aria-hidden": "true",
+      tabindex: "-1"
+    });
+    completeProbe.style.cssText =
+      "position:absolute;left:-9999px;width:0;height:0;padding:0;border:0;opacity:0";
+    completeProbe.addEventListener("click", () => {
+      const ta = document.querySelector(".js-source") as HTMLTextAreaElement | null;
+      if (!ta) {
+        console.log("[demo] 找不到 .js-source（需先打开剧本 JS 视图）");
+        return;
+      }
+      const pos = ta.selectionStart;
+      ta.focus();
+      ta.setRangeText("bwe.", pos, pos, "end");
+      // 走与用户打字完全相同的路径（不是直接调内部函数）
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+      console.log("[demo] 已插入 bwe.，补全应弹出");
+    });
+    bar.appendChild(completeProbe);
+
+
     // 验收用：注入演示模型清单（让截图能看到多条模型 + needsKey 标记）
     const modelProbe = el("button", {
       type: "button",
@@ -358,15 +445,19 @@ export class Editor {
     this.sidebarTitle = el("span", null, "资源管理器");
     head.appendChild(this.sidebarTitle);
     head.appendChild(el("div", { class: "spacer" }));
-    const collapseBtn = button("折叠", () => this.shell.toggleSidebar(true), {
+    // 二态按钮：折叠 ↔ 展开。
+    // 修复的 bug：原来写死 toggleSidebar(true)，点多少次都是折叠，
+    // 用户看到的是「折叠按钮不能展开东西」。
+    const collapseBtn = button("折叠", () => this.shell.toggleSidebar(), {
       size: "sm",
       variant: "ghost",
       iconPath: I.sidebarToggle,
       className: "sidebar-collapse-btn",
-      title: "折叠侧边栏（Ctrl+B）"
+      title: "折叠 / 展开侧边栏（Ctrl+B）"
     });
     // 稳定锚点：验收脚本用 [data-sidebar-collapse] 点击，不依赖按钮文案
     collapseBtn.dataset.sidebarCollapse = "1";
+    this.sidebarToggleBtn = collapseBtn;
     head.appendChild(collapseBtn);
     body.appendChild(head);
 
@@ -745,14 +836,16 @@ export class Editor {
         title: "清空当前面板内容"
       })
     );
-    actions.appendChild(
-      button("折叠", () => this.shell.togglePanel(true), {
-        size: "sm",
-        variant: "ghost",
-        iconPath: I.panelToggle,
-        title: "折叠底部面板（Ctrl+J）"
-      })
-    );
+    // 同样是二态（原来写死 true → 只能折不能展）
+    const panelToggleBtn = button("折叠", () => this.shell.togglePanel(), {
+      size: "sm",
+      variant: "ghost",
+      iconPath: I.panelToggle,
+      title: "折叠 / 展开底部面板（Ctrl+J）"
+    });
+    panelToggleBtn.dataset.panelToggle = "1";
+    this.panelToggleBtn = panelToggleBtn;
+    actions.appendChild(panelToggleBtn);
 
     // 订阅诊断变化：徽标与"问题"面板跟着刷新（按帧合并）
     onProblems(() => this.scheduleBottomRefresh());
@@ -964,6 +1057,72 @@ export class Editor {
       this.rightPanelDirty = false;
       this.refreshRightPanel();
     });
+  }
+
+  // ==========================================================================
+  // 折叠状态的可见入口（修复「折叠按钮不能展开东西」）
+  // ==========================================================================
+
+  /**
+   * 折叠态必须有**鼠标可达**的展开入口。
+   *
+   * 为什么：侧边栏折叠 = 宽度归零（`flex: 0 0 0 !important`），
+   * 而「折叠/展开」按钮**就在侧边栏里面** → 折了就再也点不到它。
+   * 这就是用户报「折叠按钮不能展开东西」的真实原因（不是样式问题，是入口消失了）。
+   *
+   * 修法：折叠时在编辑区左边缘显示一条 24px 宽的竖条（像 VS Code 折叠后的那条边），
+   * 点它就展开；展开时隐藏。底部面板同理（它的标题条还在，所以按钮保留即可）。
+   */
+  private ensureSidebarRail(): HTMLButtonElement {
+    if (this.sidebarRailBtn) return this.sidebarRailBtn;
+    const rail = el("button", {
+      type: "button",
+      class: "sidebar-rail",
+      title: "展开侧边栏（Ctrl+B）",
+      "aria-label": "展开侧边栏",
+      "aria-expanded": "false"
+    });
+    rail.dataset.sidebarToggle = "1";
+    rail.appendChild(svg(I.sidebarToggle, 14));
+    rail.addEventListener("click", () => this.shell.toggleSidebar(false));
+    // 挂在主区（活动栏之后、编辑区之前），这样它永远在可见区里，不受侧边栏折叠影响
+    this.shell.root.querySelector(".shell-main")?.insertBefore(rail, this.shell.editorArea);
+    this.sidebarRailBtn = rail;
+    return rail;
+  }
+
+  /**
+   * 状态同步：文案、图标、aria、常驻入口显隐。
+   *
+   * 单独一个方法而不是散在各处，是因为折叠状态有 4 个入口会改它
+   * （按钮、活动栏、命令面板 Ctrl+B、窄条），散着写必然漏掉某一处。
+   */
+  private syncLayoutAffordances(st: { sidebar: boolean; panel: boolean }): void {
+    const sb = this.sidebarToggleBtn;
+    if (sb) {
+      sb.textContent = st.sidebar ? "展开" : "折叠";
+      sb.title = st.sidebar ? "展开侧边栏（Ctrl+B）" : "折叠侧边栏（Ctrl+B）";
+      sb.setAttribute("aria-expanded", st.sidebar ? "false" : "true");
+      // 图标方向也要跟着翻转（同一份描边路径，靠 CSS rotate）
+      sb.classList.toggle("is-collapsed", st.sidebar);
+      const g = sb.querySelector(".glyph");
+      if (g) (g as SVGElement).style.transform = st.sidebar ? "rotate(180deg)" : "";
+    }
+
+    const pb = this.panelToggleBtn;
+    if (pb) {
+      pb.textContent = st.panel ? "展开" : "折叠";
+      pb.title = st.panel ? "展开底部面板（Ctrl+J）" : "折叠底部面板（Ctrl+J）";
+      pb.setAttribute("aria-expanded", st.panel ? "false" : "true");
+      pb.classList.toggle("is-collapsed", st.panel);
+    }
+
+    // 常驻窄条：只在侧边栏折叠时出现
+    const rail = this.ensureSidebarRail();
+    rail.style.display = st.sidebar ? "" : "none";
+    rail.setAttribute("aria-expanded", st.sidebar ? "false" : "true");
+    // 折叠后焦点如果还留在已消失的按钮上，键盘用户会"迷路"
+    if (st.sidebar && document.activeElement === sb) rail.focus();
   }
 
   // ==========================================================================

@@ -27,6 +27,7 @@ import {
   type ScriptLang
 } from "../core/model.ts";
 import { API_DOCS, apiDocsByGroup, searchApiDocs, type ApiDoc } from "../data/apiDocs.ts";
+import { attachScriptComplete } from "./scriptComplete.ts";
 
 // ============================================================================
 // 「用 VS Code 打开」：脚本存在 .bwproj 里，服务端把它镜像成真实文件再拉起编辑器
@@ -174,8 +175,11 @@ export function renderScriptEditor(host: HTMLElement): void {
   host.replaceChildren();
   // 每次重渲染都重建 VS Code 轮询，避免旧面板的 interval 越积越多
   stopMirrorPoll();
-  const wrap = el("div", { class: "col" });
-  wrap.style.padding = "10px";
+  // 用 .script-editor-wrap 而不是通用 .col：
+  // 编辑区宿主（editorBody）是 flex 容器，wrap 必须 flex:1 + min-height:0 才能把高度
+  // 传给里面的 .js-code —— 否则代码框只能拿到内容高度（原来写死 320px 就掩盖了这个问题）。
+  const wrap = el("div", { class: "col script-editor-wrap" });
+  wrap.style.padding = "10px 12px 8px";
   renderScriptEditorBody(wrap, host);
   host.appendChild(wrap);
 }
@@ -230,6 +234,10 @@ function renderScriptListBody(wrap: HTMLElement, host: HTMLElement): void {
       refreshScriptUi();
     }
   );
+  // 语言切换按钮的验收锚点（--tap-seq 用）
+  Array.from(langSwitch.querySelectorAll("button")).forEach((b, i) => {
+    (b as HTMLElement).dataset.scriptLang = i === 0 ? "js" : "yarn";
+  });
   wrap.appendChild(langSwitch);
 
   wrap.appendChild(
@@ -258,12 +266,13 @@ function renderScriptListBody(wrap: HTMLElement, host: HTMLElement): void {
           : "点下面的按钮，会给你一段能直接跑的 Yarn 示例剧本，照着改就行。"
       )
     );
-    empty.appendChild(
-      button(currentLang === "js" ? "新建 JS 脚本" : "新建剧本", () => newScript(currentLang), {
-        variant: "primary",
-        size: "sm"
-      })
+    const newBtn = button(
+      currentLang === "js" ? "新建 JS 脚本" : "新建剧本",
+      () => newScript(currentLang),
+      { variant: "primary", size: "sm" }
     );
+    newBtn.dataset.newScript = "1";
+    empty.appendChild(newBtn);
     wrap.appendChild(empty);
     if (otherNames.length) {
       wrap.appendChild(
@@ -424,10 +433,12 @@ function renderVsCodeBar(
 
 function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => void): void {
   void rerender; // JS 模式取回改动直接改 textarea，不需要整面板重渲染
-  const edHead = el("div", { class: "row" });
+  // 标题行与 VS Code 工具条合并成**一行**：它们原来各占一行（共约 79px），
+  // 而用户报的正是「看代码的窗口太小」—— 每省一行都是给代码区的高度。
+  const edHead = el("div", { class: "row script-ed-head" });
   edHead.appendChild(el("div", { class: "group-label" }, "源码 JavaScript"));
   edHead.appendChild(el("div", { class: "spacer" }));
-  edHead.appendChild(el("span", { class: "hint" }, "Tab 缩进 · Ctrl+S 保存"));
+  edHead.appendChild(el("span", { class: "hint" }, "Tab 缩进 · Ctrl+S 保存 · Ctrl+Space 补全"));
   wrap.appendChild(edHead);
 
   const bench = el("div", { class: "js-workbench" });
@@ -498,9 +509,13 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
   ta.addEventListener("keyup", updateStats);
   ta.addEventListener("select", updateStats);
 
-  // VS Code 工具条：打开镜像文件 / 从镜像文件取回改动
+  // 按需补全（挂在 codeBox 上，弹层相对它定位）。
+  // 失败静默降级：只在「输出」面板留首次一次痕，绝不打断打字。
+  attachScriptComplete(ta, codeBox, afterEdit);
+
+  // VS Code 工具条：合并进标题行（原来单独占一行 ~44px）
   renderVsCodeBar(
-    wrap,
+    edHead,
     script.name || currentScript,
     "js",
     () => ta.value,
@@ -545,8 +560,8 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
     }
   });
 
-  main.appendChild(stats);
-
+  // 统计与检查区不再直接挂到 main 上：它们归下部辅助区（可折叠/可拖分割），
+  // 见 buildAuxSection。这里只创建元素。
   // ---- 诊断区 ----
   const checkHead = el("div", { class: "row tight js-check-head" });
   checkHead.appendChild(el("div", { class: "group-label" }, "检查 Check"));
@@ -560,10 +575,7 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
       title: "重新请求本地服务的 /api/js-check"
     })
   );
-  main.appendChild(checkHead);
-
   const diagBox = el("div", { class: "js-diag-list" });
-  main.appendChild(diagBox);
 
   // ---- 检查：服务器优先 + 本地兜底 ----
   let seq = 0;
@@ -641,10 +653,21 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
     updateStats();
   }
 
-  // ---- API 速查侧栏 ----
+  // ---- 布局：代码区吃满高度，辅助区可折叠 + 可拖分割 ----
+  //
+  // 用户原话「脚本编辑器看代码的窗口太小了」。根因是两处叠加的死高度：
+  //   1. .js-code 写死 height:320px —— 1400+ 高的编辑区里代码只占三分之一；
+  //   2. API 速查栏横向并排（flex: 0 1 190px），把代码又挤窄一半（实测仅 283px 宽）。
+  // 改法：两者都不再并排。代码吃满整行宽度与剩余高度；
+  // 辅助区（检查结果 / 统计 / API 速查）收进下部面板，可折叠、可拖分割。
+  const apiPane = buildApiPane(ta, afterEdit);
+  apiPane.classList.add("js-aux");
+  const aux = buildAuxSection(main, diagBox, stats, checkHead, apiPane);
   bench.appendChild(main);
-  bench.appendChild(buildApiPane(ta, afterEdit));
+  bench.appendChild(aux.resizer);
+  bench.appendChild(aux.box);
   wrap.appendChild(bench);
+  aux.restore();
 
   // 首帧：补行号、对齐滚动、跑一次检查
   refreshGutter();
@@ -866,6 +889,219 @@ function guessErrorLine(source: string): number | null {
 
 // ---------------- API 速查 ----------------
 
+
+/**
+ * 剧本编辑器的「下部辅助区」：检查结果 / 统计 / API 速查。
+ *
+ * 为什么收成一个可折叠 + 可拖分割的容器，而不是原来那样和代码并排：
+ *   并排时它们抢的是**宽度**，而代码恰恰最缺宽度（实测 1400 宽的编辑区里，
+ *   API 速查固定占 190px，代码只剩 283px ≈ 每行 30 个字符）。
+ *   改成上下结构后：宽度全给代码，高度按需在「代码 ↔ 辅助」之间分配。
+ *
+ * 折叠状态持久化到 localStorage（key 见 AUX_COLLAPSE_KEY），下次打开还是上次的样子。
+ * 高度也持久化（AUX_HEIGHT_KEY），双击分隔条复位到默认。
+ */
+
+/** 辅助区默认高度（px）；折叠时只剩标题条 */
+const AUX_DEFAULT_H = 190;
+/** 折叠后仅标题条的高度 */
+const AUX_HEAD_H = 30;
+const AUX_HEIGHT_KEY = "bwe.script.auxHeight";
+const AUX_COLLAPSE_KEY = "bwe.script.auxCollapsed";
+
+function readAuxHeight(): number {
+  try {
+    const v = Number(localStorage.getItem(AUX_HEIGHT_KEY));
+    return Number.isFinite(v) && v >= AUX_HEAD_H ? v : AUX_DEFAULT_H;
+  } catch {
+    return AUX_DEFAULT_H;
+  }
+}
+
+/**
+ * 辅助区是否折叠。
+ *
+ * **默认折叠**：「用户报窗口太小」的修复核心就是把高度先给代码区。
+ * 如果辅助区默认展开，纵向布局又会被它吃掉一块高度 —— 等于没修。
+ * 用户一旦手动展开/折叠，状态就记下来（下次按他的意愿来）。
+ */
+function readAuxCollapsed(): boolean {
+  try {
+    const v = localStorage.getItem(AUX_COLLAPSE_KEY);
+    if (v === null) return true; // 没有记录 = 首次 = 折叠
+    return v === "1";
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * 组装辅助区。返回 { box, resizer, restore }。
+ *
+ * @param main     代码列容器（辅助区从它手里"拿走"高度）
+ * @param diagBox 检查结果
+ * @param stats   光标/规模统计
+ * @param checkHead 检查标题行
+ * @param apiPane API 速查面板（原来并排在右边，现已改为竖向叠放）
+ */
+function buildAuxSection(
+  main: HTMLElement,
+  diagBox: HTMLElement,
+  stats: HTMLElement,
+  checkHead: HTMLElement,
+  apiPane: HTMLElement,
+  /** 存储命名空间：JS 与 Yarn 的辅助内容不同，共用 key 会互相影响折叠状态 */
+  ns = ""
+): { box: HTMLElement; resizer: HTMLElement; restore: () => void } {
+  const heightKey = AUX_HEIGHT_KEY + (ns ? "." + ns : "");
+  const collapseKey = AUX_COLLAPSE_KEY + (ns ? "." + ns : "");
+  const readCollapsed = (): boolean => {
+    try {
+      const v = localStorage.getItem(collapseKey);
+      if (v === null) return true; // 默认折叠（把高度先给代码）
+      return v === "1";
+    } catch {
+      return true;
+    }
+  };
+  const readHeight = (): number => {
+    try {
+      const v = Number(localStorage.getItem(heightKey));
+      return Number.isFinite(v) && v >= AUX_HEAD_H ? v : AUX_DEFAULT_H;
+    } catch {
+      return AUX_DEFAULT_H;
+    }
+  };
+  let collapsed = readCollapsed();
+  let height = readHeight();
+
+  const box = el("div", { class: "js-aux-section" });
+  const head = el("div", { class: "js-aux-head" });
+  const caret = el("span", { class: "js-aux-caret" }, collapsed ? "▸" : "▾");
+  head.appendChild(caret);
+  head.appendChild(el("span", { class: "js-aux-title" }, "辅助：检查 / 统计 / API 速查"));
+  head.appendChild(el("div", { class: "spacer" }));
+  // 折叠后仍要能看到"有没有错误"，所以把计数放在标题条上
+  const statusHint = el("span", { class: "hint js-aux-status" }, "");
+  head.appendChild(statusHint);
+  const toggleBtn = button("折叠", () => setCollapsed(!collapsed), {
+    size: "sm",
+    variant: "ghost",
+    title: "折叠 / 展开辅助区（记住状态）"
+  });
+  toggleBtn.dataset.scriptAuxToggle = "1";
+  head.appendChild(toggleBtn);
+  box.appendChild(head);
+
+  const body = el("div", { class: "js-aux-body" });
+  // 检查区在前（用户最关心"有没有错"），统计其次，API 速查最后（查资料用）
+  body.appendChild(checkHead);
+  body.appendChild(diagBox);
+  body.appendChild(stats);
+  body.appendChild(apiPane);
+  box.appendChild(body);
+
+  // ---- 分隔条：拖动改变辅助区高度，双击复位 ----
+  const resizer = el("div", { class: "js-aux-resizer", title: "拖动调整高度，双击复位" });
+  let dragging = false;
+  let startY = 0;
+  let startH = 0;
+  const onMove = (e: MouseEvent): void => {
+    if (!dragging) return;
+    // 往上拖 = 辅助区变高
+    setHeight(startH - (e.clientY - startY));
+  };
+  const onUp = (): void => {
+    if (!dragging) return;
+    dragging = false;
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    document.body.style.cursor = "";
+  };
+  resizer.addEventListener("mousedown", (e) => {
+    if (collapsed) return; // 折叠时不能拖（高度归零，拖了会跳）
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY;
+    startH = box.getBoundingClientRect().height || height;
+    document.body.style.cursor = "row-resize";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+  resizer.addEventListener("dblclick", () => {
+    collapseState(false);
+    setHeight(AUX_DEFAULT_H);
+  });
+  // 键盘可达：拖拽不该是唯一途径
+  resizer.setAttribute("tabindex", "0");
+  resizer.setAttribute("role", "separator");
+  resizer.setAttribute("aria-label", "调整辅助区高度（方向键微调，回车复位）");
+  resizer.addEventListener("keydown", (e) => {
+    if (collapsed) return;
+    const k = (e as KeyboardEvent).key;
+    if (k === "ArrowUp") {
+      e.preventDefault();
+      setHeight(height + 16);
+    } else if (k === "ArrowDown") {
+      e.preventDefault();
+      setHeight(height - 16);
+    } else if (k === "Enter") {
+      e.preventDefault();
+      setHeight(AUX_DEFAULT_H);
+    }
+  });
+
+  function setHeight(h: number): void {
+    // 下限：折叠条高度；上限：不把代码区压到 160px 以下（那还不如关掉辅助区）
+    const cap = Math.max(AUX_HEAD_H, main.getBoundingClientRect().height - 160);
+    height = Math.max(AUX_HEAD_H, Math.min(cap, Math.round(h)));
+    collapseState(false);
+    box.style.flex = `0 0 ${height}px`;
+    try {
+      localStorage.setItem(heightKey, String(height));
+    } catch {
+      /* 隐私模式忽略 */
+    }
+  }
+
+  function collapseState(next: boolean): void {
+    collapsed = next;
+    box.classList.toggle("collapsed", collapsed);
+    caret.textContent = collapsed ? "▸" : "▾";
+    toggleBtn.textContent = collapsed ? "展开" : "折叠";
+    box.style.flex = collapsed ? `0 0 ${AUX_HEAD_H}px` : `0 0 ${height}px`;
+    resizer.style.display = collapsed ? "none" : "";
+    try {
+      localStorage.setItem(collapseKey, collapsed ? "1" : "0");
+    } catch {
+      /* 隐私模式忽略 */
+    }
+  }
+
+  function setCollapsed(next: boolean): void {
+    collapseState(next);
+  }
+
+  /** 折叠状态下也要能报错数：脚本检查会把结果写到这里 */
+  window.addEventListener("bwe:script-diag-count", (e) => {
+    const d = (e as CustomEvent<{ errors: number; warns: number }>).detail;
+    if (!d) return;
+    statusHint.textContent = d.errors ? `${d.errors} 错误` : d.warns ? `${d.warns} 警告` : "无问题";
+    statusHint.style.color = d.errors ? "var(--danger)" : d.warns ? "var(--warn)" : "var(--text-3)";
+  });
+
+  return {
+    box,
+    resizer,
+    restore: () => {
+      // 首次挂载：按持久化状态铺好
+      box.style.flex = collapsed ? `0 0 ${AUX_HEAD_H}px` : `0 0 ${height}px`;
+      box.classList.toggle("collapsed", collapsed);
+      resizer.style.display = collapsed ? "none" : "";
+    }
+  };
+}
+
 function buildApiPane(ta: HTMLTextAreaElement, afterEdit: () => void): HTMLElement {
   const pane = el("div", { class: "js-api" + (apiOpen ? "" : " collapsed") });
 
@@ -977,16 +1213,21 @@ function buildInsert(item: ApiDoc): { text: string; caret: number } {
 // ============================================================================
 
 function renderYarnEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => void): void {
-  const edHead = el("div", { class: "row" });
-  edHead.style.marginTop = "8px";
+  // 与 JS 侧完全同一套排版：标题行 + VS Code 按钮合并成一行（24px）。
+  // 为什么必须合并：JS 已合并、Yarn 没合并 → 同一份 UI 在两处不一致，
+  // 用户打开 Yarn 会发现它比 JS 矮一截，然后回来报第二次。
+  const edHead = el("div", { class: "row script-ed-head" });
   edHead.appendChild(el("div", { class: "group-label" }, "源码 Yarn"));
   edHead.appendChild(el("div", { class: "spacer" }));
-  edHead.appendChild(el("span", { class: "hint" }, "改完即时生效"));
+  edHead.appendChild(el("span", { class: "hint" }, "改完即时生效 · Ctrl+S 保存"));
   wrap.appendChild(edHead);
 
-  const ta = el("textarea", { class: "textarea" });
+  const ta = el("textarea", { class: "textarea script-yarn-source" });
   ta.value = script.source;
-  ta.style.minHeight = "220px";
+  // 与 JS 编辑器一致：撑满剩余高度而不是写死 minHeight:220px。
+  // 用户报「窗口太小」在 Yarn 侧同样成立 —— 只改 JS 不改 Yarn，下次一定被投诉。
+  ta.style.flex = "1 1 auto";
+  ta.style.minHeight = "160px";
   ta.style.fontFamily = "var(--mono)";
   ta.style.fontSize = "12.5px";
   ta.addEventListener("input", () => {
@@ -996,8 +1237,9 @@ function renderYarnEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () =
   });
 
   // VS Code 工具条（Yarn 剧本也能拿 VS Code 编辑，扩展名 .yarn）
+  // 合并进标题行：原来单独占一行，白扔 ~44px 高度
   renderVsCodeBar(
-    wrap,
+    edHead,
     script.name || currentScript,
     "yarn",
     () => ta.value,
@@ -1010,25 +1252,50 @@ function renderYarnEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () =
 
   wrap.appendChild(ta);
 
-  // 检查结果
+  // 检查结果 / 节点 / 变量：与 JS 侧同样收进可折叠的辅助区。
+  // 为什么必须一起改：用户报「窗口太小」在 Yarn 侧同样成立；
+  // 只修 JS 不修 Yarn，下次一定被投诉「Yarn 也一样小」。
+  const yarnAuxHost = el("div", { class: "js-aux-body col" });
   const resultHead = el("div", { class: "group-label" }, "检查 Check");
-  resultHead.style.marginTop = "10px";
-  wrap.appendChild(resultHead);
+  yarnAuxHost.appendChild(resultHead);
   const resultBox = el("div", { class: "col" });
-  wrap.appendChild(resultBox);
+  yarnAuxHost.appendChild(resultBox);
 
   const nodeBox = el("div", { class: "col" });
   const nodeHead = el("div", { class: "group-label" }, "节点 Nodes");
-  nodeHead.style.marginTop = "10px";
-  wrap.appendChild(nodeHead);
-  wrap.appendChild(nodeBox);
+  nodeHead.style.marginTop = "8px";
+  yarnAuxHost.appendChild(nodeHead);
+  yarnAuxHost.appendChild(nodeBox);
 
-  // 变量
   const varBox = el("div", { class: "col" });
   const varHead = el("div", { class: "group-label" }, "变量 Variables");
-  varHead.style.marginTop = "10px";
-  wrap.appendChild(varHead);
-  wrap.appendChild(varBox);
+  varHead.style.marginTop = "8px";
+  yarnAuxHost.appendChild(varHead);
+  yarnAuxHost.appendChild(varBox);
+
+  // 复用 JS 侧那套「可折叠 + 可拖分割 + 记住状态」的容器（同一份实现，避免两套交互漂移）
+  const yarnAux = buildAuxSection(
+    wrap,
+    yarnAuxHost,
+    el("span", { class: "hint" }),
+    el("div"),
+    el("div"),
+    "yarn"
+  );
+  // buildAuxSection 会把 body 拼成「checkHead + diagBox + stats + apiPane」，
+  // Yarn 侧只有一块内容，所以清掉占位、直接把 yarnAuxHost 放进去。
+  const yarnBody = yarnAux.box.querySelector(".js-aux-body");
+  if (yarnBody) {
+    yarnBody.replaceChildren(yarnAuxHost);
+    yarnAuxHost.style.padding = "0";
+  }
+  const yarnHeadTitle = yarnAux.box.querySelector(".js-aux-title");
+  if (yarnHeadTitle) yarnHeadTitle.textContent = "辅助：检查 / 节点 / 变量";
+  // 折叠状态与 JS 侧**分开存**：两边的辅助内容不同，共用一个 key 会让"我折叠 Yarn 结果把 JS 也折叠了"
+  yarnAux.box.dataset.scriptAux = "yarn";
+  wrap.appendChild(yarnAux.resizer);
+  wrap.appendChild(yarnAux.box);
+  yarnAux.restore();
 
   jumpToLineHook = (line: number) => {
     const pos = lineOffset(script.source, Math.max(1, Math.round(line)));
@@ -1196,7 +1463,10 @@ function newScript(lang: ScriptLang): void {
   currentLang = lang;
   store.markDirty();
   ok(lang === "js" ? `已新建 JS 脚本「${name}」，里面注明了可用的生命周期函数` : `已新建「${name}」，里面是一段可以直接跑的示例`);
-  window.dispatchEvent(new CustomEvent("bwe:refresh"));
+  // 必须广播「剧本 UI 刷新」而不是笼统的 bwe:refresh：
+  // 编辑区监听的是 bwe:refresh-script-ui（列表与编辑器分属两棵树），
+  // 只发 bwe:refresh 会让"新建成功但编辑区仍显示空态"——这是实测发现的真 bug。
+  refreshScriptUi();
 }
 
 function lineOffset(src: string, line: number): number {

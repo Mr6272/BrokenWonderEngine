@@ -116,6 +116,23 @@ function boot(): void {
         m.setProblems("demo", list as never);
       });
     },
+    /**
+     * 量取编辑器几何（验收用）。
+     * 为什么需要：`--probe-dom` 现在是硬编码探针，读不到任意选择器的高度；
+     * 这里用一次 executeJavaScript 把关键区域的实际像素报出来，比截图目测可靠。
+     */
+    measureEditor: (sels: string[] = [".js-code", ".js-source", ".editor-body", ".js-main", ".js-workbench"]) => {
+      const out: Record<string, unknown> = {};
+      for (const sel of sels) {
+        const e = document.querySelector(sel) as HTMLElement | null;
+        const r = e?.getBoundingClientRect();
+        out[sel] = r
+          ? { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), bottom: Math.round(r.bottom) }
+          : null;
+      }
+      console.log("[measure] " + JSON.stringify(out));
+      return out;
+    },
     /** 注入演示模型清单（验收截图用，只影响内存） */
     demoModels: () => {
       void import("./panels/aiPanel.ts").then((m) => {
@@ -182,6 +199,15 @@ function boot(): void {
     }
   } catch {
     /* 隐私模式下写不了 localStorage，跳过引导即可 */
+  }
+
+  // 验收用：URL 带 #measure 时自动把关键区域几何打进控制台（--console 可抓）。
+  // 这样不需要额外探针进程，也不用改 A 的 --probe-dom。
+  if (location.hash === "#measure") {
+    window.setTimeout(() => {
+      const w = window as unknown as { __BWE__?: { measureEditor?: (s?: string[]) => unknown } };
+      w.__BWE__?.measureEditor?.();
+    }, 2500);
   }
 
   // 关页面前提醒未保存

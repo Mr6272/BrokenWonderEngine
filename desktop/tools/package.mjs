@@ -192,15 +192,42 @@ async function copyApiCore() {
   const srcDir = join(REPO, "web", "tools");
   const dstDir = join(APP_DIR, "web", "tools");
   await mkdir(dstDir, { recursive: true });
-  const files = ["api-core.mjs", "package-bwe.mjs"];
-  for (const name of files) {
+
+  // ⚠ 依赖必须**扫描出来**，不能硬编码清单。
+  //
+  // 踩过两次同类故障：先漏了 api-core.mjs（主进程模块加载期 ERR_MODULE_NOT_FOUND →
+  // Electron 静默挂死不打印栈），后来又漏了 script-language.mjs（同样静默挂死）。
+  // 硬编码清单的必然结局是「新增一个 import，就多一次线上挂死」——
+  // 所以这里从入口文件出发，递归解析相对 import，把整条依赖链都复制过去。
+  const ENTRY = "api-core.mjs";
+  const copied = [];
+  const queue = [ENTRY];
+  const seen = new Set();
+  while (queue.length) {
+    const name = queue.shift();
+    if (seen.has(name)) continue;
+    seen.add(name);
     const src = join(srcDir, name);
     if (!existsSync(src)) {
       throw new Error(`内嵌 API 依赖缺失：${src}（桌面版无法启动，请先修仓库）`);
     }
+    // 只读文本，解析 import：本项目 web/tools 下都是同目录相对引用
+    const text = readFileSync(src, "utf8");
+    for (const m of text.matchAll(/from\s+"(\.\/)([^"]+)"/g)) {
+      const dep = m[2];
+      if (dep.endsWith(".mjs") && !seen.has(dep)) queue.push(dep);
+    }
     await copyFile(src, join(dstDir, name));
+    copied.push(name);
   }
-  log(`内嵌 API 已复制 → web/tools/{${files.join(", ")}}`);
+  log(`内嵌 API 已复制（依赖扫描 ${copied.length} 个）→ web/tools/{${copied.join(", ")}}`);
+  // 兜底断言：入口在三、依赖齐全时这行不会触发；缺任何一个都会在启动期挂死，
+  // 所以宁可在打包时就红，也不要等到自检超时才发现。
+  for (const name of [ENTRY, "script-language.mjs", "package-bwe.mjs"]) {
+    if (!existsSync(join(dstDir, name))) {
+      throw new Error(`打包校验失败：web/tools/${name} 没被复制（依赖扫描漏了？）`);
+    }
+  }
 }
 
 /** 复制前端资源：只挑运行时真正需要的，不把 web/.build、node_modules 拖进来。 */

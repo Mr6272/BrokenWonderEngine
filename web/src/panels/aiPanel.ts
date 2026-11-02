@@ -20,6 +20,7 @@ import { isUiScene, scriptLang, scriptNamesOfLang, type Project, type SceneModel
 import { allProblems } from "../core/diagnostics.ts";
 import { appendOutput } from "../core/output.ts";
 import { modelStateOf, modelStateSuffix, isNeedsKey, countNeedsKey, canUseNow, probeModelOf, type ProbeResult } from "./aiModelState.ts";
+import { beginThinking, applyThinkingEvent, endThinking, currentThinking, thinkingText, thinkingNeedsStop, freezeThinkingForDemo } from "./aiThinking.ts";
 import {
   aiStatus,
   aiChat,
@@ -40,6 +41,7 @@ import {
   type TokenUsage
 } from "../core/host.ts";
 import { error, info, modal, ok, warn } from "../ui/toast.ts";
+import { renderSessionSwitcher } from "./aiSessions.ts";
 
 // ============================================================================
 // 工程摘要（契约 §4.5）—— 唯一允许进入 prompt 的工程信息
@@ -242,6 +244,8 @@ interface PanelHooks {
   updateMeter(): void;
   /** 外壳/命令面板触发一次动作（相当于点了某个按钮） */
   runAction(intent: AiChatRequest["intent"]): void;
+  /** 重画「正在思考」提示（phase 变化时调用） */
+  renderThinking(): void;
 }
 let hooks: PanelHooks | null = null;
 
@@ -289,12 +293,22 @@ function handleAiEvent(ev: AiEvent): void {
       hooks?.updateMeter();
       return;
     }
+    case "thinking": {
+      // 主进程的 thinking 事件是思考态的**唯一权威来源**（契约 §4.2），
+      // 本地的 800ms 定时器只做兜底升级，不用于猜状态。
+      applyThinkingEvent(ev.phase, ev.chars, ev.delta, () => hooks?.renderThinking?.());
+      // 首次正文到达时 also 会走 delta → endThinking（见下）
+      return;
+    }
     case "delta": {
+      // 有正文在流 = 思考结束（answering 阶段也可能没有单独的 thinking 事件）
+      endThinking();
       if (live) {
         live.streaming = true;
         live.text += ev.text;
         hooks?.appendDelta(live.text);
       }
+      hooks?.renderThinking?.();
       return;
     }
     case "tool": {
@@ -317,8 +331,10 @@ function handleAiEvent(ev: AiEvent): void {
       lastCacheHit = ev.cacheHitRate;
       lastSavedUsd = ev.savedUsdApprox;
       currentRequest = "";
+      endThinking();
       pendingEdit = extractCodeBlock(ev.text);
       hooks?.renderThread();
+      hooks?.renderThinking?.();
       hooks?.updateMeter();
       return;
     }
@@ -328,7 +344,9 @@ function handleAiEvent(ev: AiEvent): void {
         live.text = live.text ? `${live.text}\n\n（中断：${ev.message}）` : `（失败：${ev.message}）`;
       }
       currentRequest = "";
+      endThinking();
       hooks?.renderThread();
+      hooks?.renderThinking?.();
       hooks?.updateMeter();
       return;
     }
@@ -375,38 +393,38 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
 
   // 4 个固定动作：AI 面板「有用」的地方不是聊天框，而是这四条直达路径
   const quick = el("div", { class: "ai-quick" });
-  quick.appendChild(
-    button("解释当前脚本错误", () => void send("explain-error"), {
+  const qExplain = button("解释当前脚本错误", () => void send("explain-error"), {
       size: "sm",
       variant: "ghost",
       iconPath: I.warn,
       title: "把「问题」面板里的错误摘要 + 当前脚本一起发给 AI"
-    })
-  );
-  quick.appendChild(
-    button("改这段脚本", () => void send("edit-script"), {
+    });
+  qExplain.dataset.aiQuick = "explain-error";
+  quick.appendChild(qExplain);
+  const qEdit = button("改这段脚本", () => void send("edit-script"), {
       size: "sm",
       variant: "ghost",
       iconPath: I.wand,
       title: "AI 返回的代码只做 diff 预览，点「应用」才写回编辑器"
-    })
-  );
-  quick.appendChild(
-    button("审一遍当前场景", () => void send("scene-review"), {
+    });
+  qEdit.dataset.aiQuick = "edit-script";
+  quick.appendChild(qEdit);
+  const qReview = button("审一遍当前场景", () => void send("scene-review"), {
       size: "sm",
       variant: "ghost",
       iconPath: I.eye,
       title: "带工程摘要让 AI 找结构性问题（不发原始工程数据）"
-    })
-  );
-  quick.appendChild(
-    button("继续对话", () => void send("chat"), {
+    });
+  qReview.dataset.aiQuick = "scene-review";
+  quick.appendChild(qReview);
+  const qChat = button("继续对话", () => void send("chat"), {
       size: "sm",
       variant: "ghost",
       iconPath: I.chevronRight,
       title: "把输入框里的内容作为下一轮发出去"
-    })
-  );
+    });
+  qChat.dataset.aiQuick = "chat";
+  quick.appendChild(qChat);
   compose.appendChild(quick);
 
   const inputRow = el("div", { class: "ai-input-row" });
@@ -416,7 +434,14 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
   });
   inputRow.appendChild(ta);
 
-  const sendBtn = button("发送", () => void send("chat"), { variant: "primary", size: "sm", iconPath: I.sparkles });
+  // 发送按钮在思考中会变成「停止」：忙碌时点它就是取消，不是再发一条
+  const sendBtn = button("发送", () => {
+    if (currentRequest) {
+      cancelThinking();
+      return;
+    }
+    void send("chat");
+  }, { variant: "primary", size: "sm", iconPath: I.sparkles });
   inputRow.appendChild(sendBtn);
   const stopBtn = button("停止", () => cancelRunning(), { size: "sm", variant: "outline", iconPath: I.stop });
   stopBtn.style.display = "none";
@@ -476,6 +501,11 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
       context: buildContext(intent),
       intent
     };
+    // **在调用 aiChat 之前**就进入思考态：若等第一个事件，推理模型首字要 2~5 秒，
+    // 用户面对的是 5 秒空白，会以为卡死了（这是用户报「思考时要显示」的核心痛点）。
+    beginThinking(requestId, () => renderThinking());
+    renderThinking();
+    updateMeter();
     try {
       await aiChat(req);
     } catch (e) {
@@ -504,6 +534,42 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
     renderThread();
     updateMeter();
   }
+
+// ============================================================================
+// 会话切换：把主进程返回的 messages 换成对话区内容
+// ============================================================================
+
+/**
+ * 用主进程返回的 messages 替换整条对话线程。
+ *
+ * ⚠ 两条纪律：
+ *   1. `messages` **已过滤 system 前缀块**（那是内部缓存实现），直接映射即可。
+ *      **不要自己再过滤一遍** —— 那会把正常消息误删（比如首条用户消息恰好以某个
+ *      内部标记开头时）。A 特意强调过。
+ *   2. 切换后必须清掉 `currentRequest` / 思考态：旧会话的在途请求已被后端中止
+ *      （返回 `aborted` 数），UI 不能还挂着"正在思考"。
+ */
+function replaceThreadFromMessages(messages: ChatTurn[]): void {
+  // 结构防御：主进程给的是 {role, text}，这里补上 UI 需要的字段（tools/streaming）
+  turns = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+    .map((m) => ({
+      role: m.role,
+      text: String(m.text ?? ""),
+      tools: Array.isArray(m.tools) ? m.tools : [],
+      streaming: false,
+      model: m.model,
+      reason: m.reason
+    }));
+  // 切会话后旧请求已不存在，UI 不能残留"正在思考"
+  currentRequest = "";
+  endThinking();
+  lastProbe = null;
+  probeHostEl?.replaceChildren();
+  renderThread();
+  renderThinking();
+  updateMeter();
+}
 
   // ---------------- 顶部状态 ----------------
 
@@ -569,6 +635,28 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
     // 模型下拉：「flash/pro 两行字」换成真正可选的下拉。
     // 这是用户明确要的功能 —— 能在编辑器里换模型，而不是去改配置文件。
     renderModelPicker(bar);
+
+    // 会话切换器（用户明确要的「新会话和会话历史」）。
+    // 挂在模型下拉同一排：两者都是"当前对话的上下文"类切换，放一起符合直觉。
+    // 网页版没有会话能力时 renderSessionSwitcher 返回 null，入口自动消失。
+    renderSessionSwitcher(
+      bar,
+      {
+        renderMessages: (messages) => {
+          // ⚠ 主进程返回的 messages 已过滤 system 前缀块 —— 直接渲染，不再二次过滤
+          replaceThreadFromMessages(messages as ChatTurn[]);
+        },
+        clearMessages: () => {
+          replaceThreadFromMessages([]);
+        },
+        refreshBar: () => {
+          void refreshStatus(bar, hintBox);
+        }
+      },
+      () => {
+        /* 浮层已自行收起 */
+      }
+    );
 
     updateMeter();
   }
@@ -669,6 +757,74 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
     }
 
     host.appendChild(box);
+  }
+
+
+  // ---------------- 「正在思考」提示 ----------------
+
+  /**
+   * 渲染思考提示（三个呼吸点，不是转圈）。
+   *
+   * 为什么不用 spinner：面板面积大，转圈在大面积区域很吵；
+   * 三个缓慢呼吸的点安静得多，且能表达"在等外部响应"而不是"程序在忙"。
+   */
+  function renderThinking(): void {
+    const host = probeHostEl;
+    if (!host) return;
+    const st = currentThinking();
+    // 先把旧的思考提示摘掉，再决定要不要画新的（避免重复堆叠）
+    const old = host.querySelector(".ai-thinking");
+    old?.remove();
+    if (!st) return;
+
+    const box = el("div", { class: "ai-thinking" });
+    box.dataset.aiThinking = "1";
+    box.dataset.phase = st.phase;
+
+    // 三个呼吸点（@keyframes 见 CSS；prefers-reduced-motion 下静止）
+    const dots = el("span", { class: "ai-thinking-dots" });
+    for (let i = 0; i < 3; i++) dots.appendChild(el("i"));
+    box.appendChild(dots);
+
+    box.appendChild(el("span", { class: "ai-thinking-text" }, thinkingText(st)));
+
+    // slow 阶段必须给「停止」——那是用户唯一出口（不能指望他记得去点别处）
+    if (thinkingNeedsStop(st)) {
+      const stopBtn = button("停止", () => {
+        const w = window as unknown as { __BWE__?: unknown };
+        void w;
+        cancelThinking();
+      }, { size: "sm", variant: "danger", iconPath: I.stop, title: "结束这轮请求" });
+      stopBtn.dataset.aiThinkingStop = "1";
+      box.appendChild(stopBtn);
+    }
+
+    // reasoning 阶段的思考原文：默认折叠（否则刷屏，而且思考内容通常很碎）
+    if (st.phase === "reasoning" && st.detail) {
+      const details = el("details", { class: "ai-thinking-detail" });
+      details.appendChild(el("summary", null, `看思考过程（${st.chars} 字）`));
+      details.appendChild(el("pre", { class: "ai-thinking-pre" }, st.detail));
+      box.appendChild(details);
+    }
+
+    host.appendChild(box);
+  }
+
+  /** 取消当前请求（思考中「发送」变「停止」时点它）。 */
+  function cancelThinking(): void {
+    if (!currentRequest) return;
+    const id = currentRequest;
+    currentRequest = "";
+    void aiCancel(id);
+    endThinking();
+    const last = liveAssistantTurn();
+    if (last && (last.streaming || last.text === "")) {
+      last.streaming = false;
+      last.text = last.text ? `${last.text}\n\n（已取消）` : "（已取消）";
+    }
+    renderThread();
+    renderThinking();
+    updateMeter();
   }
 
   // ---------------- 模型切换（用户要求：编辑器内可切换模型） ----------------
@@ -1337,8 +1493,19 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
     }
 
     const busy = !!currentRequest;
-    sendBtn.disabled = busy;
-    stopBtn.style.display = busy ? "" : "none";
+    // 思考中「发送」直接变成「停止」——而不是只把一个独立停止按钮显示出来。
+    // 理由：用户此刻唯一想做的事就是停下，让主按钮变成那个动作最省心；
+    // 原来的"发送禁用 + 旁边冒出个停止"要让眼睛先找一下。
+    if (busy) {
+      sendBtn.textContent = "停止";
+      sendBtn.title = "结束这轮请求";
+      sendBtn.disabled = false;
+    } else {
+      sendBtn.textContent = "发送";
+      sendBtn.title = "";
+      sendBtn.disabled = false;
+    }
+    stopBtn.style.display = "none";
   }
 
   function routeReasonText(): string {
@@ -1351,7 +1518,7 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
   }
 
   // 把实现填进槽位：模块层的流式回调据此驱动本面板的 DOM
-  hooks = { renderThread, appendDelta, appendToolBlock, updateMeter, runAction: (intent) => void send(intent) };
+  hooks = { renderThread, appendDelta, appendToolBlock, updateMeter, renderThinking, runAction: (intent) => void send(intent) };
 
   void refreshStatus(headBar, mockHint);
   renderThread();
@@ -1690,6 +1857,15 @@ export function demoModelsState(): AiModelsState {
  * 为什么需要：截图只能看到下拉里被选中的那一项，看不到"清单其实有几条"；
  * 排查"为什么 UI 是 mock 而主进程说有 5 条"时必须能一次看到两侧的原始数据。
  */
+/**
+ * 验收出口：冻结思考态到某个 phase 并重画（仅用于截图，不发请求）。
+ * phase 支持 connecting / reasoning / answering / slow。
+ */
+export function demoThinking(phase: "connecting" | "reasoning" | "answering" | "slow", chars = 0): void {
+  freezeThinkingForDemo(phase, chars);
+  hooks?.renderThinking?.();
+}
+
 export function aiPanelDebugModels(): { state: AiModelsState | null; hostMode: string; hasHost: boolean } {
   const w = window as unknown as { bweHost?: { mode?: string } };
   return {

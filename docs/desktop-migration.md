@@ -132,11 +132,18 @@ interface AiChatRequest {
 ```ts
 type AiEvent =
   | { type: "route"; requestId; model: "flash"|"pro"; reason: string; localOnly: true }
+  | { type: "thinking"; requestId; phase: ThinkingPhase; chars?: number; delta?: string }
   | { type: "delta"; requestId; text: string }
   | { type: "tool"; requestId; name: string; detail: string }
   | { type: "usage"; requestId; usage: TokenUsage }
   | { type: "done"; requestId; text: string; usage: TokenUsage; cacheHitRate: number; savedUsdApprox: number }
   | { type: "error"; requestId; message: string; recoverable: boolean };
+
+type ThinkingPhase =
+  | "connecting"   // 请求已发出，还没有任何返回（首字延迟期，推理模型常 2~5 秒）
+  | "reasoning"    // 模型在思考（DeepSeek reasoning_content），还没有可显示正文
+  | "answering"    // 已有正文在流（思考提示应撤掉）
+  | "slow";        // 兜底：超过 8 秒什么都没收到（网络慢 / 模型排队）
 
 interface TokenUsage {           // 与 DeepSeek Harness 的 TokenUsage 语义一致：三者互不重叠
   inputTokens: number;           // 未命中缓存的输入
@@ -146,6 +153,16 @@ interface TokenUsage {           // 与 DeepSeek Harness 的 TokenUsage 语义�
   reason?: string;
 }
 ```
+
+**`thinking` 是思考态的唯一真来源**（2026-11-02 新增）。在此之前 UI 只能靠「多久没收到 delta」去猜，
+推理模型首字 2~5 秒的静默期会被误读成卡死。规矩：
+
+- **四个 phase 不可合并**：它们对应四种不同的等待体验，文案与「下一步能做什么」都不同。
+- `chars` 是已累计的思考字符数（可显示「已思考 N 字」）；`delta` 是**最近一小段**思考文本，
+  供「展开看思考过程」用，**不是全量**（全量既贵又会让事件通道变成第二个正文流）。
+- `answering` 只发一次（不是每个 delta 都发），否则 UI 每帧都要做一次状态判断。
+- **mock 分支也要发 `connecting`**（人为 400~600ms 延迟），否则无 API Key 时思考态无法演示与截图。
+  真模型分支**不允许加任何人为延迟**。
 
 UI 必须把 `cacheHitRate`、`savedUsdApprox`、`route.reason` 显示出来（"省 token"要可见）。
 

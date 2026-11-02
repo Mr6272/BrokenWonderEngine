@@ -19,9 +19,11 @@ import { createApiIndex, defaultApiDocsPath } from "./ai/apiIndex.mjs";
 import { importTraeConfig, toModelEntries } from "./ai/trae-import.mjs";
 import { listModels } from "./ai/provider.mjs";
 import { addModel, setActiveModel } from "./ai/modelCatalog.mjs";
+import { parseTapSeq, runTapSequence } from "./tapSeq.mjs";
 import { probeModelEndpoint, PROBE_TIMEOUT_MS } from "./ai/probe.mjs";
 import { createToolCache } from "./ai/prune.mjs";
 import { openSession, workspaceHash } from "./ai/session.mjs";
+import { createConversationStore, DEFAULT_TITLE } from "./ai/conversations.mjs";
 import { createRecentStore } from "./recent.mjs";
 import { createSettingsStore } from "./settings.mjs";
 import { createWindowState, MIN_BOUNDS } from "./window-state.mjs";
@@ -43,7 +45,7 @@ const PRELOAD = join(REPO_ROOT, "desktop", "preload.cjs");
 function parseArgs(argv) {
   const out = {
     console: false, shot: null, size: null, verify: false, probe: null, tap: null,
-    ipcProbe: null, userData: null, probeDom: null, ipcProbeNoImport: false
+    ipcProbe: null, userData: null, probeDom: null, ipcProbeNoImport: false, probeSelector: null, tapSeq: null
   };
   // 命令行可能被 cmd.exe / 脚本包装过，参数里会留下成对的引号（--tap="..."）。
   // 不剥掉的话选择器会带着引号去找元素，永远找不到 —— 这类失败很难看出来。
@@ -65,6 +67,8 @@ function parseArgs(argv) {
     else if (arg.startsWith("--user-data=")) out.userData = stripQuotes(arg.slice("--user-data=".length));
     else if (arg === "--ipc-probe-no-import") out.ipcProbeNoImport = true;
     else if (arg.startsWith("--probe-dom=")) out.probeDom = stripQuotes(arg.slice("--probe-dom=".length));
+    else if (arg.startsWith("--probe-selector=")) out.probeSelector = stripQuotes(arg.slice("--probe-selector=".length));
+    else if (arg.startsWith("--tap-seq=")) out.tapSeq = stripQuotes(arg.slice("--tap-seq=".length));
     else if (arg.startsWith("--size=")) {
       const m = /^(\d+)x(\d+)$/.exec(stripQuotes(arg.slice("--size=".length)));
       if (m) out.size = { width: Number(m[1]), height: Number(m[2]) };
@@ -225,6 +229,8 @@ let settingsStore = null;
 let recentStore = null;
 /** 供 --ipc-probe 调用的业务函数集合（在 registerIpc 里填充）。 */
 let probeHandlers = null;
+/** 多会话存储（sessions/<hash>/ 下的 conversations + index.json）。 */
+let conversationStore = null;
 
 if (!AUTOMATION_MODE) {
   const gotLock = app.requestSingleInstanceLock();
@@ -289,17 +295,54 @@ app.whenReady().then(async () => {
     api = createEmbeddedApi({ repoRoot: REPO_ROOT, port: 0, onLog: (m, t) => log(m, t) });
 
     // AI 桥：会话/缓存都落在 userData 下（契约 §4.4）
+    //
+    // 多会话：sessions/<hash>/ 下用 conversations/<id>/ + index.json（见 ai/conversations.mjs）。
+    // 首次启动会把旧的单份 history.json 自动迁移成第一个会话（不丢历史）。
     const sessionDir = join(USER_DATA_DIR, "sessions", workspaceHash(REPO_ROOT));
-    const session = await openSession({ dir: sessionDir, workspace: REPO_ROOT });
+    conversationStore = createConversationStore({ dir: sessionDir, workspace: REPO_ROOT });
+    // 把磁盘上存在但索引里漏掉的会话目录补进索引（index.json 曾损坏时自愈）。
+    const convState = await conversationStore.load();
+    await reconcileOrphans(conversationStore, sessionDir, convState);
+    const activeSession = await openSession({
+      dir: conversationStore.conversationDir(convState.active),
+      workspace: REPO_ROOT
+    });
     const apiIndex = createApiIndex(defaultApiDocsPath(REPO_ROOT));
     const toolCache = createToolCache(join(USER_DATA_DIR, "toolCache"));
     ai = createAiBridge({
-      session,
+      session: activeSession,
       repoRoot: REPO_ROOT,
       workspaceRoot: REPO_ROOT,
       apiIndex,
       toolCache,
       getSettings: () => settingsStore.load(),
+      // 会话列表归 conversations 存储管；桥只用来在 aiStatus 里报「当前是哪个会话、共几个」。
+      getSessionInfo: async () => {
+        const st = await conversationStore.state();
+        return { active: st.active, count: st.sessions.length };
+      },
+      /**
+       * 会话内容变化后更新索引（标题 / messageCount / updatedAt）。
+       *
+       * 标题只在「还是默认标题」时用第一条用户消息生成 —— 一旦用户或首条消息
+       * 给了标题就不再覆盖，避免把用户改过的名字冲掉。
+       */
+      onSessionUpdated: async (sess, firstUserText) => {
+        const st = await conversationStore.state();
+        // sess.dir 形如 .../conversations/<id>，取最后一段即会话 id
+        // ⚠ Windows 路径分隔符是 \，split 只按 "/" 分会拿不到 id（实测踩到：标题一直不更新）。
+        //   用 basename 让 path 模块自己处理两种分隔符。
+        const id = basename(String(sess?.dir ?? ""));
+        if (!id) return;
+        const item = st.sessions.find((x) => x.id === id);
+        if (!item) return;
+        const patch = {};
+        // 只在标题仍是默认值时，用首条用户消息生成（零 token）
+        if ((item.title === DEFAULT_TITLE || !item.title) && firstUserText) {
+          patch.title = firstUserText;
+        }
+        await conversationStore.touch(id, patch);
+      },
       sendEvent: (ev) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("ai:event", ev);
       },
@@ -560,6 +603,47 @@ async function handleSaveProject({ project, suggestedName, forceDialog } = {}) {
 // IPC
 // ---------------------------------------------------------------------------
 
+/**
+ * 把磁盘上存在、但 index.json 里没有的会话目录补进索引。
+ *
+ * 为什么要这个：index.json 可能被删除/写坏/被用户手工清空，但 `conversations/<id>/` 里的历史
+ * **还完整在磁盘上**。如果不补，用户会以为「历史全没了」—— 而实际上只是索引丢了。
+ * 宁可多列一个会话，也不要让用户的历史凭空消失。
+ */
+async function reconcileOrphans(store, dir, state) {
+  let listed = [];
+  try {
+    const { readdir } = await import("node:fs/promises");
+    const entries = await readdir(join(dir, "conversations"), { withFileTypes: true });
+    listed = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return;
+  }
+  const known = new Set(state.sessions.map((x) => x.id));
+  const orphans = listed.filter((id) => !known.has(id));
+  if (orphans.length === 0) return;
+  log(`发现 ${orphans.length} 个未登记的会话目录，补进索引（索引曾丢失的自我修复）`, "bwe:ai");
+  for (const id of orphans) {
+    await store.touch(id, { title: DEFAULT_TITLE });
+  }
+}
+
+/**
+ * 切到某个会话：**先 abort 在途请求，再换绑 session 对象**。
+ *
+ * 顺序不能反：如果先换绑再 abort，正在收尾的旧请求会把消息 append 到新会话的 history ——
+ * 数据写到错误的地方，比"显示错"严重得多。
+ */
+async function switchToConversation(id) {
+  if (!conversationStore) throw new Error("会话存储未初始化");
+  const result = await conversationStore.switchTo(id);
+  const { aborted } = await ai.swapSession(
+    await openSession({ dir: conversationStore.conversationDir(result.active), workspace: REPO_ROOT })
+  );
+  if (aborted > 0) log(`切换会话时中止了 ${aborted} 个在途请求`, "bwe:ai");
+  return { ...result, aborted };
+}
+
 function registerIpc() {
   // preload 里的同步注入：版本 + 路径（同步只为这一个只读小对象）
   ipcMain.on("bwe:host-info", (event) => {
@@ -623,6 +707,134 @@ function registerIpc() {
   ipcMain.handle("bwe:ai-chat", async (_e, request) => ai.aiChat(request ?? {}));
   ipcMain.handle("bwe:ai-cancel", async (_e, requestId) => ai.aiCancel(requestId));
   ipcMain.handle("bwe:ai-reset", async () => ai.aiReset());
+
+  // ---- 多会话 / 历史（四通道，字段名严格照契约）----
+
+  /**
+   * 会话列表 + 当前 active。
+   * 每项 { id, title, createdAt, updatedAt, messageCount }；UI 直接渲染历史列表。
+   */
+  /**
+   * ISO 字符串 → 毫秒时间戳。非法值给 0（UI 侧不该收到 NaN）。
+   *
+   * 为什么在 IPC 边界转：存储层内部用 ISO 字符串（可读、可排序、排查方便），
+   * 但 `host.ts` 门面声明 `createdAt/updatedAt: number` 且用 Number() 归一化。
+   * 直接发 ISO 会让 Number() 得到 NaN → 兜成 0 → **所有会话排序键相同、排序失效**。
+   * 跨进程字段只在一处归一化，这里就是那一处。
+   */
+  function toEpochMs(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    const parsed = Date.parse(String(value ?? ""));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  /**
+   * 把会话列表归一成**跨进程契约形状**（时间戳为毫秒数字）。
+   *
+   * 所有返回 sessions 的通道都走这里 —— 不要每个通道自己 map 一遍：
+   * 两处映射迟早分叉，而分叉的表现是"某条通道的时间是字符串、另一条是数字"，
+   * UI 排序/相对时间在某些路径上静默失效。集中一处就不会。
+   */
+  function normalizeSessionEntries(sessions) {
+    return (sessions ?? []).map((s) => ({
+      id: String(s.id ?? ""),
+      title: String(s.title ?? ""),
+      createdAt: toEpochMs(s.createdAt),
+      updatedAt: toEpochMs(s.updatedAt),
+      messageCount: Number(s.messageCount) || 0
+    }));
+  }
+
+  async function handleSessionsList() {
+    try {
+      const state = await conversationStore.load();
+      return {
+        ok: true,
+        sessions: normalizeSessionEntries(state.sessions),
+        active: state.active
+      };
+    } catch (e) {
+      return { ok: false, sessions: [], active: "", error: e?.message || String(e) };
+    }
+  }
+  ipcMain.handle("bwe:ai-sessions-list", async () => handleSessionsList());
+
+  /**
+   * 开新会话（**当前会话保留**）。
+   * 新会话先 abort 在途请求：新对话不该继承上一个对话正在生成的回答。
+   */
+  async function handleSessionNew(payload) {
+    try {
+      const { aborted } = await ai.swapSession({ messages: () => [] }); // 先断开旧会话写入
+      if (aborted > 0) log(`开新会话时中止了 ${aborted} 个在途请求`, "bwe:ai");
+      const created = await conversationStore.create({ title: String(payload?.title ?? "") || DEFAULT_TITLE });
+      const session = await openSession({ dir: conversationStore.conversationDir(created.id), workspace: REPO_ROOT });
+      await ai.swapSession(session);
+      const state = await conversationStore.state();
+      return {
+        ok: true,
+        id: created.id,
+        sessions: normalizeSessionEntries(state.sessions),
+        active: state.active,
+        aborted
+      };
+    } catch (e) {
+      return { ok: false, id: "", sessions: [], active: "", error: e?.message || String(e) };
+    }
+  }
+  ipcMain.handle("bwe:ai-session-new", async (_e, payload) => handleSessionNew(payload));
+
+  /**
+   * 切换会话：返回目标会话的完整 messages（UI 直接替换对话区）。
+   * id 不存在时明确失败，不静默切到别的会话。
+   */
+  async function handleSessionSwitch(payload) {
+    try {
+      const id = String(payload?.id ?? "").trim();
+      if (!id) return { ok: false, sessions: [], active: "", messages: [], error: "缺少会话 id" };
+      const switched = await switchToConversation(id);
+      const state = await conversationStore.state();
+      return {
+        ok: true,
+        sessions: normalizeSessionEntries(state.sessions),
+        active: switched.active,
+        // 返回不含 system 块的消息（system 块是内部前缀，UI 不该显示）
+        messages: switched.messages.filter((m) => !(m.role === "system" && m.block === "system")),
+        aborted: switched.aborted
+      };
+    } catch (e) {
+      const state = await conversationStore.state().catch(() => ({ sessions: [], active: "" }));
+      return { ok: false, sessions: normalizeSessionEntries(state.sessions), active: state.active, messages: [], error: e?.message || String(e) };
+    }
+  }
+  ipcMain.handle("bwe:ai-session-switch", async (_e, payload) => handleSessionSwitch(payload));
+
+  /**
+   * 删除会话。
+   * 删到当前 active 时，存储层会落到另一个会话；这里随后**换绑桥的 session** ——
+   * 否则桥还指着已删除会话的目录，后续 append 会写到不存在的目录（静默产生孤儿文件）。
+   */
+  async function handleSessionDelete(payload) {
+    try {
+      const id = String(payload?.id ?? "").trim();
+      if (!id) return { ok: false, sessions: [], active: "", error: "缺少会话 id" };
+      const before = await conversationStore.state();
+      // 如果删的是当前会话，先中止在途请求（它正要写入这个即将消失的会话）
+      if (before.active === id) {
+        const { aborted } = await ai.swapSession({ messages: () => [] });
+        if (aborted > 0) log(`删除当前会话时中止了 ${aborted} 个在途请求`, "bwe:ai");
+      }
+      const result = await conversationStore.remove(id);
+      const session = await openSession({ dir: conversationStore.conversationDir(result.active), workspace: REPO_ROOT });
+      await ai.swapSession(session);
+      const state = await conversationStore.state();
+      return { ok: true, sessions: normalizeSessionEntries(state.sessions), active: state.active };
+    } catch (e) {
+      const state = await conversationStore.state().catch(() => ({ sessions: [], active: "" }));
+      return { ok: false, sessions: normalizeSessionEntries(state.sessions), active: state.active, error: e?.message || String(e) };
+    }
+  }
+  ipcMain.handle("bwe:ai-session-delete", async (_e, payload) => handleSessionDelete(payload));
 
   // ---- 模型切换 / Trae 导入（三通道，字段名严格照契约）----
 
@@ -806,6 +1018,34 @@ function registerIpc() {
   }
 
   /**
+   * 脚本补全（`bwe:script-complete`）：`{ source, offset }` → `{ ok, entries, isMemberAccess }`。
+   *
+   * 与网页版的 `POST /api/script-complete` **走的是同一套语言服务**（web/tools/script-language.mjs），
+   * 只是传输层不同（这里 IPC，那里 HTTP）。所以两边补全结果永远一致 ——
+   * 如果两处各写一套 TS 装配，桌面版和网页版的补全迟早会不一样，那是最难查的一类不一致。
+   */
+  async function handleScriptComplete(payload) {
+    const result = await api.core.completeScript({
+      source: String(payload?.source ?? ""),
+      offset: Number(payload?.offset ?? 0)
+    });
+    return result;
+  }
+  ipcMain.handle("bwe:script-complete", async (_e, payload) => handleScriptComplete(payload ?? {}));
+
+  /**
+   * 脚本悬浮提示（`bwe:script-quickinfo`）：`{ source, offset }` → `{ ok, info }`。
+   * `info === null` 是**正常结果**（光标在括号/空白处没有符号），UI 据此隐藏提示框即可。
+   */
+  async function handleScriptQuickInfo(payload) {
+    return api.core.quickInfoScript({
+      source: String(payload?.source ?? ""),
+      offset: Number(payload?.offset ?? 0)
+    });
+  }
+  ipcMain.handle("bwe:script-quickinfo", async (_e, payload) => handleScriptQuickInfo(payload ?? {}));
+
+  /**
    * 真实探测某条模型的连通性（`bwe:ai-probe-model`）。
    *
    * 为什么单独开一条通道而不是把网络请求塞进 `ready`：
@@ -890,7 +1130,13 @@ function registerIpc() {
     getModels: handleGetModels,
     setModel: handleSetModel,
     addModel: handleAddModel,
-    probeModel: handleProbeModel
+    probeModel: handleProbeModel,
+    scriptComplete: handleScriptComplete,
+    scriptQuickInfo: handleScriptQuickInfo,
+    sessionsList: handleSessionsList,
+    sessionNew: handleSessionNew,
+    sessionSwitch: handleSessionSwitch,
+    sessionDelete: handleSessionDelete
   };
 
 
@@ -986,13 +1232,34 @@ async function runIpcProbe(outFile) {
     if (readOnlyProbe) {
       console.log("[ipc-probe] 只读模式：跳过 Trae 导入与写操作，只读现有配置");
       record("bwe:ai-models", await probeHandlers.getModels());
+      // 多会话四通道（只读模式下做完整 CRUD 演练：这些都是**写**操作，
+      // 但写的是被验收目录自己的会话存储，属于本功能的正常闭环，不是污染用户配置）
+      record("bwe:ai-sessions-list", await probeHandlers.sessionsList());
+      record("bwe:ai-session-new", await probeHandlers.sessionNew({}));
+      const sessionsAfterNew = report.channels["bwe:ai-session-new"]?.sessions ?? [];
+      const firstSession = sessionsAfterNew.find((x) => x.id !== report.channels["bwe:ai-session-new"]?.id);
+      if (firstSession) record("bwe:ai-session-switch", await probeHandlers.sessionSwitch({ id: firstSession.id }));
+      record("bwe:ai-sessions-list:after", await probeHandlers.sessionsList());
+      // ai-status 必须放在会话操作**之后**，否则 sessionCount 反映不出「刚开了新会话」
+      // （我第一次就跑成了 1，因为 status 在 new 之前取 —— 探针顺序本身也是被测对象）
       record("bwe:ai-status", await ai.aiStatus());
+      // 验证「聊完天后标题/条数真的更新」——这是端到端行为，单测只能证明组件联动。
+      const firstActive = report.channels["bwe:ai-sessions-list"]?.active;
+      if (firstActive) {
+        await ai.aiChat({ requestId: "probe-chat", messages: [{ role: "user", text: "帮我重构玩家移动逻辑" }], intent: "chat" });
+        await ai.whenIdle();
+        record("bwe:ai-sessions-list:after-chat", await probeHandlers.sessionsList());
+      }
       const modelsReadOnly = report.channels["bwe:ai-models"]?.models ?? [];
       // 探测**两条**：一条 mock、一条非 mock。
       // 为什么必须两条：mock 分支返回的是写死的字面量（不走 probeModelEndpoint），
       // 只探测 mock 的话，「真实探测分支的字段名被改坏」完全测不出来 ——
       // 我实际用注入断裂验证过这个盲区（改了 reason→kind 但测试仍全绿）。
       const mockEntry = modelsReadOnly.find((m) => m.provider === "mock");
+      // 顺带验证脚本语言两个通道（不需要网络，纯本地 TypeScript）
+      record("bwe:script-complete", await probeHandlers.scriptComplete({ source: "bwe.world.fi", offset: 12 }));
+      record("bwe:script-quickinfo", await probeHandlers.scriptQuickInfo({ source: "bwe.world.find()", offset: 11 }));
+
       const realEntry = modelsReadOnly.find((m) => m.provider !== "mock");
       if (mockEntry) record("bwe:ai-probe-model:mock", await probeHandlers.probeModel({ id: mockEntry.id }));
       if (realEntry) record("bwe:ai-probe-model:real", await probeHandlers.probeModel({ id: realEntry.id }));
@@ -1069,10 +1336,14 @@ async function runIpcProbe(outFile) {
  * 返回结构刻意做成「通用 + 模型专用」两部分：通用部分（selects/buttons）以后可以给别的
  * 面板复用，modelSelect 部分是验收当前功能的唯一机器可验证证据。
  */
-async function probeDom() {
+async function probeDom(selectors = []) {
   try {
+    // 选择器通过 JSON 注入渲染侧：不要在模板字符串里拼裸选择器，
+    // 否则带引号/逗号的选择器（如 [data-x="y"]）会破坏脚本。
+    const selectorJson = JSON.stringify(selectors ?? []);
     const data = await mainWindow.webContents.executeJavaScript(
       `(() => {
+        const REQUESTED = ${selectorJson};
         const txt = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
         const describeSelects = () =>
           Array.from(document.querySelectorAll("select")).map((sel, i) => ({
@@ -1116,10 +1387,58 @@ async function probeDom() {
         // 面板里「需要填 key」「已就绪」这类状态文字，模型功能坏了这里会空
         const panelText = txt(aiPanel).slice(0, 1200);
 
+        /**
+         * --probe-selector：按传入的每个选择器，读**第一个**匹配元素的
+         * 矩形（x/y/width/height，CSS 像素）与前 200 字文本。
+         *
+         * 为什么需要：判断「脚本编辑器是不是太小了」不能靠看截图量像素
+         * （缩放/DPI 都会差几像素），实际 getBoundingClientRect 才是证据 ——
+         * B 改高度前是 N，改后是 M，两个数字一对比就说清了。
+         */
+        const probeSelectors = (() => {
+          const out = [];
+          for (const sel of REQUESTED) {
+            let el = null;
+            try {
+              el = document.querySelector(sel);
+            } catch (e) {
+              // ⚠ 这里不能用模板字符串：整段代码本身就是外层模板字符串的内容，
+              //    嵌套反引号会提前闭合外层（真实踩过）。用拼接。
+              out.push({ selector: sel, found: false, error: "选择器语法错误：" + e.message });
+              continue;
+            }
+            if (!el) {
+              out.push({ selector: sel, found: false, matchCount: 0 });
+              continue;
+            }
+            const rect = el.getBoundingClientRect();
+            out.push({
+              selector: sel,
+              found: true,
+              tag: el.tagName,
+              id: el.id || "",
+              cls: String(el.className || "").slice(0, 80),
+              matchCount: document.querySelectorAll(sel).length,
+              rect: {
+                x: Math.round(rect.x),
+                y: Math.round(rect.y),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height)
+              },
+              // 文本给前 200 字：够看清"里面装的是什么"，又不至于把整段代码塞进 JSON
+              text: txt(el).slice(0, 200),
+              textLength: (el.textContent || "").replace(/\s+/g, " ").trim().length,
+              visible: Boolean(rect.width && rect.height)
+            });
+          }
+          return out;
+        })();
+
         return {
           selects: describeSelects(),
           modelSelect,
           modelSelectFound: modelSelect.found,
+          selectors: probeSelectors,
           aiPanelText: panelText,
           aiPanelPresent: Boolean(aiPanel),
           statusText: txt(document.querySelector(".statusbar, .status-bar")).slice(0, 400)
@@ -1298,6 +1617,9 @@ function printProbe(skeleton) {
  */
 async function captureAndJudge(opts) {
   const tag = opts.tag ? `${opts.tag} ` : "";
+  // --tap-seq 的多步取证结果（可能为 null）。写进 --probe-dom 的 JSON，
+  // 这样 B 一条命令就能拿到「折叠前 / 折叠后 / 再展开后」三组宽度。
+  const tapSeq = opts.tapSeq ?? null;
   const skeleton = await probeUiSkeleton();
   console.log(
     `[shot] ${tag}UI 骨架: activity-bar=${skeleton.activityBar ?? 0} sidebar=${skeleton.sidebar ?? 0} `
@@ -1311,7 +1633,11 @@ async function captureAndJudge(opts) {
   // ---- DOM 内容探针（--probe-dom 时输出）----
   // 与几何探针分开放：几何回答「元素在不在/多宽」，DOM 回答「里面装的内容对不对」。
   if (ARGS.probeDom) {
-    const dom = await probeDom();
+    // --probe-selector=".js-code,.panel,.ai-panel"：逗号分隔，逐个读首个匹配元素的矩形与文本。
+    const selectors = ARGS.probeSelector
+      ? String(ARGS.probeSelector).split(",").map((t) => t.trim()).filter(Boolean)
+      : [];
+    const dom = await probeDom(selectors);
     console.log(`[dom] AI 面板存在: ${dom.aiPanelPresent ? "是" : "否"} · 下拉框来源: ${dom.modelSelect?.source ?? "未找到"}`);
     console.log(
       `[dom] 模型下拉框: found=${dom.modelSelectFound} optionCount=${dom.modelSelect?.optionCount ?? 0} `
@@ -1320,9 +1646,28 @@ async function captureAndJudge(opts) {
     for (const opt of dom.modelSelect?.options ?? []) {
       console.log(`[dom]   option value=${opt.value} text=${opt.text}${opt.disabled ? " (disabled)" : ""}`);
     }
+    // --probe-selector 的结果：这是"某个元素实际多大"的证据，比截图量像素可靠
+    for (const sel of dom.selectors ?? []) {
+      if (!sel.found) {
+        console.log(`[dom] selector ${sel.selector} → 未找到${sel.error ? `（${sel.error}）` : ""}`);
+        continue;
+      }
+      console.log(
+        `[dom] selector ${sel.selector} → <${sel.tag}${sel.id ? `#${sel.id}` : ""}> `
+        + `x=${sel.rect.x} y=${sel.rect.y} ${sel.rect.width}x${sel.rect.height} `
+        + `· 匹配 ${sel.matchCount} 个 · 文本 ${sel.textLength} 字`
+      );
+      if (sel.text) console.log(`[dom]   文本：${sel.text.slice(0, 80)}`);
+    }
     try {
       await mkdir(dirname(resolve(ARGS.probeDom)), { recursive: true });
-      await writeFile(resolve(ARGS.probeDom), JSON.stringify(dom, null, 2), "utf8");
+      // sequence 与 selectors 一起落盘：B 要的是「同一次运行里的多步对比」，
+      // 分成两个文件会让他自己拼时间线，容易拼错。
+      await writeFile(
+        resolve(ARGS.probeDom),
+        JSON.stringify({ ...dom, sequence: tapSeq?.sequence ?? [], sequenceErrors: tapSeq?.errors ?? [] }, null, 2),
+        "utf8"
+      );
       console.log(`[dom] 已写入 ${resolve(ARGS.probeDom)}`);
     } catch (e) {
       console.error(`[dom] 写入 JSON 失败：${e?.message || e}`);
@@ -1475,6 +1820,29 @@ async function runShotMode() {
     }
   }
 
+  // ---- --tap-seq：多步交互 + 每步取证 ----
+  //
+  // 与 --tap 的区别：--tap 是「点一次→截图→退出」，拿不到「点击前 vs 点击后」的对比；
+  // --tap-seq 在**同一次运行**里做多步（click / probe / wait），把每步结果追加到 sequence。
+  // 用在折叠类 bug：点折叠 → 量宽度 → 点展开 → 再量宽度，三组数字来自同一次运行，
+  // 排除掉「用户手速/缓存/随机布局」这些中间变量。
+  //
+  // --verify 同样不跑（自检必须针对干净默认视图）。
+  let tapSeqResult = null;
+  if (ARGS.tapSeq) {
+    if (ARGS.verify) {
+      console.log("[seq] --verify 模式忽略 --tap-seq（自检只跑默认视图）");
+    } else {
+      const parsed = parseTapSeq(ARGS.tapSeq);
+      for (const err of parsed.errors) console.error(`[seq] 解析警告：${err}`);
+      console.log(`[seq] 共 ${parsed.steps.length} 步：${parsed.steps.map((st) => st.raw).join(" → ")}`);
+      tapSeqResult = await runTapSequence(mainWindow, parsed.steps, (msg) => console.log(msg));
+      // 每步内部已按 click 的 waitMs 等待，这里再给一次整体重排的余量。
+      await new Promise((r) => setTimeout(r, 300));
+      console.log(`[seq] 完成 ${tapSeqResult.sequence.length} 条记录，${tapSeqResult.errors.length} 条错误`);
+    }
+  }
+
   try {
     if (!ARGS.verify) {
       // 单尺寸截图（开发/验收看图用）
@@ -1483,6 +1851,7 @@ async function runShotMode() {
         want: ARGS.size ?? DEFAULT_SHOT_SIZE,
         strict: false,
         writeProbe: true,
+        tapSeq: tapSeqResult,
         errors
       });
       app.exit(result.ok ? 0 : 3);

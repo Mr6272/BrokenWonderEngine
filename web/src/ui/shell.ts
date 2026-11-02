@@ -53,6 +53,14 @@ export class Shell {
   /** 右侧辅助侧边栏（Inspector / 图层 / 大纲） */
   readonly auxPanel: HTMLDivElement;
   private readonly activityHosts = new Map<string, HTMLButtonElement>();
+  /**
+   * 折叠状态变化回调。
+   *
+   * 为什么需要：按钮文案/图标要随状态变（折叠态显示「展开」+ 展开图标），
+   * 而状态是 shell 管的、按钮在 editor 里建的。回调比让 editor 每次自己查询更省事，
+   * 也避免"点了按钮但文案没变"这类只改了一半的 bug。
+   */
+  private layoutListeners = new Set<(s: { sidebar: boolean; panel: boolean }) => void>();
   private sbWidth = 264;
   private panelHeight = 220;
   private activeActivity = "explorer";
@@ -137,6 +145,9 @@ export class Shell {
       });
       btn.appendChild(svg(I[it.icon], 22));
       btn.dataset.activity = it.id;
+      // 剧本入口的专用锚点（Lead 的验收命令按这个找）：与 data-activity 并存，
+      // 前者是通用命名，这个是稳定契约名，改名会静默破坏别人的截图。
+      if (it.id === "script") btn.dataset.sidebarScript = "1";
       btn.addEventListener("click", () => {
         this.setActiveActivity(it.id);
         onActivity(it.id);
@@ -183,7 +194,21 @@ export class Shell {
     this.sidebarResizer.style.display = collapsed ? "none" : "";
     // 折叠后活动栏靠左，编辑区应该拿到空出来的宽度
     this.requestRepaint();
+    this.emitLayout();
     return collapsed;
+  }
+
+  /** 订阅折叠状态变化（按钮文案/图标据此同步）。 */
+  onLayoutChange(fn: (s: { sidebar: boolean; panel: boolean }) => void): () => void {
+    this.layoutListeners.add(fn);
+    // 立刻回放一次当前状态，订阅方不用先自己查一遍
+    fn({ sidebar: this.sidebarCollapsed(), panel: this.panelCollapsed() });
+    return () => this.layoutListeners.delete(fn);
+  }
+
+  private emitLayout(): void {
+    const s = { sidebar: this.sidebarCollapsed(), panel: this.panelCollapsed() };
+    for (const fn of Array.from(this.layoutListeners)) fn(s);
   }
 
   sidebarCollapsed(): boolean {
@@ -234,6 +259,7 @@ export class Shell {
     const collapsed = force ?? !this.panel.classList.contains("collapsed");
     this.panel.classList.toggle("collapsed", collapsed);
     this.requestRepaint();
+    this.emitLayout();
     return collapsed;
   }
 

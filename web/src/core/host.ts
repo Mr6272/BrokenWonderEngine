@@ -38,6 +38,25 @@ export type AiModel = "flash" | "pro";
 /** 流式事件（契约 §4.2）。面板按 type 分派，未知 type 一律忽略。 */
 export type AiEvent =
   | { type: "route"; requestId: string; model: AiModel; reason: string; localOnly: true }
+  | {
+      /**
+       * 「模型在忙」的显式信号。**这是 UI 唯一的思考态来源**，不要靠"多久没收到 delta"去猜。
+       *
+       * 四个 phase 的语义（不要合并，它们对应四种不同的等待体验）：
+       *   connecting —— 请求已发出，但还没有任何返回（首字延迟期，推理模型常 2~5 秒）
+       *   reasoning  —— 模型在思考（DeepSeek 的 reasoning_content），还没有可显示的正文
+       *   answering  —— 已有正文在流（此时思考提示应撤掉）
+       *   slow       —— 兜底：超过 8 秒什么都没收到，提示可能网络慢或模型排队
+       *
+       * `chars` 是 reasoning 已累计的字符数（可显示「已思考 N 字」）；
+       * `delta` 是**最近一小段**思考文本，供「展开看思考过程」，**不是全量**（全量很贵）。
+       */
+      type: "thinking";
+      requestId: string;
+      phase: "connecting" | "reasoning" | "answering" | "slow";
+      chars?: number;
+      delta?: string;
+    }
   | { type: "delta"; requestId: string; text: string }
   | { type: "tool"; requestId: string; name: string; detail: string }
   | { type: "usage"; requestId: string; usage: TokenUsage }
@@ -122,6 +141,44 @@ export interface AiModelsState {
   ready?: boolean;
 }
 
+// ==========================================================================
+// 多会话
+// --------------------------------------------------------------------------
+// 会话存的是「完整对话历史」，切会话就是换一整份 history。字段语义：
+//   · updatedAt 是**相对时间显示**的来源（UI 按它降序排，"刚才那个对话"在最上面）
+//   · messageCount 由主进程在**落盘后**更新（不是发送时），所以发送后立刻刷列表
+//     会短暂看到旧条数 —— 这是正常时序，不是 bug
+//   · switch 返回的 messages **已过滤 system 前缀块**，UI 不要二次过滤
+//   · aborted > 0 表示本次操作中断了 N 个在途请求，**必须提示用户**
+//     （否则用户会以为正在生成的回答莫名消失）
+// ==========================================================================
+
+export interface AiSessionEntry {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+}
+
+export interface AiSessionMessage {
+  role: "user" | "assistant";
+  text: string;
+  /** 该条带上工具调用记录时才存在（UI 用来还原工具块） */
+  tools?: { name: string; detail: string }[];
+  /** 该条还在流式生成中（切换/新建后不应有 true） */
+  streaming?: boolean;
+}
+
+export interface AiSessionsState {
+  ok?: boolean;
+  sessions: AiSessionEntry[];
+  active: string;
+  /** 本次操作中断了几个在途请求。>0 必须提示用户。 */
+  aborted?: number;
+  error?: string;
+}
+
 /**
  * 手动添加模型时的输入。
  * 规则（判重 / provider 降级 / 缺字段）都在主进程的 `modelCatalog.mjs`，
@@ -199,6 +256,11 @@ export interface BweHost {
    * `ok` 是**三态**：true 明确可用 / false 明确不可用 / null 判不出来（看 detail）。
    */
   probeModel?(id: string): Promise<AiProbeResult>;
+  /** 多会话：列表 / 新建 / 切换 / 删除。返回形状见下方 `AiSessionEntry`。 */
+  aiSessionsList?(): Promise<AiSessionsState>;
+  aiSessionNew?(title?: string): Promise<AiSessionsState & { id?: string }>;
+  aiSessionSwitch?(id: string): Promise<AiSessionsState & { messages?: AiSessionMessage[] }>;
+  aiSessionDelete?(id: string): Promise<AiSessionsState>;
 }
 
 declare global {
@@ -652,4 +714,104 @@ export function onOpenProjectRequest(cb: (path: string, content: string) => void
     onOpenProjectRequest?: (cb: (path: string, content: string) => void) => () => void;
   };
   return h?.onOpenProjectRequest?.(cb) ?? (() => void 0);
+}
+
+// ==========================================================================
+// 多会话门面
+// --------------------------------------------------------------------------
+// 四个函数全部**永不抛错**：无宿主时返回空状态（UI 据此隐藏整个入口），
+// 而不是白屏或红条。桌面版把具体行为交给主进程（那里有存储、迁移、竞态处理）。
+//
+// 归一化职责在这里：主进程的字段（`updatedAt` / `messageCount` / `aborted`）
+// 与 UI 想要的形状一旦分叉，就会出现「两端各自映射」那类静默失效，
+// 所以下面每个返回值都强制补上默认值，UI 不需要再做 `??` 兜底。
+// ==========================================================================
+
+/** 网页版 / 无宿主时的空状态：`sessions: []` 让 UI 自然隐藏会话入口。 */
+function emptySessions(): AiSessionsState {
+  return { ok: true, sessions: [], active: "", aborted: 0 };
+}
+
+/** 把主进程返回的对象归一成完整形状（缺字段补默认，UI 不用兜底）。 */
+function normalizeSessions(raw: unknown): AiSessionsState {
+  const r = (raw ?? {}) as Partial<AiSessionsState>;
+  return {
+    ok: r.ok !== false,
+    sessions: Array.isArray(r.sessions)
+      ? r.sessions.map((s) => ({
+          id: String(s?.id ?? ""),
+          title: String(s?.title ?? "") || "未命名会话",
+          createdAt: Number(s?.createdAt ?? 0),
+          updatedAt: Number(s?.updatedAt ?? 0),
+          messageCount: Number(s?.messageCount ?? 0)
+        }))
+      : [],
+    active: String(r.active ?? ""),
+    aborted: Number(r.aborted ?? 0),
+    error: r.error
+  };
+}
+
+export async function aiSessionsList(): Promise<AiSessionsState> {
+  const h = host();
+  if (!h?.aiSessionsList) return emptySessions();
+  try {
+    return normalizeSessions(await h.aiSessionsList());
+  } catch {
+    return emptySessions();
+  }
+}
+
+export async function aiSessionNew(title?: string): Promise<AiSessionsState & { id?: string }> {
+  const h = host();
+  if (!h?.aiSessionNew) return emptySessions();
+  try {
+    const raw = (await h.aiSessionNew(title)) as AiSessionsState & { id?: string };
+    return { ...normalizeSessions(raw), id: raw?.id };
+  } catch {
+    return emptySessions();
+  }
+}
+
+/**
+ * 切换会话。
+ *
+ * 返回的 `messages` **已由主进程过滤掉 system 前缀块** —— UI 直接渲染，
+ * 不要自己再过滤一遍（会误删正常消息）。这里只保证数组存在且字段齐。
+ */
+export async function aiSessionSwitch(id: string): Promise<AiSessionsState & { messages?: AiSessionMessage[] }> {
+  const h = host();
+  if (!h?.aiSessionSwitch) return emptySessions();
+  try {
+    const raw = (await h.aiSessionSwitch(String(id ?? ""))) as AiSessionsState & { messages?: unknown };
+    const list = Array.isArray(raw?.messages) ? (raw.messages as AiSessionMessage[]) : [];
+    return {
+      ...normalizeSessions(raw),
+      messages: list
+        .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+        .map((m) => ({
+          role: m.role,
+          text: String(m.text ?? ""),
+          tools: Array.isArray(m.tools) ? m.tools : undefined,
+          streaming: false // 切过来的历史消息一定不在流式生成中
+        }))
+    };
+  } catch {
+    return emptySessions();
+  }
+}
+
+export async function aiSessionDelete(id: string): Promise<AiSessionsState> {
+  const h = host();
+  if (!h?.aiSessionDelete) return emptySessions();
+  try {
+    return normalizeSessions(await h.aiSessionDelete(String(id ?? "")));
+  } catch {
+    return emptySessions();
+  }
+}
+
+/** 会话能力是否可用（网页版没有存储，入口应整个隐藏而不是显示成空列表）。 */
+export function sessionsAvailable(): boolean {
+  return Boolean(host()?.aiSessionsList);
 }

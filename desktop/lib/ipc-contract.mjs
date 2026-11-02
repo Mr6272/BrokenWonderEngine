@@ -23,6 +23,27 @@
  *    真正会伤人的是「open 是三态还是布尔」「ready 是否包含连通性」这类语义没写清。
  */
 
+/**
+ * `ai:event` 的 notes：thinking 的四个 phase 语义 + 三条硬约束。
+ *
+ * 单独抽成常量而不是内联长字符串：这段文字会被 UI 侧反复查阅（B 要按 phase 做文案），
+ * 内联在对象字面量里既难读也容易被后续编辑弄坏转义。
+ */
+const AI_EVENT_NOTES = [
+  "主进程 → 渲染侧单向推送；preload 的 onAiEvent 返回取消订阅函数。",
+  "",
+  "thinking 事件的四个 phase 语义（**不可合并** —— 它们对应四种不同的等待体验，UI 文案与「下一步」都不同）：",
+  "  · connecting = 已经开始请求，但还没有任何返回（网络握手/排队中）。UI 显示「正在连接…」。",
+  "  · reasoning  = 模型在思考，但还没有可显示正文。带 chars（已累计思考字符数）与 delta（最近一小段思考文本，不是全量）。UI 显示「正在思考（已思考 N 字）」。",
+  "  · answering  = 已有正文在流。**只发一次**（不是每个 delta 都发，否则 UI 每帧都要判断状态）。",
+  "  · slow       = 发起请求后 8 秒内没有任何 reasoning/delta 的兜底提示（网络慢或模型排队）。这是**正式 phase**，UI 应把文案升级并提供取消出口。",
+  "",
+  "硬约束：",
+  "  1. mock 分支也必须发 connecting（人为 400~600ms 延迟），否则无 key 时思考态无法演示/截图；**真模型分支不许加任何人为延迟**。",
+  "  2. reasoning 的 delta 只带最近一小段，**不是全量** —— 全量会让事件通道变成第二个正文流（既与正文混淆，也推高成本）。",
+  "  3. 事件里只放契约声明的字段（phase / chars / delta）；不要把文案塞进事件，文案由 UI 按 phase 决定。"
+].join("\n");
+
 /** 所有 IPC 通道的契约。键 = ipcMain 通道名。 */
 export const IPC_CONTRACT = {
   // ---------------- 内嵌 API（原 /api/* 的能力） -------------
@@ -101,7 +122,7 @@ export const IPC_CONTRACT = {
     params: "无",
     returns: [
       "provider", "intendedProvider", "ready", "mode", "message", "models", "activeModelId",
-      "activeModel", "modelList", "usage", "storage", "insecure"
+      "activeModel", "modelList", "usage", "storage", "activeSession", "sessionCount", "insecure"
     ],
     notes:
       "`ready` 只表示**配置齐全**，不含连通性（探 use bwe:ai-probe-model）。"
@@ -191,6 +212,79 @@ export const IPC_CONTRACT = {
       + " `reachable` 的语义是**连上了**（拿到任何 HTTP 响应即 true），不是「返回 200」。"
   },
 
+  // ---------------- 多会话 / 历史 -------------
+
+  "bwe:ai-sessions-list": {
+    preload: "aiSessionsList",
+    kind: "invoke",
+    params: "无",
+    returns: ["ok", "sessions", "active"],
+    returnsOnError: ["ok", "sessions", "active", "error"],
+    notes:
+      "sessions 每项 { id, title, createdAt, updatedAt, messageCount }。"
+      + "title 由**第一条用户消息前 20 字**生成（零 token，不调模型 —— 第一条消息本身就是最好的标题）。"
+      + "index.json 丢失时会自愈：磁盘上 conversations/<id>/ 还在的历史会补回列表。"
+  },
+  "bwe:ai-session-new": {
+    preload: "aiSessionNew",
+    kind: "invoke",
+    params: "{ title?: string }",
+    returns: ["ok", "id", "sessions", "active", "aborted"],
+    returnsOnError: ["ok", "id", "sessions", "active", "error"],
+    notes:
+      "开新会话时**当前会话保留**（新会话是追加，不是覆盖）。"
+      + "会先中止在途请求并返回 aborted 数（新对话不该继承上一个对话正在生成的回答）。"
+  },
+  "bwe:ai-session-switch": {
+    preload: "aiSessionSwitch",
+    kind: "invoke",
+    params: "{ id: string }",
+    returns: ["ok", "sessions", "active", "messages", "aborted"],
+    returnsOnError: ["ok", "sessions", "active", "messages", "error"],
+    notes:
+      "返回目标会话的完整 messages（**不含 system 前缀块**，那是内部实现不该显示给用户）。"
+      + "切换前**先 abort 在途请求再换绑会话**（顺序不能反：否则旧请求收尾时会把消息写进新会话的 history）。"
+      + "id 不存在时明确失败，**不静默切到别的会话**（静默切换会让 UI 显示 A、实际读写 B）。"
+  },
+  "bwe:ai-session-delete": {
+    preload: "aiSessionDelete",
+    kind: "invoke",
+    params: "{ id: string }",
+    returns: ["ok", "sessions", "active"],
+    returnsOnError: ["ok", "sessions", "active", "error"],
+    notes:
+      "删 active 会话时自动落到最近的其它会话（active 永不悬空）；"
+      + "删到只剩 0 个时自动补一个空会话（否则 UI 没有可用会话、下次启动也难恢复）。"
+      + "删除后**换绑桥的 session 对象** —— 否则桥还指着已删除目录，后续写入会产生孤儿文件。"
+  },
+
+  // ---------------- 脚本语言服务（补全 / 悬浮提示） -------------
+
+  "bwe:script-complete": {
+    preload: "scriptComplete",
+    kind: "invoke",
+    params: "{ source: string, offset: number }",
+    returns: ["ok", "entries", "isMemberAccess"],
+    returnsOnError: ["ok", "entries", "isMemberAccess", "error"],
+    notes:
+      "补全。entries 每项 { name, kind, detail, docs, insertText }；"
+      + "kind 是粗分类 function|property|namespace|keyword|constant。"
+      + "**insertText 只给名字、不带括号**（带不带括号是 UI 的决策，后端不替 UI 决定）。"
+      + "offset 是 **UTF-16 code unit 偏移**（与 textarea.selectionStart 同一口径，两边天然一致，不要做字符数换算）。"
+      + "与网页版 POST /api/script-complete 共用同一套语言服务。"
+  },
+  "bwe:script-quickinfo": {
+    preload: "scriptQuickInfo",
+    kind: "invoke",
+    params: "{ source: string, offset: number }",
+    returns: ["ok", "info"],
+    returnsOnError: ["ok", "info", "error"],
+    notes:
+      "悬浮提示。info = { display, docs, kind } 或 **null**。"
+      + "**info 为 null 是正常结果**（光标在括号/空白处没有符号），UI 隐藏提示框即可，不是失败。"
+      + "与网页版 POST /api/script-quickinfo 共用同一套语言服务。"
+  },
+
   // ---------------- 日志 -------------
   "bwe:log-tail": {
     preload: "（未暴露，调试用）",
@@ -206,7 +300,9 @@ export const IPC_CONTRACT = {
     kind: "send",
     params: "AiEvent（见契约 §4.2）",
     returns: [],
-    notes: "主进程 → 渲染侧单向推送；preload 的 onAiEvent 返回取消订阅函数。"
+    // 事件类型清单必须完整：漏一种，UI 就静默丢弃它（而"丢掉一个事件"不会报错）。
+    eventTypes: ["route", "thinking", "delta", "tool", "usage", "done", "error"],
+    notes: AI_EVENT_NOTES
   },
   "menu:command": {
     preload: "onMenuCommand",
