@@ -206,6 +206,45 @@ UI 必须把 `cacheHitRate`、`savedUsdApprox`、`route.reason` 显示出来（"
 脚本错误：1 条（world.js:42 TypeError: ...）
 ```
 
+### 4.6 多会话 / 对话历史（`bwe:ai-sessions-*` 四通道）
+
+存储：`sessions/<workspaceHash>/index.json` + `conversations/<id>/{history,summary,meta}.json`。
+老的单份 `history.json` 首次启动自动迁移成第一个会话（旧文件改名归档为 `.migrated`，不删）。
+
+```ts
+interface AiSessionEntry {
+  id: string;
+  title: string;         // 首条用户消息前 20 字（零 token，不调模型）；空则「新对话」
+  createdAt: number;     // ⚠ 毫秒时间戳（number），不是 ISO 字符串
+  updatedAt: number;     // ⚠ 同上。主进程出口用 toEpochMs() 转换
+  messageCount: number;  // 用户可见消息数（不含内部 system 前缀块）
+}
+
+bwe:ai-sessions-list   无参     → { ok, sessions: AiSessionEntry[], active: string, error? }
+bwe:ai-session-new     {title?} → { ok, id, sessions, active, aborted: number, error? }
+bwe:ai-session-switch  {id}     → { ok, sessions, active, messages: {role,text}[], aborted, error? }
+bwe:ai-session-delete  {id}     → { ok, sessions, active, error? }
+```
+
+**四条行为约定（UI 必须按这个实现）：**
+
+1. **`messages` 已扁平化为 `{ role, text }`，且不含 system 前缀块。**
+   内部存储是 `blocks` 结构（为将来多模态/工具块预留），出口由 `flattenMessages()` 转成 `text`。
+   UI 直接渲染，**不要二次过滤、不要读 `blocks`**（读不到会渲染成空白）。
+2. **`aborted > 0` 必须提示「上一个回答已中断」。**
+   新建/切换/删除都会中止在途请求；没有解释的消失，用户会当 bug 报。
+3. **`active` 必须以返回值为准。**
+   删除当前会话后 `active` 已变成另一个会话 id；沿用旧值会让 UI 指着已删会话。
+4. **标题在对话落盘后更新，不是发送时。**
+   发送后立刻刷新列表会看到「新对话」——这是正常的，不是 bug。建议等 `done` 事件后再刷。
+
+**两条实现纪律（改主进程前必读）：**
+- **时间戳必须在 IPC 出口转成毫秒数字。** 存储层内部用 ISO 字符串（可读、可排序、便于排查），
+  但门面声明 `number`。直接透 ISO 会让 `Number()` 得到 NaN → 兜成 0 →
+  **所有会话排序键相同、排序失效**（且不报错）——这是真实发生过的缺陷。
+- **切换会话必须先 abort 在途请求再换绑 `session` 对象**（`swapSession()` 是 async 且内部 `await whenIdle()`）。
+  顺序反了，旧请求收尾会把 A 的消息写进 B 的 history —— 数据错乱，不报错。
+
 ## 5. 主题契约（奶油色软科技）
 
 `web/styles/cream.css` 覆盖 `:root` 令牌，**不新增业务类**（业务类仍由 app.css 定义）：

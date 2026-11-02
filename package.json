@@ -34,7 +34,8 @@
     "verify:models": "node desktop/tools/verify-models.mjs",
     "verify:probe": "node desktop/tools/verify-probe-scenarios.mjs",
     "verify:thinking": "node desktop/tools/verify-thinking-events.mjs",
-    "verify:script-editor": "node desktop/tools/verify-script-editor.mjs"
+    "verify:script-editor": "node desktop/tools/verify-script-editor.mjs",
+    "verify:sessions": "node desktop/tools/verify-sessions.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

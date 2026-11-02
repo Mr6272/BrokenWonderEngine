@@ -745,6 +745,34 @@ function registerIpc() {
     }));
   }
 
+  /**
+   * 把内部存储的消息结构扁平化成 UI 契约形状。
+   *
+   * 内部：{ role, at, blocks: [{ type: "text", text }, ...] }
+   * 对外：{ role, text } —— UI 的 replaceThreadFromMessages 直接读 text
+   *
+   * 为什么要这一步：内部 blocks 是为了兼容多模态/工具块等未来结构，
+   * 而 UI 只要"这一条说了什么"。直接透内部结构会让 UI 的 text 变成 undefined，
+   * 表现为「切换会话后对话区空白」——实测踩到过。
+   */
+  function flattenMessages(messages) {
+    return (messages ?? [])
+      .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+      .map((m) => {
+        const blocks = Array.isArray(m.blocks) ? m.blocks : [];
+        const text = blocks
+          .filter((b) => b && b.type === "text" && typeof b.text === "string")
+          .map((b) => b.text)
+          .join("");
+        const out = { role: m.role, text };
+        // 可选字段：有就带上（UI 侧是 optional，不带不影响渲染）
+        if (m.at) out.at = m.at;
+        if (m.model) out.model = m.model;
+        if (Array.isArray(m.tools) && m.tools.length) out.tools = m.tools;
+        return out;
+      });
+  }
+
   async function handleSessionsList() {
     try {
       const state = await conversationStore.load();
@@ -798,8 +826,10 @@ function registerIpc() {
         ok: true,
         sessions: normalizeSessionEntries(state.sessions),
         active: switched.active,
-        // 返回不含 system 块的消息（system 块是内部前缀，UI 不该显示）
-        messages: switched.messages.filter((m) => !(m.role === "system" && m.block === "system")),
+        // 扁平化成 { role, text }：内部 blocks 结构不该透给 UI。
+        // 直接透出的后果是 UI 拿到的 text 是 undefined → 气泡渲染成空 →
+        // 表现为「切换会话后对话区一片空白」（实测踩到过）。
+        messages: flattenMessages(switched.messages),
         aborted: switched.aborted
       };
     } catch (e) {

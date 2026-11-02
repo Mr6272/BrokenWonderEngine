@@ -19,7 +19,8 @@
  *   1. 列表里**正好 2 个**会话 —— 多一个说明读了残留；少一个说明预置没生效
  *   2. 顺序是「排查掉帧问题」在上、「重构玩家移动逻辑」在下（按 updatedAt 降序）
  *   3. 副标题含正确条数（`4 条` / `2 条`）—— 证明 messageCount 真的透到了 UI
- *   4. 点 B 对应的行后，`.ai-thread` 变成 B 的消息 —— 证明切换真的换了内容
+ *   4. 点**非 active** 的 A 后，对话区渲染出 A 的消息
+ *      （点 active 会话不会有任何变化，那样的断言等于没测）
  *
  * 退出码：0 通过 / 1 断言失败 / 2 前置条件不满足（缺 Electron 等）。
  *
@@ -152,14 +153,13 @@ async function seedConversations(userDataDir) {
     "utf8"
   );
 
-  return { sessionRoot, sessionA: SESSION_A, sessionB: SESSION_B };
+  return { sessionRoot };
 }
 
 /**
  * `--tap-seq` 序列。
  *
- * 为什么 probe 写在最后（而不是每步之后）：`--tap-seq` 的 probe 结果按 step 顺序追加，
- * 最后统一截图。这里需要的是「点开历史 → 读列表」这一组读数，以及「点 B 行 → 读正文」第二次读数。
+ * 点的是**非 active** 的 A —— 只有切到非当前会话，才能证明"切换真的换了内容"。
  */
 const TAP_SEQ = [
   // ① 打开 AI 面板（会话按钮在 AI 面板里）
@@ -168,13 +168,13 @@ const TAP_SEQ = [
   // ② 打开会话历史浮层
   "click:[data-ai-sessions]",
   "wait:400",
-  // ③ 读列表：行 / 标题 / 副标题都探一遍
+  // ③ 读列表：行 / 标题 / 副标题都读**全部**匹配项（`*`），顺序可断言
   "probe:.ai-session-row*,.ai-session-title*,.ai-session-sub*",
-  // ④ 点 B 那一行（用 B 的 id 精确点，不靠"第二个"这种位置假设）
-  `click:[data-ai-session-pick="${SESSION_B.id}"]`,
+  // ④ 点 A 那一行（用 A 的 id 精确点，不靠"第几个"这种位置假设）
+  `click:[data-ai-session-pick="${SESSION_A.id}"]`,
   "wait:600",
-  // ⑤ 读切换后的对话正文
-  "probe:.ai-thread"
+  // ⑤ 读切换后的对话区：容器 + 消息节点
+  "probe:.ai-thread,.ai-msg*"
 ].join("; ");
 
 function runShot({ userDataDir, shotPath, domPath }) {
@@ -279,7 +279,7 @@ async function main() {
     `列表里正好 2 个会话（实际 ${rows.length} 个）—— 多一个说明读了历史残留，少一个说明预置没生效`
   );
 
-  // ---- 断言 2：顺序按 updatedAt 降序（B「排查掉帧问题」在前、A 在后）----
+  // ---- 断言 2：顺序按 updatedAt 降序（B 在前、A 在后）----
   const titles = probeAll(".ai-session-title");
   check(titles.length === 2, `读到 2 个标题（实际 ${titles.length}）`);
   if (titles.length === 2) {
@@ -302,16 +302,22 @@ async function main() {
     check(subs[1].text.includes("2 条"), `第 2 行副标题含「2 条」（A 有 2 条消息，实际「${subs[1].text}」）`);
   }
 
-  // ---- 断言 4：点 B 行后 .ai-thread 变成 B 的消息 ----
+  // ---- 断言 4：点非 active 的 A 后，对话区渲染出 A 的消息 ----
   const threads = seq.filter((x) => x.phase === "probe" && x.selector === ".ai-thread" && x.found);
   const threadText = threads.map((t) => t.text ?? "").join(" ");
+  const msgs = probeAll(".ai-msg");
+  check(msgs.length >= 2, `对话区有消息节点（A 有 2 条消息，实际 ${msgs.length} 个节点）`);
+
+  const msgText = msgs.map((m) => m.text ?? "").join(" ");
   check(
-    threadText.includes("掉帧") || threadText.includes("渲染耗时") || threadText.includes("场景图重建"),
-    `点 B 行后 .ai-thread 显示 B 的消息（实际前 160 字：${threadText.slice(0, 160) || "空"}）`
+    msgText.includes("重构一下玩家移动")
+      || msgText.includes("MoveController")
+      || threadText.includes("重构一下玩家移动"),
+    `切换后显示 A 的消息（消息节点：${msgText.slice(0, 120) || "空"}；容器：${threadText.slice(0, 80) || "空"}）`
   );
   check(
-    !threadText.includes("重构一下玩家移动"),
-    ".ai-thread 已切换（不再显示 A 的消息，说明内容真的被替换而不是追加）"
+    !msgText.includes("掉帧") && !threadText.includes("掉帧"),
+    "对话区已切换（不再显示 B 的消息，说明内容被替换而不是追加）"
   );
 
   return finish(runDir, failures, warnings);
@@ -332,8 +338,9 @@ async function finish(runDir, failures, warnings) {
       "\n  最可能的原因：\n"
       + "    1. 会话入口锚点不是 [data-ai-sessions] → 看 aiSessions.ts\n"
       + "    2. 会话行锚点不是 [data-ai-session-pick=<id>] / 行类名不是 .ai-session-row\n"
-      + "    3. 列表未按 updatedAt 降序（请查 aiSessions.ts 的排序）\n"
-      + "    4. 副标题格式不是「N 条 · 时间」（见 sessionSubtitle）"
+      + "    3. 列表未按 updatedAt 降序（主进程应发毫秒数字，见 toEpochMs）\n"
+      + "    4. 副标题格式不是「N 条 · 时间」（见 sessionSubtitle）\n"
+      + "    5. 切换后消息没渲染（看 aiPanel.ts 的 replaceThreadFromMessages）"
     );
     return 1;
   }
