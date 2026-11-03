@@ -91,6 +91,15 @@ const host = {
   recentProjects() {
     return invoke("bwe:recent-projects");
   },
+  // ---------- 项目知识库 ----------
+  // 两个通道都返回 {ok, ...}，**永不抛错**：知识库是旁路功能，
+  // 面板读到空列表应表现为「还没有沉淀」，而不是弹一个红条说 IPC 坏了。
+  knowledgeList() {
+    return invoke("bwe:knowledge-list");
+  },
+  knowledgeProject(key, limit) {
+    return invoke("bwe:knowledge-project", { key: String(key ?? ""), limit: Number(limit) || 80 });
+  },
   revealInExplorer(path) {
     return invoke("bwe:reveal-in-explorer", String(path ?? ""));
   },

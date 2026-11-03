@@ -22,6 +22,13 @@ import { addModel, setActiveModel } from "./ai/modelCatalog.mjs";
 import { parseTapSeq, runTapSequence } from "./tapSeq.mjs";
 import { probeModelEndpoint, PROBE_TIMEOUT_MS } from "./ai/probe.mjs";
 import { createToolCache } from "./ai/prune.mjs";
+import {
+  listProjects as listKnowledgeProjects,
+  openKnowledge,
+  projectKeyOf,
+  readKnowledgeIndexForDir,
+  readKnowledgeRoundsForDir
+} from "./ai/knowledge.mjs";
 import { openSession, workspaceHash } from "./ai/session.mjs";
 import { createConversationStore, DEFAULT_TITLE } from "./ai/conversations.mjs";
 import { createRecentStore } from "./recent.mjs";
@@ -71,6 +78,7 @@ function parseArgs(argv) {
     else if (arg.startsWith("--tap-seq=")) out.tapSeq = stripQuotes(arg.slice("--tap-seq=".length));
     else if (arg.startsWith("--e2e-script=")) out.e2eScript = stripQuotes(arg.slice("--e2e-script=".length));
     else if (arg.startsWith("--e2e-out=")) out.e2eOut = stripQuotes(arg.slice("--e2e-out=".length));
+    else if (arg === "--e2e-main-ai") out.e2eMainAi = true;
     else if (arg === "--protocol-live") out.protocolLive = true;
     else if (arg.startsWith("--size=")) {
       const m = /^(\d+)x(\d+)$/.exec(stripQuotes(arg.slice("--size=".length)));
@@ -242,6 +250,13 @@ let mainWindow = null;
 let windowState = null;
 let api = null;
 let ai = null;
+/**
+ * 项目知识库门面（按工程惰性分片，见主启动函数里的定义）。
+ *
+ * 放在模块级是因为 IPC 面板要读它（`bwe:knowledge-*`），而它由启动流程创建。
+ * 为 null 表示还没初始化（探针/只读模式下会一直为 null，面板应优雅降级）。
+ */
+let knowledge = null;
 let settingsStore = null;
 let recentStore = null;
 /** 供 --ipc-probe 调用的业务函数集合（在 registerIpc 里填充）。 */
@@ -329,12 +344,55 @@ app.whenReady().then(async () => {
     });
     const apiIndex = createApiIndex(defaultApiDocsPath(REPO_ROOT));
     const toolCache = createToolCache(join(USER_DATA_DIR, "toolCache"));
+    /**
+     * 项目知识库：**按工程身份惰性打开**，而不是在 bridge 创建时锁死一个工程。
+     *
+     * 为什么必须惰性：知识库按工程分片，用户在编辑器里切工程后，AI 的下一轮就该记到
+     * 新工程名下。创建时锁死 = 用户切了工程还在往旧工程写记忆（错误数据，且无感）。
+     *
+     * 为什么缓存实例：同一工程连续多轮不该反复 mkdir / 读 index（每轮读盘是浪费）。
+     * 缓存键用 `projectKeyOf` 算出的项目键（与磁盘目录名一致）——不能拿工程名当键：
+     * 两个同名工程会被缓存成同一个实例，记忆又串了。
+     */
+    const knowledgeRoot = join(USER_DATA_DIR, "knowledge");
+    const knowledgeCache = new Map();
+    knowledge = {
+      root: knowledgeRoot,
+      /**
+       * 取（或打开）某个工程的知识库实例。
+       * @param {{name:string, file?:string}} project 工程身份（来自 request.context.project）
+       */
+      async resolveFor(project) {
+        const identity = projectKeyOf(project ?? {});
+        if (knowledgeCache.has(identity.key)) return knowledgeCache.get(identity.key);
+        const kb = await openKnowledge({ root: knowledgeRoot, project: project ?? {} });
+        knowledgeCache.set(identity.key, kb);
+        return kb;
+      },
+      /**
+       * 面板用：列出知识库里的全部工程（直接读目录，不信任何总索引）。
+       * ⚠ 必须用 import 的别名 `listKnowledgeProjects`：这里的方法也叫 listProjects，
+       *   裸写 `listProjects(...)` 会解析成**这个方法自己** → 无限递归（栈溢出）。
+       */
+      async listProjects() {
+        return listKnowledgeProjects(knowledgeRoot);
+      },
+      /** 面板用：取某个项目的最近若干轮要点。 */
+      async readProject(key, limit = 80) {
+        return readKnowledgeRoundsForDir(join(knowledgeRoot, String(key ?? "")), limit);
+      }
+    };
     ai = createAiBridge({
       session: activeSession,
       repoRoot: REPO_ROOT,
       workspaceRoot: REPO_ROOT,
       apiIndex,
       toolCache,
+      /**
+       * 项目知识库（每轮 AI 执行完沉淀，按工程分片）。
+       * bridge 负责判断"这轮属于哪个工程"，宿主负责"怎么打开并缓存实例"。
+       */
+      knowledge,
       getSettings: () => settingsStore.load(),
       // 会话列表归 conversations 存储管；桥只用来在 aiStatus 里报「当前是哪个会话、共几个」。
       getSessionInfo: async () => {
@@ -858,6 +916,36 @@ function registerIpc() {
   ipcMain.handle("bwe:open-project", async () => handleOpenProject());
   ipcMain.handle("bwe:save-project", async (_e, payload) => handleSaveProject(payload ?? {}));
   ipcMain.handle("bwe:recent-projects", async () => recentStore.list());
+
+  // ---- 项目知识库 ----
+  //
+  // 两组通道都**永不抛错**：知识库是旁路功能，面板读到空列表/空轮次应该表现为
+  // 「还没有沉淀」，而不是"弹一个红条说 IPC 坏了"。
+  ipcMain.handle("bwe:knowledge-list", async () => {
+    try {
+      if (!knowledge) return { ok: true, root: "", projects: [] };
+      const projects = await knowledge.listProjects();
+      return { ok: true, root: knowledge.root, projects };
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e), projects: [] };
+    }
+  });
+  ipcMain.handle("bwe:knowledge-project", async (_e, payload) => {
+    const key = String(payload?.key ?? "");
+    const limit = Math.max(1, Math.min(500, Number(payload?.limit) || 80));
+    try {
+      if (!knowledge) return { ok: true, key, index: null, rounds: [] };
+      // ⚠ key 直接来自面板，必须挡住路径穿越：它是目录名，不能含 / \ 或 ..
+      if (!key || /[\\/]/.test(key) || key === "." || key === "..") {
+        return { ok: false, key, error: "非法的项目键（必须是目录名，不能含路径分隔符）", rounds: [] };
+      }
+      const rounds = await knowledge.readProject(key, limit);
+      const index = await readKnowledgeIndexForDir(join(knowledge.root, key));
+      return { ok: true, key, index, rounds };
+    } catch (e) {
+      return { ok: false, key, error: e?.message || String(e), rounds: [] };
+    }
+  });
   ipcMain.handle("bwe:reveal-in-explorer", async (_e, path) => {
     try {
       const target = String(path || REPO_ROOT);
@@ -2129,12 +2217,56 @@ async function runShotMode() {
     try {
       const { readFile, writeFile } = await import("node:fs/promises");
       const code = await readFile(ARGS.e2eScript, "utf8");
-      const result = await mainWindow.webContents.executeJavaScript(code, true);
+      /**
+       * 端到端脚本的两种用法：
+       *   1. 纯渲染侧脚本（默认）：直接 executeJavaScript，结果写盘。
+       *   2. `--e2e-main-ai`：脚本返回的是**对话清单**（JSON），由**主进程**自己调 bridge 逐轮跑。
+       *
+       * 为什么需要第 2 种：AI bridge 在**主进程**里，而验证"每轮沉淀"必须真的跑完 run()。
+       * 渲染侧无法直接 await 一轮对话（IPC 是事件流），硬桥接会引入一层与生产不一致的转发代码 ——
+       * 那种"为了测试造一条通路"的做法，测出来的往往不是真实链路。
+       * 所以让主进程亲自跑，走的就是用户发消息时同一条 aiChat 路径。
+       */
+      let payload;
+      if (ARGS.e2eMainAi) {
+        const plan = JSON.parse(code);
+        const steps = [];
+        for (const step of plan.rounds ?? []) {
+          try {
+            await ai.aiChat({
+              requestId: String(step.requestId ?? ""),
+              messages: [{ role: "user", text: String(step.text ?? "") }],
+              context: {
+                sceneDigest: `工程「${step.project?.name ?? ""}」`,
+                project: step.project ?? undefined
+              },
+              intent: String(step.intent ?? "chat")
+            });
+            await ai.whenIdle();
+            steps.push({ tag: step.requestId, ok: true });
+          } catch (e) {
+            steps.push({ tag: step.requestId, ok: false, error: e?.message || String(e) });
+          }
+        }
+        payload = { steps };
+        // 面板 IPC 的数据也一起取出来：验证「界面上真的看得见」，
+        // 而不是只验证"磁盘上有文件"（后者可能写了但读不出来）。
+        try {
+          payload.knowledge = {
+            list: await knowledge?.listProjects?.(),
+            root: knowledge?.root ?? ""
+          };
+        } catch (e) {
+          payload.knowledge = { error: e?.message || String(e), list: [], root: "" };
+        }
+      } else {
+        payload = await mainWindow.webContents.executeJavaScript(code, true);
+      }
       if (ARGS.e2eOut) {
-        await writeFile(ARGS.e2eOut, JSON.stringify(result, null, 2), "utf8");
+        await writeFile(ARGS.e2eOut, JSON.stringify(payload, null, 2), "utf8");
         console.log(`[e2e] 已写入 ${ARGS.e2eOut}`);
       }
-      console.log(`[e2e] 执行完毕（结果 ${JSON.stringify(result)?.length ?? 0} 字符）`);
+      console.log(`[e2e] 执行完毕（结果 ${JSON.stringify(payload)?.length ?? 0} 字符）`);
     } catch (e) {
       console.error(`[e2e] 失败：${e?.stack || e?.message || e}`);
       process.exitCode = 1;

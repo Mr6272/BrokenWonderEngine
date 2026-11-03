@@ -223,6 +223,69 @@ export function createAiBridge(opts) {
     if (matches.length === 1) return prunedStore.get(matches[0]);
     return null;
   };
+  /**
+   * 当前请求的工程身份（供知识库工具读取"这一轮属于哪个工程"）。
+   *
+   * 为什么用可变引用而不是闭包常量：toolRunner 在 createAiBridge 时创建一次，
+   * 而工程身份是**每次请求**随 `request.context.project` 传进来的。
+   * 用闭包常量会导致"第一轮的项目身份被后续所有轮沿用"——
+   * 用户切了工程，AI 还在查旧工程的经验（错误记忆，比没有更糟）。
+   * 这和 setSceneDigest 是同一个坑，用同一个解法。
+   */
+  let currentProjectIdentity = null;
+  const knowledgeRunner = async (name, args) => {
+    if (!opts.knowledge) {
+      return { error: "没有接知识库", text: "当前宿主没有接知识库，检索历史经验不可用。" };
+    }
+    const project = currentProjectIdentity;
+    if (!project || !String(project.name ?? "").trim()) {
+      return {
+        error: "缺少工程身份",
+        text: "这一轮没有携带工程身份，无法检索历史经验（知识库按工程分片）。请基于代码与工程摘要作答。"
+      };
+    }
+    const kb = opts.knowledge.resolveFor ? await opts.knowledge.resolveFor(project) : opts.knowledge;
+
+    if (name === "ReadKnowledge") {
+      const limit = Math.max(1, Math.min(20, Number(args?.limit) || 8));
+      const rounds = await kb.readRounds({ limit });
+      if (!rounds.length) {
+        return {
+          text: `工程「${project.name}」还没有任何历史经验沉淀（这是第一次在这个项目里工作）。`,
+          meta: { kind: "knowledge-read", count: 0 }
+        };
+      }
+      const lines = [`工程「${project.name}」最近 ${rounds.length} 轮的经验（新的在前）：`];
+      for (const r of rounds) {
+        lines.push("");
+        lines.push(`· ${r.at ?? ""} · ${r.summary ?? ""}`);
+        for (const p of r.points ?? []) lines.push(`  - ${p}`);
+      }
+      return { text: lines.join("\n"), meta: { kind: "knowledge-read", count: rounds.length } };
+    }
+
+    // SearchKnowledge
+    const query = String(args?.query ?? "").trim();
+    if (!query) throw new Error("SearchKnowledge 缺少 query");
+    const limit = Math.max(1, Math.min(12, Number(args?.limit) || 6));
+    const hits = await kb.search(query, { limit });
+    if (!hits.length) {
+      return {
+        text:
+          `工程「${project.name}」的历史经验里没有匹配「${query}」的内容。`
+          + "这说明这个项目还没沉淀过相关经验 —— **不要据此编造历史**，直接用代码与工程摘要作答。",
+        meta: { kind: "knowledge-search", query, count: 0 }
+      };
+    }
+    const lines = [`工程「${project.name}」的历史经验里找到 ${hits.length} 条匹配「${query}」：`];
+    for (const h of hits) {
+      lines.push("");
+      lines.push(`· ${h.at ?? ""}（${h.summary ?? ""}）`);
+      lines.push(`  - ${h.point}`);
+    }
+    return { text: lines.join("\n"), meta: { kind: "knowledge-search", query, count: hits.length } };
+  };
+
   const toolRunner = createToolRunner({
     repoRoot: opts.repoRoot,
     workspaceRoot: opts.workspaceRoot,
@@ -242,8 +305,108 @@ export function createAiBridge(opts) {
      * 真正的改写在渲染侧执行（自带 markDirty + commit 快照 → 用户可 Ctrl+Z 撤销）。
      * 由 app-main 注入（见 createAiBridge 的 opts.scriptRunner）。
      */
-    scriptRunner: opts.scriptRunner
+    scriptRunner: opts.scriptRunner,
+    /**
+     * 知识库类工具的执行器：**只读、且只读当前工程**。
+     * 它需要知道"这一轮属于哪个工程"，所以读的是 bridge 里那个每请求更新的
+     * `currentProjectIdentity`（见其注释）。
+     */
+    knowledgeRunner
   });
+
+  /**
+   * 把**这一轮**沉淀进当前项目的知识库。
+   *
+   * 由 `run()` 在第 6.5 步调用（会话已落盘、done 尚未发出）。
+   * 调用方负责 try/catch —— 这里**不再吞异常**：吞掉会让"知识库到底是没配还是写坏了"
+   * 无法区分。让异常冒到那一层的 catch 里统一记日志，语义更清楚。
+   *
+   * @param {object} ctx 本轮全部运行事实
+   */
+  async function persistRoundKnowledge(ctx) {
+    // 没配知识库 = 正常情况（例如单测/只读探针），安静跳过，不要每轮刷日志。
+    if (!opts.knowledge) return;
+
+    const project = ctx.request?.context?.project;
+    // 没带工程身份 → 不知道这轮的沉淀属于哪个项目。
+    // ⚠ 不要"落到一个未知工程"里：那会变成一个永远检索不到的垃圾桶，
+    //   而且用户完全无感。宁可这一轮不记，并在日志里留痕（真出问题时能查）。
+    if (!project || typeof project !== "object" || !String(project.name ?? "").trim()) {
+      log("知识库：本轮没有工程身份（context.project 缺失），跳过沉淀");
+      return;
+    }
+
+    /**
+     * 取**这个工程**的库实例。
+     *
+     * 为什么由 bridge 调 `resolveFor` 而不是宿主直接给一个 appendRound：
+     * 工程身份只有 bridge 知道（它来自 request.context）。宿主负责"怎么打开/缓存"，
+     * bridge 负责"这一轮属于哪个工程" —— 职责分开，切工程时不会写错项目。
+     */
+    const kb = opts.knowledge.resolveFor ? await opts.knowledge.resolveFor(project) : opts.knowledge;
+    if (!kb || typeof kb.appendRound !== "function") {
+      log("知识库：实例不可用（resolveFor 返回空），跳过沉淀");
+      return;
+    }
+
+    // 工具轨迹 → 脚本写操作的**结构化**记录（知识库按它聚合"改了哪个脚本"）。
+    //
+    // 为什么从 toolTrace.meta 取而不是解析工具输出文本：meta 是机器可读事实，
+    // 输出文本是面向模型的自然语言，格式一改就静默失效（本仓库踩过同类事故）。
+    const scriptOps = [];
+    for (const c of ctx.toolTrace ?? []) {
+      const meta = c?.meta;
+      if (!meta || meta.kind !== "script-op") continue;
+      scriptOps.push({
+        tool: String(meta.tool ?? c.name ?? ""),
+        name: String(meta.name ?? ""),
+        ok: meta.ok !== false && c.ok !== false,
+        changed: Boolean(meta.changed),
+        reason: String(meta.reason ?? "")
+      });
+    }
+
+    const incoming = (ctx.request?.messages ?? []).filter((m) => m?.role === "user");
+    const userText = String(incoming[incoming.length - 1]?.text ?? "");
+
+    await kb.appendRound(
+      {
+        intent: String(ctx.request?.intent ?? ""),
+        userText,
+        answerText: String(ctx.finalText ?? ""),
+        toolCalls: ctx.toolTrace ?? [],
+        scriptOps,
+        stopReason: ctx.stopReason ?? null,
+        model: String(ctx.model ?? ""),
+        rounds: ctx.rounds,
+        elapsedMs: ctx.elapsedMs,
+        usage: ctx.usage
+      },
+      {
+        requestId: String(ctx.requestId ?? ""),
+        // 会话 id 取会话目录名（与 conversations 的 id 一致），用于"同一工程不同会话"的关联
+        sessionId: String(ctx.targetSession?.dir ?? "").split(/[\\/]/).filter(Boolean).pop() ?? ""
+      }
+    );
+
+    // 顺手把"这个项目现在攒了多少"告诉界面：知识库看不见摸不着，至少要有个数
+    // （否则用户永远不知道这个功能到底有没有在工作）。
+    try {
+      const stats = await kb.stats?.();
+      if (stats) {
+        emit({
+          type: "knowledge",
+          requestId: String(ctx.requestId ?? ""),
+          project: String(project.name ?? ""),
+          key: String(kb.key ?? ""),
+          roundCount: Number(stats.roundCount) || 0,
+          pointCount: Number(stats.pointCount) || 0
+        });
+      }
+    } catch {
+      // 统计失败不影响沉淀本身
+    }
+  }
   const running = new Map(); // requestId → { abort: AbortController, cancelled:boolean }
   let lastUsage = emptyUsage();
   let sessionUsage = emptyUsage("session-total");
@@ -833,6 +996,15 @@ export function createAiBridge(opts) {
     toolRunner.setSceneDigest?.(request?.context?.sceneDigest ?? null);
 
     /**
+     * 注入**本请求**的工程身份，供知识库工具检索"这个项目"的历史经验。
+     *
+     * ⚠ 必须每次 run() 都覆盖写（含写 null）：toolRunner 是单例，
+     * 如果只在有值时才赋值，用户切到一个"没有工程身份"的请求时，
+     * AI 会拿着**上一个工程**的经验作答 —— 那是最糟的一种错（自信地用错记忆）。
+     */
+    currentProjectIdentity = request?.context?.project ?? null;
+
+    /**
      * 同一工具**同一参数**的连续失败次数（成功一次即清零）。
      *
      * ⚠ 键必须是「工具名 + 参数指纹」，不能只用工具名。
@@ -1170,7 +1342,20 @@ export function createAiBridge(opts) {
         messages.push(assistantTurn);
 
         for (const { call, prune, out } of executed) {
-          toolTrace.push({ name: call.name, arg: toolRunner.describeArg(call), pruned: prune.pruned });
+          toolTrace.push({
+            name: call.name,
+            arg: toolRunner.describeArg(call),
+            pruned: prune.pruned,
+            /**
+             * 成败与结构化 meta 也带上 —— **知识库要用它提取"改过哪些脚本"**。
+             *
+             * 为什么不能事后从 prune.text 猜：那需要正则解析面向模型的自然语言结果，
+             * 属于「拿展示文本当数据源」，格式一改就静默失效（本仓库踩过同类事故）。
+             * 工具的 `out.meta` 才是机器可读的事实（scriptOps 的 ok/reason/name 都在里面）。
+             */
+            ok: !out?.error,
+            meta: out?.meta ?? null
+          });
           messages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -1275,6 +1460,35 @@ export function createAiBridge(opts) {
       await opts.onSessionUpdated?.(targetSession, incoming[0]?.text ?? "");
     } catch (e) {
       log(`会话索引更新失败（不影响对话）：${e?.message || e}`);
+    }
+
+    // ---- 6.5 项目知识库沉淀（每轮一条，按工程分片）----
+    //
+    // 用户要求：「每一次 AI 执行完，都会把当前项目沉淀到知识库内，每个项目独立」。
+    //
+    // ⚠ 三条纪律：
+    //   1. **失败必须隔离**：知识库是旁路，任何异常只能记日志。用户刚拿到的回答
+    //      绝不能因为「知识库目录不可写」而丢掉 —— 那是最不可接受的失败形态。
+    //   2. **await 之后再 emit(done)**：done 是"本轮结束"的信号，界面据此收尾。
+    //      先 done 再写库会让"界面已结束、后端还在写"这种时序不可观测（排查困难）。
+    //      代价是 done 晚几毫秒 —— 写一个几十行的 JSONL 是毫秒级，可接受。
+    //   3. 只沉淀**这一轮**：不重新扫全部历史（那会重复记账，且随对话变慢）。
+    try {
+      await persistRoundKnowledge({
+        request,
+        targetSession,
+        finalText,
+        toolTrace,
+        stopReason,
+        usage,
+        rounds,
+        toolCallsUsed,
+        elapsedMs: Date.now() - runStartedAt,
+        model: resolved.model,
+        requestId
+      });
+    } catch (e) {
+      log(`知识库沉淀失败（不影响对话）：${e?.message || e}`);
     }
 
     // ---- 6. done ----
@@ -1386,7 +1600,9 @@ export function createAiBridge(opts) {
         "ReadScript",
         "WriteScript",
         "PatchScript",
-        "DeleteScript"
+        "DeleteScript",
+        "SearchKnowledge",
+        "ReadKnowledge"
       ]) {
         if (!defs.includes(must)) warnings.push(`工具定义缺 ${must}（模型无法调用它）`);
       }
@@ -1401,6 +1617,17 @@ export function createAiBridge(opts) {
         warnings.push(
           "脚本写类工具（WriteScript/PatchScript/DeleteScript…）没有渲染侧执行器（scriptRunner）→ "
           + "模型无法真正改脚本，只会反复拿到「未接线」。宿主必须注入它。"
+        );
+      }
+      /**
+       * 知识库同理：工具描述承诺「能查这个项目的历史经验」，没接线就是承诺空转。
+       * 而且它的失效形态比脚本工具更隐蔽 —— 模型会以为"查了，没有相关经验"，
+       * 于是重复踩同一个坑，用户完全看不出是功能没接上。
+       */
+      if (!opts.knowledge) {
+        warnings.push(
+          "知识库未接入（opts.knowledge 缺失）→ SearchKnowledge/ReadKnowledge 会答「未接线」，"
+          + "且每轮执行完不会沉淀任何项目经验。"
         );
       }
       // 剪枝提示指向的续读能力必须真的可达：内存或磁盘至少有一条通路。
@@ -1430,8 +1657,7 @@ export function createAiBridge(opts) {
 }
 
 /** 意图 → 一段固定的补充指令（常量，不含易变内容）。 */
-function intentHint(intent) {
-  if (intent === "explain-error") {
+function intentHint(intent) {  if (intent === "explain-error") {
     return "【本轮意图：解释错误】先定位是哪一行、为什么错，再给最小修改；不要重写整段脚本。";
   }
   if (intent === "edit-script") {

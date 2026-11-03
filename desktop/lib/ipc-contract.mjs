@@ -346,6 +346,34 @@ export const IPC_CONTRACT = {
       + "与网页版 POST /api/script-quickinfo 共用同一套语言服务。"
   },
 
+  // ---------------- 项目知识库 -------------
+
+  "bwe:knowledge-list": {
+    preload: "knowledgeList",
+    kind: "invoke",
+    params: "无",
+    returns: ["ok", "root", "projects"],
+    returnsOnError: ["ok", "error", "projects"],
+    notes:
+      "列出知识库里的**所有工程**（每个工程一份独立记忆，按「工程名 + 路径 hash」分片）。"
+      + "projects 每项 { key, name, file, createdAt, updatedAt, roundCount, pointCount, lastSummary }。"
+      + "⚠ 实现是**直接扫目录**，不依赖任何总索引：目录是唯一真相。"
+      + "（历史教训：会话 index.json 损坏时 UI 显示「全没了」，而内容其实都在盘上。）"
+      + "root 给出来是为了让用户能「在资源管理器里打开知识库」，不至于找不到文件在哪。"
+  },
+  "bwe:knowledge-project": {
+    preload: "knowledgeProject",
+    kind: "invoke",
+    params: "{ key: string, limit?: number }",
+    returns: ["ok", "key", "index", "rounds"],
+    returnsOnError: ["ok", "key", "error", "rounds"],
+    notes:
+      "读某个工程的最近若干轮沉淀（rounds 每项 = rounds.jsonl 的一行，新的在前）。"
+      + "key 必须是 knowledgeList 返回的**目录名** —— 不要拿工程名去猜："
+      + "工程名与目录名不是一回事（目录名经过安全化、并带路径 hash 后缀）。"
+      + "坏行会被跳过（JSONL 的意义），所以「读到的条数少于 index.roundCount」是正常现象，不是错误。"
+  },
+
   // ---------------- 日志 -------------
   "bwe:log-tail": {
     preload: "（未暴露，调试用）",
@@ -362,7 +390,7 @@ export const IPC_CONTRACT = {
     params: "AiEvent（见契约 §4.2）",
     returns: [],
     // 事件类型清单必须完整：漏一种，UI 就静默丢弃它（而"丢掉一个事件"不会报错）。
-    eventTypes: ["route", "thinking", "delta", "tool", "usage", "done", "error"],
+    eventTypes: ["route", "thinking", "delta", "tool", "usage", "knowledge", "done", "error"],
     notes: AI_EVENT_NOTES
   },
   "menu:command": {

@@ -35,6 +35,16 @@ export class Store {
   project: Project | null = null;
   /** 工程文件句柄（File System Access API 可用时才有）与文件名 */
   fileName = "";
+  /**
+   * 工程在磁盘上的**绝对路径**（桌面版打开 .bwproj 时由主进程告知；网页版/示例工程为空）。
+   *
+   * 为什么单独一个字段而不是复用 fileName：
+   *   fileName 是「文件名」（`扫雷.bwproj`），示例工程甚至只有个显示名；
+   *   而知识库要按「工程名 + 路径 hash」分片，**同名不同路径的两个工程绝不能共用一份记忆**
+   *   （AI 拿 A 工程的经验去改 B 工程，是"错误的自信"，比没有记忆更糟）。
+   *   所以路径必须单独、准确地记下来，不能从文件名推断。
+   */
+  projectPath = "";
   dirty = false;
 
   private _scene: SceneModel | null = null;
@@ -62,15 +72,30 @@ export class Store {
 
   // ---------------- 工程 ----------------
 
-  setProject(p: Project, fileName = ""): void {
+  /**
+   * 换工程。
+   *
+   * ⚠ `projectPath` **必须显式给**（默认空）：不能"沿用上一个工程的值"。
+   * 复用的后果是「打开 A 后打开 B，B 的知识库却记到了 A 名下」——
+   * 用户的记忆被写进别人的项目里，且完全无感（这类数据错位比崩溃更难发现）。
+   */
+  setProject(p: Project, fileName = "", projectPath = ""): void {
     this.project = p;
     this.fileName = fileName;
+    this.projectPath = projectPath;
     this.dirty = false;
     this.selection = [];
     this._scene = p.scenes[0] ?? null;
     this.emitScene();
     this.emitSelection();
     this.emitProject();
+  }
+
+  /** 当前工程的机器可读身份（知识库分片 + AI 请求 context 用）。 */
+  projectIdentity(): { name: string; file?: string } {
+    const name = String(this.project?.name ?? "").trim() || "未命名工程";
+    const file = String(this.projectPath || "").trim();
+    return file ? { name, file } : { name };
   }
 
   /**

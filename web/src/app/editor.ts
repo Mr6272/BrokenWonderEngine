@@ -38,6 +38,7 @@ import { renderSettingsPanel } from "../panels/settingsPanel.ts";
 import { renderSearchPanel } from "../panels/searchPanel.ts";
 import { renderProblemsPanel, renderOutputPanel } from "../panels/bottomPanels.ts";
 import { renderAiPanel, setAiScriptApplyHook, aiPanelSummary, resetAiConversation, requestAiAction } from "../panels/aiPanel.ts";
+import { renderKnowledgePanel } from "../panels/knowledgePanel.ts";
 import { openBwePackager } from "./packageBwe.ts";
 import { renderOutlinePanel } from "../panels/outlinePanel.ts";
 import { openModuleEditor } from "../panels/moduleEditor.ts";
@@ -121,6 +122,8 @@ export class Editor {
   private sidebarRailBtn: HTMLButtonElement | null = null;
   /** AI 栏的收起按钮（文案/提示随折叠态同步） */
   private aiToggleBtn: HTMLButtonElement | null = null;
+  /** AI 栏当前标签：AI 助手 / 项目知识库 */
+  private aiDockTab: "ai" | "kb" = "ai";
   private scriptDirtyDot: HTMLElement | null = null;
 
   constructor() {
@@ -993,10 +996,51 @@ export class Editor {
    * （底部面板切标签会重建，AI 栏常驻）。放一起会让「切到问题面板」把 AI 对话区重建一次，
    * 用户正在看的对话会闪一下。
    */
+  /**
+   * 把 AI 栏的内容渲染出来（两个标签：AI 助手 / 项目知识库）。
+   *
+   * 为什么用标签页而不是两个独立面板：AI 与知识库在**同一个工作面上**使用 ——
+   * 用户问 AI 时想知道"它记了什么"，看知识库时想接着问。分成两个入口会让人来回找。
+   * 标签条很矮（28px），不会吃掉对话区的高度。
+   */
   private renderAiDock(): void {
     if (this.shell.aiPanelCollapsed()) return;
+    const body = this.shell.aiPanelBody;
+    body.replaceChildren();
+
+    // 标签条
+    const bar = el("div", { class: "ai-dock-tabs" });
+    const tabs: Array<{ id: "ai" | "kb"; label: string; icon: keyof typeof I }> = [
+      { id: "ai", label: "AI 助手", icon: "sparkles" },
+      { id: "kb", label: "项目知识库", icon: "explorer" }
+    ];
+    for (const t of tabs) {
+      const b = el("button", {
+        type: "button",
+        class: "ai-dock-tab" + (this.aiDockTab === t.id ? " active" : ""),
+        title: t.id === "kb" ? "每轮 AI 执行完自动沉淀的本工程经验" : "与 AI 对话 / 改脚本",
+        "data-ai-dock-tab": t.id
+      });
+      b.appendChild(svg(I[t.icon] as string, 13));
+      b.appendChild(el("span", null, t.label));
+      b.addEventListener("click", () => {
+        if (this.aiDockTab === t.id) return;
+        this.aiDockTab = t.id;
+        this.renderAiDock();
+      });
+      bar.appendChild(b);
+    }
+    body.appendChild(bar);
+
+    const host = el("div", { class: "ai-dock-content" });
+    body.appendChild(host);
+
+    if (this.aiDockTab === "kb") {
+      renderKnowledgePanel(host, () => this.renderAiDock());
+      return;
+    }
     // AI 面板自己算 sceneDigest、自己订流式事件；外壳只给挂载点与重画回调
-    renderAiPanel(this.shell.aiPanelBody, () => this.renderAiDock());
+    renderAiPanel(host, () => this.renderAiDock());
   }
 
   private setBottomTab(id: "problems" | "output" | "ai"): void {
@@ -1541,7 +1585,14 @@ export class Editor {
 
     const text = result.message;
     if (!result.ok) {
-      return { error: result.reason || "failed", text, meta: { kind: "script-op", name: String(args.name ?? ""), reason: result.reason } };
+      return {
+        error: result.reason || "failed",
+        text,
+        // `tool` 与 `ok` 显式带上：知识库按「工具类型」聚合（WriteScript/PatchScript/DeleteScript
+        // 的语义完全不同，只靠 name 分不出来）；`ok:false` 是业务拒绝，要原样记进知识库
+        // ——「为什么被拒绝」正是以后"别再这么写"的线索。
+        meta: { kind: "script-op", tool: name, ok: false, name: String(args.name ?? ""), reason: result.reason }
+      };
     }
 
     // 只有**真的改了内容**才写回（幂等无变化时不产生一次无意义的撤销步骤）
@@ -1552,6 +1603,8 @@ export class Editor {
       text,
       meta: {
         kind: "script-op",
+        tool: name,
+        ok: true,
         name: result.name,
         changed: Boolean(result.changed),
         // 行数变化给工具块显示，便于用户一眼看出「改了多大一片」
@@ -2199,10 +2252,17 @@ export class Editor {
 
   // --------- 对外 ---------
 
-  setProject(p: unknown, fileName = ""): void {
+  /**
+   * 换工程。
+   *
+   * @param fileName    显示用文件名（标题栏/另存为默认名）
+   * @param projectPath **磁盘绝对路径**（知识库分片用）。桌面版打开 .bwproj 时由主进程给；
+   *                    示例工程/新建工程没有 → 传空，知识库按"只有名字"归档。
+   */
+  setProject(p: unknown, fileName = "", projectPath = ""): void {
     const normalized = normalizeProject(p);
     this.ensureTemplates(normalized);
-    store.setProject(normalized, fileName);
+    store.setProject(normalized, fileName, projectPath);
     this.refreshPanels();
     this.canvas.zoomToFit();
     appendOutput("编辑器", `已载入工程「${normalized.name}」：${normalized.scenes.length} 场景 / ${normalized.assets.length} 素材`);

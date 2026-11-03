@@ -656,7 +656,7 @@ test("M3: toolWiringReport 必须能查出「剪枝续读通路断了」（这�
   assert.ok(!report.some((w) => /工具定义缺/.test(w)), `工具定义应齐全：${report.join(" | ")}`);
 });
 
-test("M4: 配了 toolCache + scriptRunner 时 toolWiringReport 应无告警（正常接线）", async () => {
+test("M4: 配了 toolCache + scriptRunner + knowledge 时 toolWiringReport 应无告警（正常接线）", async () => {
   const dir = await tmpDir();
   const session = await openSession({ dir, workspace: REPO });
   const bridge = createAiBridge({
@@ -668,11 +668,54 @@ test("M4: 配了 toolCache + scriptRunner 时 toolWiringReport 应无告警（�
     // ⚠ 脚本写类工具的执行器现在也是「接线」的一部分：只读时代的「完整接线」定义已过时。
     //    少它就该告警，所以这条夹具必须一起补上，否则它断言的是旧世界。
     scriptRunner: async (name, args) => ({ text: `stub:${name}:${JSON.stringify(args ?? {})}` }),
+    // 知识库同理：工具描述承诺「能查这个项目的历史经验」，没接线就是承诺空转。
+    knowledge: {
+      async resolveFor() {
+        return {
+          key: "stub",
+          async appendRound() {
+            return {};
+          },
+          async readRounds() {
+            return [];
+          },
+          async search() {
+            return [];
+          },
+          async stats() {
+            return { roundCount: 0, pointCount: 0 };
+          }
+        };
+      }
+    },
     getSettings: async () => ({ ai: { provider: "mock", models: [], maxTokens: 16384 } }),
     sendEvent: () => {},
     log: () => {}
   });
   assert.deepEqual(bridge.toolWiringReport(), [], "接线完整时不该有任何告警");
+});
+
+test("M4c: 反向锁 —— 没接知识库时，检索能力的断裂必须被自检报出来", async () => {
+  // 为什么：知识库失效的形态最隐蔽 —— 模型会以为「查了，没有相关经验」，
+  // 于是重复踩同一个坑，而用户完全看不出是功能没接上。
+  const dir = await tmpDir();
+  const session = await openSession({ dir, workspace: REPO });
+  const bridge = createAiBridge({
+    session,
+    repoRoot: REPO,
+    workspaceRoot: REPO,
+    apiIndex: createApiIndex(defaultApiDocsPath(REPO)),
+    toolCache: createToolCache(join(dir, "tc")),
+    scriptRunner: async () => ({ text: "stub" }),
+    getSettings: async () => ({ ai: { provider: "mock", models: [], maxTokens: 16384 } }),
+    sendEvent: () => {},
+    log: () => {}
+  });
+  const report = bridge.toolWiringReport();
+  assert.ok(
+    report.some((w) => /知识库未接入/.test(w)),
+    `没接知识库时必须告警，实际：${report.join(" | ")}`
+  );
 });
 
 test("M4b: 反向锁 —— 没注入 scriptRunner 时，写类工具的断裂必须被自检报出来", async () => {

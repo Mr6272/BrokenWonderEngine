@@ -189,6 +189,42 @@ export function toolDefinitions() {
           required: ["name"]
         }
       }
+    },
+    // ------------------------------------------------------------------
+    // 知识库（只读**当前工程**的历史经验，不跨项目）
+    // ------------------------------------------------------------------
+    {
+      type: "function",
+      function: {
+        name: "SearchKnowledge",
+        description:
+          "在当前工程的**历史经验**里检索（每次 AI 执行完都会自动沉淀，只属于这个工程）。"
+          + "遇到「这个项目以前踩过什么坑」「上次改这里时注意过什么」「同样的错误是不是又犯了一次」时先查它。"
+          + "返回若干条要点（含日期与那一轮的概括）。查不到就说明这个项目还没沉淀过相关内容，不要编。",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "关键词，1~3 个短词最佳，如 \"碰撞 节点\" 或 \"速度 脚本\"" },
+            limit: { type: "integer", description: "最多返回几条，默认 6，上限 12" }
+          },
+          required: ["query"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "ReadKnowledge",
+        description:
+          "读当前工程最近的历史经验（不需要关键词，按时间倒序）。"
+          + "接手一个不熟悉的工程、或想知道「之前这个 AI 在这里做过什么改动」时用它。",
+        parameters: {
+          type: "object",
+          properties: {
+            limit: { type: "integer", description: "最多返回几轮，默认 8，上限 20" }
+          }
+        }
+      }
     }
   ];
 }
@@ -203,8 +239,20 @@ export const TOOL_NAMES = [
   "ReadScript",
   "WriteScript",
   "PatchScript",
-  "DeleteScript"
+  "DeleteScript",
+  "SearchKnowledge",
+  "ReadKnowledge"
 ];
+
+/**
+ * 知识库类工具：**只读、且只读当前工程**。
+ *
+ * 由 bridge 通过 `opts.knowledgeRunner` 执行（它知道这一轮属于哪个工程）。
+ * 之所以不给 WriteKnowledge：沉淀是**自动**的（每轮结束由系统写入，零模型介入）。
+ * 让模型自己决定"要不要记"会带来两个问题：① 它会漏记；② 它会记入"自认为重要"的内容，
+ * 而真正有用的失败原因反而被忽略。自动沉淀 + 模型只读，职责才清楚。
+ */
+export const KNOWLEDGE_TOOLS = ["SearchKnowledge", "ReadKnowledge"];
 
 /**
  * 必须在**渲染侧**（工程权威副本）执行的工具。
@@ -451,6 +499,27 @@ export function createToolRunner(opts) {
     return { text, meta: { tool: name, ...(out?.meta ?? {}) } };
   }
 
+  /**
+   * 知识库类工具：**只读当前工程的历史经验**。
+   *
+   * 执行器由 bridge 注入（`opts.knowledgeRunner`）—— 它才知道"这一轮属于哪个工程"。
+   * 没接线时明确答"不可用"，而不是返回空结果：
+   * 空结果会让模型以为"这个项目没有历史经验"，于是放弃检索、重复踩坑。
+   * 说清"检索能力当前不可用"它才会改用别的依据。
+   */
+  async function knowledgeTool(name, args) {
+    if (typeof opts.knowledgeRunner !== "function") {
+      throw new Error(
+        `工具 ${name} 未接线：本轮没有可用的知识库执行器。`
+        + "请直接基于工程摘要与代码作答，不要假设「查过、没有相关经验」。"
+      );
+    }
+    const out = await opts.knowledgeRunner(name, args);
+    const text = String(out?.text ?? "");
+    if (out?.error) return { error: String(out.error), text: `工具 ${name} 失败：${out.error}`, meta: { tool: name } };
+    return { text, meta: { tool: name, ...(out?.meta ?? {}) } };
+  }
+
   return {
     definitions: toolDefinitions(),
     /**
@@ -470,6 +539,7 @@ export function createToolRunner(opts) {
         if (name === "SceneDigest") return await sceneDigestTool(args);
         if (name === "SearchApi") return await searchApiTool(args);
         if (SCRIPT_TOOLS.includes(name)) return await scriptTool(name, args);
+        if (KNOWLEDGE_TOOLS.includes(name)) return await knowledgeTool(name, args);
         throw new Error(`未知工具「${name}」（可用：${TOOL_NAMES.join(" / ")}）`);
       } catch (e) {
         return { error: e?.message || String(e), text: `工具 ${name} 执行失败：${e?.message || e}`, meta: { tool: name } };

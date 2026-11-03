@@ -382,6 +382,23 @@ function handleAiEvent(ev: AiEvent): void {
   if (!ev || typeof ev !== "object" || !("type" in ev)) return;
   if (!("requestId" in ev) || ev.requestId !== currentRequest) return;
 
+  /**
+   * 知识库沉淀事件：广播给知识库面板（它是同一 AI 栏里的另一个标签页）。
+   *
+   * 为什么用 window 事件而不是直接调 knowledgePanel：两者是独立渲染树，
+   * 直接 import 会形成「AI 面板 ⇄ 知识库面板」的双向耦合（且 AI 面板被
+   * 全量重画时对方的 DOM 状态不可控）。广播事件让两边都只依赖一个约定名。
+   */
+  if ((ev as { type: string }).type === "knowledge") {
+    try {
+      const k = ev as unknown as { project: string; key?: string; roundCount: number; pointCount: number };
+      window.dispatchEvent(new CustomEvent("bwe:knowledge-updated", { detail: k }));
+    } catch {
+      // 广播失败不该影响对话（这里只是顺带刷新一个旁路面板）
+    }
+    return; // 知识库事件不影响对话流，交出去就结束
+  }
+
   const live = liveAssistantTurn();
 
   switch (ev.type) {
@@ -2369,6 +2386,16 @@ function promptLabel(intent: AiChatRequest["intent"]): string {
 /** 按 intent 裁剪上下文：只发与本次动作相关的部分，直接决定贵不贵。 */
 function buildContext(intent: AiChatRequest["intent"]): AiChatRequest["context"] {
   const ctx: AiChatRequest["context"] = {};
+  /**
+   * 工程身份：**每一轮都带**，不受 intent 限制。
+   *
+   * 为什么必须每轮都带而不是只在某些意图下带：知识库在**每轮结束后**都要落盘，
+   * 而落盘要按项目分片。少带一次 → 这一轮的沉淀不知道属于哪个工程
+   * （只能落到"未知工程"里，等于这条记忆以后检索不到）。
+   * 这是一个「漏一个分支就静默丢数据」的字段，所以放在最外层统一给。
+   */
+  const identity = store.projectIdentity();
+  if (identity?.name) ctx.project = identity;
   if (intent === "scene-review" || intent === "chat" || intent === "edit-script") {
     ctx.sceneDigest = buildSceneDigest();
   }

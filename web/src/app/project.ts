@@ -143,7 +143,18 @@ async function applyFile(f: File, handle: ReadHandle | null): Promise<void> {
     const project = normalizeProject(raw);
 
     const doOpen = async () => {
-      store.setProject(project, f.name);
+      /**
+       * 工程身份：网页版拿不到绝对路径（浏览器不给），但**不能因此退化成"只有文件名"**——
+       * 那样两个都叫 `同名.bwproj` 的不同工程会共用一份知识库记忆。
+       * 这里用「文件名 + 字节数 + 修改时间」拼一个**稳定的文件指纹**当路径用：
+       *   · 同一个文件反复打开 → 三个值都不变 → 同一个知识库；
+       *   · 同名不同文件 → 至少有一个值不同 → 分片。
+       * 它不完美（用户改完文件大小与 mtime 都变 → 会被当成"新工程"），
+       * 但这比"串记忆"安全：宁可记忆少一点，也不能把 A 的经验灌给 B。
+       * 桌面版有真路径（主进程给），不受这个影响。
+       */
+      const fingerprint = `web:${f.name}:${f.size}:${f.lastModified}`;
+      store.setProject(project, f.name, fingerprint);
       // 只有同时具备可写能力的句柄才能用于后续覆盖保存
       fileHandle = handle && typeof (handle as SaveHandle).createWritable === "function" ? (handle as SaveHandle) : null;
       await saveProjectBlob(project);

@@ -90,6 +90,26 @@ export type AiEvent =
     }
   | { type: "usage"; requestId: string; usage: TokenUsage }
   | {
+      /**
+       * 本轮结束后**已沉淀进项目知识库**。
+       *
+       * 为什么要有这个事件：知识库是看不见摸不着的旁路功能 —— 没有它，用户永远
+       * 不知道「每轮自动沉淀」到底有没有在工作（也只能靠去翻目录才发现）。
+       * 界面在收到它之后刷新知识库计数，并在对话里留一个小标记。
+       *
+       * 字段是**事后统计**（沉淀完再算），所以它是「这个工程现在一共攒了多少」，
+       * 不是「这一轮加了几条」——后者对用户没有意义，前者才让他知道记忆在长。
+       */
+      type: "knowledge";
+      requestId: string;
+      /** 工程名（展示用；分片键是 key） */
+      project: string;
+      /** 工程的项目键（目录名）。面板据此聚焦到对应项目。 */
+      key?: string;
+      roundCount: number;
+      pointCount: number;
+    }
+  | {
       type: "done";
       requestId: string;
       text: string;
@@ -161,6 +181,19 @@ export interface AiChatRequest {
     diagnostics?: { errors: number; firstError?: string };
     activeScript?: { name: string; lang: "js" | "yarn"; code: string };
     selection?: { count: number; kinds: string[] };
+    /**
+     * **当前工程的机器可读身份**（知识库按它分片，每轮沉淀都记到这个项目下）。
+     *
+     * ⚠ 单独给结构化字段，**不要**让主进程去解析 `sceneDigest` 里那几个字：
+     *   · sceneDigest 是给人/模型读的展示文本（"工程「X」 N 场景"），格式随文案变，
+     *     拿它当数据源就是「用展示文本当协议」—— 本仓库踩过同类事故（补全功能
+     *     拿 apiDocs 的展示型 signature 当可解析语法，结果统计在 0~276 之间反复跳）。
+     *   · 工程身份是**持久化键**（决定知识库分片目录），它一变，历史记忆就"没了"。
+     *
+     * `file` 为空表示没有磁盘路径（示例工程 / 从未保存的新工程）——
+     * 这种工程按"只有名字"归档，键里显式带 local 后缀。
+     */
+    project?: { name: string; file?: string };
   };
   intent: "chat" | "explain-error" | "edit-script" | "scene-review";
 }
@@ -218,6 +251,69 @@ export interface AiModelsState {
   message?: string;
   /** 切换/添加后当前模型是否真的可用。UI 必须用它决定「切换成功」还是「切换了但用不了」。 */
   ready?: boolean;
+}
+
+// ==========================================================================
+// 项目知识库
+// --------------------------------------------------------------------------
+// 「每轮 AI 执行完，把当前项目沉淀到知识库，每个项目独立」。
+// 存储按「工程名 + 路径 hash」分片，所以这里的一切都围绕 `key`（目录名）转：
+//   · key **不是工程名**：工程名经过安全化、并带路径 hash 后缀（两个同名工程才能分开）
+//   · roundCount / pointCount 是**派生统计**，权威数据是 rounds.jsonl（坏行会被跳过，
+//     所以「读到的条数 < roundCount」是正常的，UI 不要据此报错）
+// ==========================================================================
+
+/** 知识库里的一轮沉淀（rounds.jsonl 的一行）。 */
+export interface KnowledgeRound {
+  /** ISO 时间戳 */
+  at: string;
+  requestId?: string;
+  sessionId?: string;
+  /** 这一轮属于哪个工程（写库时的身份快照，便于跨轮排查） */
+  project?: { key?: string; name?: string; file?: string } | null;
+  /** 本轮意图（chat / edit-script / explain-error / scene-review） */
+  intent?: string;
+  model?: string;
+  /** 一句话说清这轮干了什么（列表页展示用） */
+  summary: string;
+  /** 结构化要点（每轮 ≤12 条，每条 ≤220 字） */
+  points: string[];
+  tags?: string[];
+  /** 异常收尾：null / stalled / timeout / aborted */
+  stopReason?: string | null;
+  /** false = 这轮没什么可沉淀的（仍保留记录，只是不当作有效经验） */
+  meaningful?: boolean;
+}
+
+/** 知识库里的一个工程。 */
+export interface KnowledgeProjectEntry {
+  /** 目录名（所有后续查询都用它，**不要用工程名替代**） */
+  key: string;
+  name: string;
+  /** 工程文件路径；空 = 无磁盘路径（示例/未保存工程） */
+  file: string;
+  createdAt: string;
+  updatedAt: string;
+  roundCount: number;
+  pointCount: number;
+  lastSummary?: string;
+}
+
+export interface KnowledgeListResult {
+  ok: boolean;
+  /** 知识库根目录（给「在资源管理器里打开」用） */
+  root?: string;
+  projects: KnowledgeProjectEntry[];
+  error?: string;
+}
+
+export interface KnowledgeProjectResult {
+  ok: boolean;
+  key: string;
+  /** index.json 的内容（元信息 + 派生统计） */
+  index?: { name?: string; file?: string; createdAt?: string; updatedAt?: string; roundCount?: number; pointCount?: number } | null;
+  rounds: KnowledgeRound[];
+  error?: string;
 }
 
 // ==========================================================================
@@ -312,6 +408,15 @@ export interface BweHost {
   saveProjectAs(p: unknown, suggestedName?: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   recentProjects(): Promise<{ path: string; name: string; at: number }[]>;
   revealInExplorer(path: string): Promise<void>;
+  /**
+   * 项目知识库：列出所有工程（每个工程一份独立记忆）。
+   *
+   * 只有桌面版有（网页版没有本地磁盘权限）。面板必须按 `?.` 调用并降级为「仅桌面版可用」，
+   * 不能假定它存在 —— 否则网页版一打开知识库面板就 TypeError。
+   */
+  knowledgeList?(): Promise<KnowledgeListResult>;
+  /** 读某个工程的最近若干轮沉淀。key 必须是 knowledgeList 返回的目录名。 */
+  knowledgeProject?(key: string, limit?: number): Promise<KnowledgeProjectResult>;
   /** 原生「保存文件」对话框（桌面版把 /api 的下载路由解析成本地文件后再问你存哪）。
    *  cancelled=true 表示用户主动取消，调用方不该当失败弹红条；网页版没有这个能力。 */
   downloadFile?(path: string, suggestedName?: string): Promise<{ ok: boolean; path?: string; sizeBytes?: number; error?: string; cancelled?: boolean }>;
@@ -893,4 +998,72 @@ export async function aiSessionDelete(id: string): Promise<AiSessionsState> {
 /** 会话能力是否可用（网页版没有存储，入口应整个隐藏而不是显示成空列表）。 */
 export function sessionsAvailable(): boolean {
   return Boolean(host()?.aiSessionsList);
+}
+
+// ==========================================================================
+// 项目知识库门面
+// --------------------------------------------------------------------------
+// 只做「把主进程的返回归一成 UI 想要的形状 + 永不抛错」。
+// 归一化放这里而不是面板里：主进程字段与 UI 字段各映射一次必然漂移
+//（上一次跨线断裂就是这么来的：probeModel 的 status/latencyMs vs UI 的 httpStatus/ms）。
+// ==========================================================================
+
+/** 知识库是否可用（网页版没有本地磁盘，入口应整个隐藏）。 */
+export function knowledgeAvailable(): boolean {
+  return Boolean(host()?.knowledgeList);
+}
+
+/** 知识库根目录（给「在资源管理器里打开」用）。 */
+export async function knowledgeRootPath(): Promise<string> {
+  try {
+    const r = await host()?.knowledgeList?.();
+    return String(r?.root ?? "");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 列出知识库里的所有工程。
+ *
+ * 返回 `projects: []` 表示"确实还没有沉淀"，而不是失败 —— 面板据此显示空态引导，
+ * 两者视觉上都不该是红条（知识库为空是正常状态）。
+ */
+export async function knowledgeList(): Promise<KnowledgeListResult> {
+  const h = host();
+  if (!h?.knowledgeList) {
+    return { ok: false, projects: [], error: "网页版没有本地存储，知识库只在桌面版可用" };
+  }
+  try {
+    const r = await h.knowledgeList();
+    return {
+      ok: r?.ok !== false,
+      root: String(r?.root ?? ""),
+      projects: Array.isArray(r?.projects) ? r.projects : [],
+      error: r?.error ? String(r.error) : undefined
+    };
+  } catch (e) {
+    return { ok: false, projects: [], error: (e as Error)?.message || String(e) };
+  }
+}
+
+/** 读某个工程的最近若干轮沉淀。key 必须是 knowledgeList 返回的目录名。 */
+export async function knowledgeProject(key: string, limit = 80): Promise<KnowledgeProjectResult> {
+  const h = host();
+  const safeKey = String(key ?? "");
+  if (!h?.knowledgeProject) {
+    return { ok: false, key: safeKey, rounds: [], error: "网页版没有本地存储，知识库只在桌面版可用" };
+  }
+  try {
+    const r = await h.knowledgeProject(safeKey, limit);
+    return {
+      ok: r?.ok !== false,
+      key: String(r?.key ?? safeKey),
+      index: r?.index ?? null,
+      rounds: Array.isArray(r?.rounds) ? (r.rounds as KnowledgeRound[]) : [],
+      error: r?.error ? String(r.error) : undefined
+    };
+  } catch (e) {
+    return { ok: false, key: safeKey, rounds: [], error: (e as Error)?.message || String(e) };
+  }
 }
