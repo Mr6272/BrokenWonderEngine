@@ -48,6 +48,15 @@ import { Session } from "../account/session.ts";
 import { appendOutput } from "../core/output.ts";
 import { problemCounts, onProblems } from "../core/diagnostics.ts";
 import { apiFetch, hostMode, onMenuCommand, onOpenProjectRequest } from "../core/host.ts";
+import {
+  describeScriptList,
+  deleteScript,
+  listScripts,
+  patchScript,
+  readScript,
+  writeScript,
+  type ScriptOpResult
+} from "../core/scriptOps.ts";
 
 /** 编辑区标签的声明。canvas 标签不可关闭；其余可以。 */
 interface EditorTab {
@@ -110,6 +119,8 @@ export class Editor {
   private panelToggleBtn: HTMLButtonElement | null = null;
   /** 折叠态下侧边栏边缘的常驻「展开」窄条（侧边栏折了之后按钮在里面就点不到了） */
   private sidebarRailBtn: HTMLButtonElement | null = null;
+  /** AI 栏的收起按钮（文案/提示随折叠态同步） */
+  private aiToggleBtn: HTMLButtonElement | null = null;
   private scriptDirtyDot: HTMLElement | null = null;
 
   constructor() {
@@ -144,6 +155,9 @@ export class Editor {
 
     this.refreshChrome();
     this.setBottomTab("problems");
+    // AI 栏首屏就渲染一次：它是常驻工作面，不该等到用户点某个入口才出现。
+    // 渲染在 setBottomTab 之后（那时底部面板已有内容，布局尺寸已定）。
+    this.renderAiDock();
     this.showTab("canvas");
   }
 
@@ -163,6 +177,31 @@ export class Editor {
     //   没有任何父节点，replaceWith 静默无效，结果页面上只有一棵空 div。）
     (this as { root: HTMLDivElement }).root = shell.root;
     this.shell = shell;
+    this.buildAiDockHead();
+  }
+
+  /**
+   * 右侧 AI 栏的头部：标题 + 折叠按钮。
+   *
+   * 为什么头部由 Editor 建而不是 Shell：折叠按钮的文案/图标要随状态同步，
+   * 而状态订阅（onLayoutChange）在 Editor 里 —— 让 Shell 建按钮等于把
+   * 「按钮在 A、状态在 B」的耦合又造一次（这正是侧边栏按钮当年踩过的坑）。
+   */
+  private buildAiDockHead(): void {
+    const head = this.shell.aiPanelHead;
+    const title = el("div", { class: "group-label" }, "AI 助手");
+    head.appendChild(title);
+    head.appendChild(el("div", { class: "spacer" }));
+
+    // 折叠按钮：让用户能腾出宽度给画布（AI 栏占用的是横向空间，不是高度）
+    const collapse = button("收起", () => this.toggleAiPanel(), {
+      size: "sm",
+      variant: "ghost",
+      title: "收起 AI 栏（Ctrl+Shift+A 再按一次展开）"
+    });
+    collapse.dataset.aiCollapse = "1";
+    this.aiToggleBtn = collapse;
+    head.appendChild(collapse);
   }
 
   // ---------------- 顶栏 ----------------
@@ -456,8 +495,7 @@ export class Editor {
         this.openTab("package");
         break;
       case "ai":
-        this.setBottomTab("ai");
-        this.shell.togglePanel(false);
+        this.focusAiPanel();
         break;
       case "settings":
         this.shell.toggleSidebar(false);
@@ -856,7 +894,14 @@ export class Editor {
 
     setTab("problems", "问题 Problems", "problems");
     setTab("output", "输出 Output", "terminal");
-    setTab("ai", "AI 助手", "sparkles");
+    // ⚠ 这个标签现在的作用是「展开右侧 AI 栏」，不是「切底部面板」。
+    //    保留 `data-panel-tab="ai"` 锚点是为了不破坏已有验收脚本与用户习惯；
+    //    但点击行为必须走 focusAiPanel（否则会切到一个空的底部面板）。
+    const aiTab = setTab("ai", "AI 助手", "sparkles");
+    aiTab.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.focusAiPanel();
+    });
 
     // 问题计数徽标
     this.problemsBadge = el("span", { class: "count-badge" });
@@ -907,17 +952,61 @@ export class Editor {
     void import("../core/diagnostics.ts").then((m) => m.clearAllProblems());
   }
 
-  /** 对外：切换底部面板标签（调试出口与验收脚本用）。 */
+  /**
+   * 对外：切换底部面板标签（调试出口与验收脚本用）。
+   *
+   * `ai` 现在在**右侧 AI 栏**里（不再是底部面板的一个标签）。为了不破坏
+   * 已有的验收脚本（`--tap=[data-panel-tab=ai]` 这类）与用户肌肉记忆，
+   * 这里保留入口：传 "ai" 就展开右侧 AI 栏，而不是在底部渲染它。
+   */
   openBottomTab(id: "problems" | "output" | "ai"): void {
+    if (id === "ai") {
+      this.focusAiPanel();
+      return;
+    }
     this.setBottomTab(id);
     this.shell.togglePanel(false);
   }
 
+  /** 展开并聚焦右侧 AI 栏（命令 / 活动栏 / 快捷键共用这一个入口）。 */
+  focusAiPanel(): void {
+    this.shell.toggleAiPanel(false);
+    this.renderAiDock();
+  }
+
+  /** 折叠/展开右侧 AI 栏（Ctrl+Shift+A）。 */
+  toggleAiPanel(): boolean {
+    const collapsed = this.shell.toggleAiPanel();
+    if (!collapsed) this.renderAiDock();
+    this.syncLayoutAffordances({
+      sidebar: this.shell.sidebarCollapsed(),
+      panel: this.shell.panelCollapsed(),
+      ai: collapsed
+    });
+    return collapsed;
+  }
+
+  /**
+   * 把 AI 面板渲染进右侧栏。
+   *
+   * 为什么单独一个方法而不是塞进 refreshBottomPanel：AI 栏与底部面板是**两条生命周期**
+   * （底部面板切标签会重建，AI 栏常驻）。放一起会让「切到问题面板」把 AI 对话区重建一次，
+   * 用户正在看的对话会闪一下。
+   */
+  private renderAiDock(): void {
+    if (this.shell.aiPanelCollapsed()) return;
+    // AI 面板自己算 sceneDigest、自己订流式事件；外壳只给挂载点与重画回调
+    renderAiPanel(this.shell.aiPanelBody, () => this.renderAiDock());
+  }
+
   private setBottomTab(id: "problems" | "output" | "ai"): void {
+    // "ai" 不在底部面板里了：转去右侧栏，避免出现「底部空面板 + 右侧 AI 栏」的重复
+    if (id === "ai") {
+      this.focusAiPanel();
+      return;
+    }
     this.bottomTab = id;
     for (const [key, b] of this.bottomTabButtons) b.classList.toggle("active", key === id);
-    // AI 面板内容多，够高才看得见对话；问题/输出保持默认高度即可
-    if (id === "ai") this.shell.ensurePanelHeight(380);
     this.refreshBottomPanel();
     // 面板高度变了，悬浮提示要跟着让位，否则会压在新出现的输入框上
     window.setTimeout(() => syncToastPosition(), 0);
@@ -925,7 +1014,7 @@ export class Editor {
 
   private refreshBottomPanel(): void {
     const host = this.shell.panelBody;
-    host.classList.toggle("flush", this.bottomTab === "ai");
+    host.classList.remove("flush");
     switch (this.bottomTab) {
       case "problems":
         renderProblemsPanel(host);
@@ -934,7 +1023,8 @@ export class Editor {
         renderOutputPanel(host);
         break;
       case "ai":
-        // AI 面板自己算 sceneDigest、自己订流式事件；外壳只给挂载点与重画回调
+        // 只有从旧路径进来才可能到这（setBottomTab 已把它转走）。
+        // 保留分支是为了「老宿主/老入口调进来」时不至于什么都不画。
         renderAiPanel(host, () => this.refreshBottomPanel());
         break;
     }
@@ -1134,7 +1224,7 @@ export class Editor {
    * 单独一个方法而不是散在各处，是因为折叠状态有 4 个入口会改它
    * （按钮、活动栏、命令面板 Ctrl+B、窄条），散着写必然漏掉某一处。
    */
-  private syncLayoutAffordances(st: { sidebar: boolean; panel: boolean }): void {
+  private syncLayoutAffordances(st: { sidebar: boolean; panel: boolean; ai?: boolean }): void {
     const sb = this.sidebarToggleBtn;
     if (sb) {
       sb.textContent = st.sidebar ? "展开" : "折叠";
@@ -1152,6 +1242,21 @@ export class Editor {
       pb.title = st.panel ? "展开底部面板（Ctrl+J）" : "折叠底部面板（Ctrl+J）";
       pb.setAttribute("aria-expanded", st.panel ? "false" : "true");
       pb.classList.toggle("is-collapsed", st.panel);
+    }
+
+    // AI 栏的折叠态也要反映到「AI 助手」标签上：
+    // 标签是展开入口，栏已经展开时它该显示为「当前生效」，否则用户会以为没生效。
+    const aiTab = this.bottomTabButtons.get("ai");
+    if (aiTab && typeof st.ai === "boolean") {
+      aiTab.classList.toggle("active", !st.ai);
+      aiTab.title = st.ai ? "展开右侧 AI 栏" : "AI 栏已展开（点击聚焦）";
+    }
+
+    const ab = this.aiToggleBtn;
+    if (ab && typeof st.ai === "boolean") {
+      ab.textContent = st.ai ? "展开" : "收起";
+      ab.title = st.ai ? "展开 AI 栏（Ctrl+Shift+A）" : "收起 AI 栏（Ctrl+Shift+A）";
+      ab.setAttribute("aria-expanded", st.ai ? "false" : "true");
     }
 
     // 常驻窄条：只在侧边栏折叠时出现
@@ -1177,8 +1282,7 @@ export class Editor {
     window.addEventListener("bwe:open-script-tab", () => this.openTab("script"));
     window.addEventListener("bwe:open-canvas-tab", () => this.showTab("canvas"));
     window.addEventListener("bwe:open-ai", () => {
-      this.setBottomTab("ai");
-      this.shell.togglePanel(false);
+      this.focusAiPanel();
     });
     // 剧本面板请求重画：侧边栏列表与编辑区编辑器分属两棵 DOM 树，两边都要刷
     window.addEventListener("bwe:refresh-script-ui", () => {
@@ -1246,9 +1350,9 @@ export class Editor {
       { id: "script.goToProblems", title: "查看问题列表", group: "剧本", icon: "warn", run: () => { this.setBottomTab("problems"); this.shell.togglePanel(false); } },
 
       // ---------------- AI ----------------
-      { id: "ai.focus", title: "AI：打开助手面板", group: "AI", icon: "sparkles", run: () => { this.setBottomTab("ai"); this.shell.togglePanel(false); } },
+      { id: "ai.focus", title: "AI：打开助手面板", key: "Ctrl+Shift+A", group: "AI", icon: "sparkles", run: () => this.focusAiPanel() },
       { id: "ai.explainError", title: "AI：解释当前错误", group: "AI", icon: "warn", hint: "带诊断摘要 + 当前脚本", run: () => this.runAiAction("explain-error") },
-      { id: "ai.editScript", title: "AI：改这段脚本", group: "AI", icon: "wand", hint: "改动先进 diff 预览，点「应用」才写回", run: () => this.runAiAction("edit-script") },
+      { id: "ai.editScript", title: "AI：改这段脚本", group: "AI", icon: "wand", hint: "AI 直接改脚本，改完可 Ctrl+Z 撤销；正文里的代码块仍会给 diff 供你确认", run: () => this.runAiAction("edit-script") },
       { id: "ai.sceneReview", title: "AI：审一遍当前场景", group: "AI", icon: "eye", hint: "发工程摘要，不发原始工程数据", run: () => this.runAiAction("scene-review") },
       { id: "ai.reset", title: "AI：重置对话", group: "AI", icon: "close", run: () => void resetAiConversation() },
 
@@ -1280,10 +1384,9 @@ export class Editor {
     ]);
   }
 
-  /** 命令面板里的 AI 动作：先切到 AI 面板，再由面板发起请求。 */
+  /** 命令面板里的 AI 动作：先展开 AI 栏，再由面板发起请求。 */
   private runAiAction(intent: "explain-error" | "edit-script" | "scene-review"): void {
-    this.setBottomTab("ai");
-    this.shell.togglePanel(false);
+    this.focusAiPanel();
     requestAiAction(intent);
   }
 
@@ -1355,11 +1458,108 @@ export class Editor {
     p.scripts[name].source = code;
     store.markDirty();
     window.dispatchEvent(new CustomEvent("bwe:commit", { detail: { label: "AI 改脚本" } }));
-    this.scheduleSnapshot("AI 改脚本");
+    /**
+     * ⚠ 这里必须**同步提交快照**，不能用 scheduleSnapshot 的 320ms 防抖。
+     *
+     * 防抖是为「连续拖动/连续打字」设计的：那些操作要合并成一步撤销。
+     * 而 AI 改脚本是**一次完成的离散动作**，没有任何后续输入需要合并 ——
+     * 用防抖的真实后果（实测踩到）：
+     *   用户看到 AI 改好了，立刻按 Ctrl+Z → 快照还没入栈 → **撤销什么都没发生**，
+     *   或者更糟：弹出的栈是**更早的**状态，界面跳回与预期完全不符。
+     * 端到端验收（verify-script-write）就是靠这条断言抓到的。
+     */
+    this.commit("AI 改脚本");
     // 编辑器与侧边栏列表都要重画（用户需要看见改动落进去了）
     if (this.activeTabId === "script") renderScriptEditor(this.shell.editorBody);
     if (this.currentSidebarView === "script") renderScriptList(this.sidebarViewHost);
     this.refreshPanels();
+  }
+
+  /**
+   * AI 的脚本写类工具在**渲染侧的落地入口**（桌面版主进程经 IPC 转发到这里）。
+   *
+   * ── 为什么必须在这里执行 ──────────────────────────────────────────────
+   * 工程的真身是渲染进程内存里的 `store.project`；磁盘上的 `.bwproj` 只是导出物。
+   * 主进程改文件会让「编辑器内存 / 磁盘 / AI 的说法」三方分叉，表现为
+   * 「AI 说改好了，界面没变，下次保存又把改动覆盖回去」。
+   *
+   * ── 与 applyAiScript 的关系 ────────────────────────────────────────────
+   * 所有真正落地的写操作都走 `applyAiScript`（它负责 markDirty + commit 快照 + 重画），
+   * 所以 AI 的每一次改动**天然可 Ctrl+Z 撤销**。本函数只做「规则判定 + 选对动作」，
+   * 判定逻辑在 `core/scriptOps.ts`（纯函数、可单测）。
+   *
+   * @returns 给模型看的文本结果；`ok:false` 是业务拒绝（名字非法/有引用/补丁找不到），
+   *          不是异常 —— 模型会读到原因并自己纠正。
+   */
+  runScriptTool(name: string, args: Record<string, unknown> = {}): {
+    text: string;
+    meta?: Record<string, unknown>;
+    error?: string;
+  } {
+    const project = store.project;
+
+    // ---- 只读类 ----
+    if (name === "ListScripts") {
+      return { text: describeScriptList(project), meta: { kind: "script-list", count: listScripts(project).length } };
+    }
+    if (name === "ReadScript") {
+      const s = readScript(project, args.name);
+      if (!s) {
+        return {
+          error: `脚本「${String(args.name ?? "")}」不存在`,
+          text:
+            `脚本「${String(args.name ?? "")}」不存在。`
+            + "先用 ListScripts 看现有脚本清单（名字必须完全一致，含中文空格）。"
+        };
+      }
+      return {
+        text:
+          `ReadScript(${s.name}) ${s.lang} · ${s.lines} 行 · 导出路径 ${s.file}\n`
+          + "```" + (s.lang === "js" ? "js" : "yarn") + "\n" + s.source + "\n```",
+        meta: { kind: "script-read", name: s.name, lines: s.lines }
+      };
+    }
+
+    // ---- 写类：全部经 scriptOps 判定，命中改动才落地 ----
+    if (!project) {
+      return { error: "没有打开的工程", text: "没有打开的工程，无法读写脚本。请先在编辑器里打开一个工程。" };
+    }
+
+    let result: ScriptOpResult;
+    if (name === "WriteScript") {
+      result = writeScript(project, args.name, args.source, {
+        lang: args.lang,
+        create: typeof args.create === "boolean" ? args.create : undefined
+      });
+    } else if (name === "PatchScript") {
+      result = patchScript(project, args.name, args.find, args.replace);
+    } else if (name === "DeleteScript") {
+      result = deleteScript(project, args.name, { force: args.force === true });
+    } else {
+      return { error: `未知脚本工具「${name}」`, text: `未知脚本工具「${name}」` };
+    }
+
+    const text = result.message;
+    if (!result.ok) {
+      return { error: result.reason || "failed", text, meta: { kind: "script-op", name: String(args.name ?? ""), reason: result.reason } };
+    }
+
+    // 只有**真的改了内容**才写回（幂等无变化时不产生一次无意义的撤销步骤）
+    if (result.changed && result.after !== undefined) {
+      this.applyAiScript(String(result.name ?? ""), result.after);
+    }
+    return {
+      text,
+      meta: {
+        kind: "script-op",
+        name: result.name,
+        changed: Boolean(result.changed),
+        // 行数变化给工具块显示，便于用户一眼看出「改了多大一片」
+        beforeLines: typeof result.before === "string" ? result.before.split("\n").length : 0,
+        afterLines: typeof result.after === "string" ? result.after.split("\n").length : 0,
+        refs: result.refs?.length ?? 0
+      }
+    };
   }
 
   // ==========================================================================

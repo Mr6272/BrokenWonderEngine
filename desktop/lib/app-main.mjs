@@ -69,6 +69,8 @@ function parseArgs(argv) {
     else if (arg.startsWith("--probe-dom=")) out.probeDom = stripQuotes(arg.slice("--probe-dom=".length));
     else if (arg.startsWith("--probe-selector=")) out.probeSelector = stripQuotes(arg.slice("--probe-selector=".length));
     else if (arg.startsWith("--tap-seq=")) out.tapSeq = stripQuotes(arg.slice("--tap-seq=".length));
+    else if (arg.startsWith("--e2e-script=")) out.e2eScript = stripQuotes(arg.slice("--e2e-script=".length));
+    else if (arg.startsWith("--e2e-out=")) out.e2eOut = stripQuotes(arg.slice("--e2e-out=".length));
     else if (arg === "--protocol-live") out.protocolLive = true;
     else if (arg.startsWith("--size=")) {
       const m = /^(\d+)x(\d+)$/.exec(stripQuotes(arg.slice("--size=".length)));
@@ -79,14 +81,20 @@ function parseArgs(argv) {
 }
 
 const ARGS = parseArgs(process.argv);
-const SHOT_MODE = Boolean(ARGS.shot);
+/**
+ * 「有窗口的批处理」模式：截图 / --e2e-script 都要建窗口、跑完即退。
+ *
+ * ⚠ --e2e-script 也走这条：它必须在**真窗口**里执行（渲染侧 store、DOM、撤销栈都在那儿），
+ * 而且同样需要「跑完就退出 + 不抢单实例锁 + 隔离 userData」，与截图是同一类作业。
+ */
+const SHOT_MODE = Boolean(ARGS.shot || ARGS.e2eScript);
 /**
  * 自动化模式：截图 与 --ipc-probe 都属于「跑完就退」的批处理，必须满足两条：
  *   ① 不参与单实例锁（否则本机开着编辑器 / 另一条线在截图时，它直接 quit 且没有任何输出
  *      —— 我实际踩过：8 个 electron 进程在跑，探针静默退出，查了半天以为代码没执行）；
  *   ② 用一次性的隔离 userData（pid 后缀），不污染用户真实设置、也不和并发进程争 Chromium 缓存。
  */
-const AUTOMATION_MODE = SHOT_MODE || Boolean(ARGS.ipcProbe);
+const AUTOMATION_MODE = SHOT_MODE || Boolean(ARGS.ipcProbe) || Boolean(ARGS.e2eScript);
 /**
  * 纯探针模式（--ipc-probe 且只读）：**不需要窗口**。
  *
@@ -357,6 +365,50 @@ app.whenReady().then(async () => {
       },
       sendEvent: (ev) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("ai:event", ev);
+      },
+      /**
+       * 脚本写类工具的**渲染侧执行器**。
+       *
+       * 为什么由主进程转发而不是主进程自己改：工程的真身是渲染进程内存里的
+       * `store.project`（脚本源码在 `scripts[name].source`），磁盘 `.bwproj` 只是导出物。
+       * 主进程改文件会让三方分叉 —— 「AI 说改好了 / 界面没变 / 下次保存又覆盖回去」。
+       *
+       * 为什么用 executeJavaScript 而不是加一个 IPC 通道：这是一次「同步问答」
+       *（模型在工具轮里等结果），走 ipcMain/ipcRenderer 还得自己配 requestId 配对；
+       * 而 `executeJavaScript` 天然返回 promise，且仓里已有同型用法（probeDom 等）。
+       * 代价是**只能串行**——但工具执行本来就是逐个 await 的，不冲突。
+       */
+      scriptRunner: async (name, args) => {
+        if (!mainWindow || mainWindow.isDestroyed()) {
+          return { error: "窗口已关闭", text: "窗口已关闭，无法改动工程脚本。" };
+        }
+        try {
+          /**
+           * ⚠ 参数必须 JSON 序列化成**字面量**再拼进脚本，不能字符串插值。
+           * 脚本源码里天然带反引号、`${}`、引号、换行 —— 直接拼会破坏注入的脚本
+           *（不是安全意义上的注入，而是**自己把自己的代码写坏**）。
+           */
+          const payload = JSON.stringify({ name: String(name ?? ""), args: args ?? {} });
+          const out = await mainWindow.webContents.executeJavaScript(
+            `(() => {
+              const P = ${payload};
+              const w = window;
+              if (!w.__BWE__ || typeof w.__BWE__.runScriptTool !== "function") {
+                return { error: "渲染侧没有 runScriptTool（编辑器未就绪或版本不匹配）",
+                         text: "渲染侧没有 runScriptTool：编辑器没起来，或主进程与前端版本不匹配。" };
+              }
+              return w.__BWE__.runScriptTool(P.name, P.args);
+            })()`,
+            true
+          );
+          if (out && typeof out === "object") return out;
+          return { text: String(out ?? "") };
+        } catch (e) {
+          // executeJavaScript 抛错时（页面崩了/编辑器抛异常）也要变成可读结果：
+          // 让模型看到「为什么没改成」，而不是一个空洞的 Promise reject。
+          const message = e?.message || String(e);
+          return { error: message, text: `脚本工具 ${name} 没能执行：${message}` };
+        }
       },
       log: (m) => log(m, "bwe:ai")
     });
@@ -1701,8 +1753,35 @@ async function probeUiSkeleton() {
             sidebar: rect(".sidebar"),
             editorArea: rect(".editor-area, .editor"),
             auxPanel: rect(".aux-panel, .inspector, .inspector-panel"),
-            canvasWrap: rect(".canvas-wrap, .canvas-host, .canvas")
+            canvasWrap: rect(".canvas-wrap, .canvas-host, .canvas"),
+            // AI 栏：验收「与场景编辑器对等站位」的关键证据。
+            // 它必须是右侧全高栏（在 .shell-main 里、与 auxPanel 同高），
+            // 不是底部面板里的一条缝 —— 这两个数字是唯一能机器判定的证据。
+            aiDock: rect(".ai-dock"),
+            aiDockBody: rect(".ai-dock-body"),
+            bottomPanel: rect(".panel"),
+            aiResizer: rect(".ai-resizer")
           },
+
+          /**
+           * AI 栏的归属判定（纯结构事实，不含阈值）：
+           *   parent     —— 它的父容器 class（期望含 shell-main）
+           *   inBottom   —— 是否被塞进了底部面板（期望 false）
+           *   collapsed  —— 是否折叠
+           * 为什么单独给：只看 rect 无法区分「右侧栏」与「底部面板里的一个 div」，
+           * 而「AI 被挪回底部」正是本次改造要防的回归。
+           */
+          aiDockStructure: (() => {
+            const dock = q(".ai-dock");
+            if (!dock) return null;
+            const parent = dock.parentElement;
+            return {
+              parent: parent ? String(parent.className || "") : "",
+              inBottomPanel: Boolean(dock.closest(".panel")),
+              collapsed: dock.classList.contains("collapsed"),
+              insideShellMain: Boolean(dock.closest(".shell-main"))
+            };
+          })(),
 
           // ---- 溢出：横向是否真的滚动了 ----
           overflow: {
@@ -2039,6 +2118,30 @@ async function runShotMode() {
 
   // 等 2s：页面首屏的布局/字体/示例工程加载都不一定在 did-finish-load 时结束。
   await new Promise((r) => setTimeout(r, 2000));
+
+  // ---- --e2e-script：在渲染进程里跑一段被测脚本并落盘结果 ----
+  //
+  // 为什么需要这个开关：脚本写工具是「主进程 → executeJavaScript → 渲染侧 → 改 store」
+  // 的跨进程链路，单测只能证明两端各自的逻辑，证明不了它们真的连在一起。
+  // 这里在真窗口、真 store 上跑一遍，是唯一能抓到「提示承诺 vs 实际接线」的手段。
+  // 跑完即退（与截图/探针同属批处理模式，见 AUTOMATION_MODE）。
+  if (ARGS.e2eScript) {
+    try {
+      const { readFile, writeFile } = await import("node:fs/promises");
+      const code = await readFile(ARGS.e2eScript, "utf8");
+      const result = await mainWindow.webContents.executeJavaScript(code, true);
+      if (ARGS.e2eOut) {
+        await writeFile(ARGS.e2eOut, JSON.stringify(result, null, 2), "utf8");
+        console.log(`[e2e] 已写入 ${ARGS.e2eOut}`);
+      }
+      console.log(`[e2e] 执行完毕（结果 ${JSON.stringify(result)?.length ?? 0} 字符）`);
+    } catch (e) {
+      console.error(`[e2e] 失败：${e?.stack || e?.message || e}`);
+      process.exitCode = 1;
+    }
+    app.exit(process.exitCode ?? 0);
+    return;
+  }
 
   // ---- --tap：截图前依次点击（用来打开非默认标签，例如「AI 助手」）----
   // ⚠ --verify 不跑 tap：打包自检要判「干净默认视图」的健康状况，

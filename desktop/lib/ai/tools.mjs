@@ -1,14 +1,29 @@
 /**
- * AI 层 · 三个工具（契约 §4.3 第 3 条，只做这三个）。
+ * AI 层 · 工具集。
  *
+ * 只读类（看文件 / 看工程 / 查 API）：
  *   ReadFile(path, from?, lines?)   读仓库/工程里的文本文件（只读，绝不写）
+ *   ReadToolResult(sha1, from?, lines?)  续读被剪枝的结果
  *   SceneDigest(options)            读工程结构摘要（不是整份 .bwproj）
  *   SearchApi(query, limit<=5)      按需查 BWE 脚本 API 文档
  *
- * 为什么不给更多工具：工具定义本身也吃 token，而且每加一个，前缀缓存的定义块就变一次。
- * 三个工具覆盖了「看文件 / 看工程 / 查 API」这三件模型真正需要的事。
+ * 脚本写类（**工程内脚本**的完整读写权限，见文件末尾的边界说明）：
+ *   ListScripts()                   列出工程里的脚本（名字/语言/行数）
+ *   ReadScript(name)                读一个脚本的完整源码
+ *   WriteScript(name, source, ...)  整篇写入（新建或覆盖）
+ *   PatchScript(name, find, replace) 精确替换一处片段（改几行时用它）
+ *   DeleteScript(name, force?)      删除脚本（有引用时默认拒绝）
  *
- * 安全：ReadFile 限定在 workspace 与 repo 两个根下，防 ../ 穿越；不读 node_modules。
+ * 为什么不给更多工具：工具定义本身也吃 token，而且每加一个，前缀缓存的定义块就变一次。
+ * 「看文件 / 看工程 / 查 API / 读写脚本」覆盖了模型真正需要的事。
+ *
+ * 安全边界（写类工具，三条，全部有单测）：
+ *   1. **只碰工程脚本**：写目标是 `Project.scripts` 的 key，不接受文件路径。
+ *      AI 不能写 .java / .ts / .bwproj / 任意磁盘文件 —— 那会绕过编辑器直接改坏引擎或数据。
+ *   2. **写回走渲染侧权威副本**：工程的真身在渲染进程内存里，主进程只转发。
+ *      直接改磁盘会让编辑器内存与文件分叉（AI 说改好了、界面没变、下次保存又覆盖回去）。
+ *   3. **可撤销**：渲染侧落到 `applyAiScript`，它自带 markDirty + commit 快照，
+ *      用户一条 Ctrl+Z 就能撤回 AI 的改动。
  */
 
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -89,12 +104,117 @@ export function toolDefinitions() {
           required: ["query"]
         }
       }
+    },
+    // ------------------------------------------------------------------
+    // 脚本写类：工程内脚本的完整读写权限（边界见文件顶部注释）
+    // ------------------------------------------------------------------
+    {
+      type: "function",
+      function: {
+        name: "ListScripts",
+        description:
+          "列出当前工程里的所有脚本（名字 / 语言 js|yarn / 行数 / 导出路径）。"
+          + "改脚本前先看这个，确认脚本叫什么名字、有没有你要改的那个。",
+        parameters: { type: "object", properties: {} }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "ReadScript",
+        description:
+          "读一个工程脚本的**完整源码**（不是切片）。知道脚本名后用它看真实内容再决定怎么改。"
+          + "⚠ 改之前**一定先读**：缩进、行尾、注释都可能是你记忆里没有的样子，照抄一段原文再改。",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "脚本名（ListScripts 里的名字），例如 \"player\" 或 \"扫雷\"" }
+          },
+          required: ["name"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "WriteScript",
+        description:
+          "**整篇**写入一个工程脚本（新建或覆盖）。会立刻落到编辑器里，用户 Ctrl+Z 可撤销。"
+          + "⚠ 改已有脚本的几行时优先用 PatchScript，不要整篇重写 —— 整篇重写容易漏掉原有逻辑。"
+          + "create=true 只允许新建（已存在则报错）；create=false 只允许覆盖；不带则两者皆可。",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "脚本名（可含中文；不能有 / 或 \\）" },
+            source: { type: "string", description: "完整源码（整篇，不是片段）" },
+            lang: { type: "string", description: "新建时的语言：js（默认）或 yarn" },
+            create: { type: "boolean", description: "true=只新建；false=只覆盖；省略=两者皆可" }
+          },
+          required: ["name", "source"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "PatchScript",
+        description:
+          "在工程脚本里**精确替换一处**片段（find → replace）。改一两行时用它，比整篇重写安全得多。"
+          + "find 必须在文件里**只出现一次**：命中多处会直接报错，请连带上下文（上一行缩进/函数名）再试。"
+          + "命中 0 处也会报错（不会猜）—— 这时先用 ReadScript 看真实内容。",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "脚本名" },
+            find: { type: "string", description: "要被替换的**原文片段**（含足够上下文，确保只命中一处）" },
+            replace: { type: "string", description: "替换成的新片段" }
+          },
+          required: ["name", "find", "replace"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "DeleteScript",
+        description:
+          "删除一个工程脚本。**被场景或对象引用时会拒绝**（删掉会让运行期找不到脚本，而且编辑器里看不出来）。"
+          + "遇到 in-use 时，先把引用清空/改指向，或者先向用户确认再带 force=true。",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "脚本名" },
+            force: { type: "boolean", description: "true=即使仍被引用也删（必须先向用户确认）" }
+          },
+          required: ["name"]
+        }
+      }
     }
   ];
 }
 
 /** 工具名白名单：模型给出未定义的名字时直接拒掉，不要瞎执行。 */
-export const TOOL_NAMES = ["ReadFile", "ReadToolResult", "SceneDigest", "SearchApi"];
+export const TOOL_NAMES = [
+  "ReadFile",
+  "ReadToolResult",
+  "SceneDigest",
+  "SearchApi",
+  "ListScripts",
+  "ReadScript",
+  "WriteScript",
+  "PatchScript",
+  "DeleteScript"
+];
+
+/**
+ * 必须在**渲染侧**（工程权威副本）执行的工具。
+ *
+ * 主进程读不到渲染进程内存里的 `store.project`，所以这些工具由 bridge 通过
+ * `opts.scriptRunner` 转发到渲染侧执行（见 bridge.runTools 的 SCRIPT_TOOLS 分支）。
+ * 单独导出这份清单，是为了让「工具定义里有它」与「真的执行得了」能用**同一份数据**校验 ——
+ * 历史缺陷的形态正是「工具描述承诺了某个能力，而某条配置下根本没有接线」。
+ */
+export const SCRIPT_TOOLS = ["ListScripts", "ReadScript", "WriteScript", "PatchScript", "DeleteScript"];
 
 const MAX_READ_LINES = 400;
 const DEFAULT_READ_LINES = 400;
@@ -115,6 +235,11 @@ const DENY_DIRS = ["node_modules", ".git", "desktop/vendor", "desktop/dist", ".t
  *        剪枝原文的**内存**来源（优先于 toolCache；保证 ReadToolResult 在不配缓存时也可用）。
  * @param {(sha:string, raw:string)=>void} [opts.onPruned]
  *        每次剪枝时把原文登记进内存（bridge 注入，用于实现 resolvePruned）。
+ * @param {(name:string, args:object)=>Promise<{text:string, meta?:object, error?:string}>} [opts.scriptRunner]
+ *        脚本写类工具的执行器（**由 bridge 注入，主进程转发到渲染侧**）。
+ *        主进程没有工程数据：工程的真身在渲染进程内存里（store.project），
+ *        所以这五个工具必须回到渲染侧执行。没注入时它们会明确答「未接线」，
+ *        而不是假装成功（假装成功 = 模型以为改好了，用户什么也没看到）。
  */
 export function createToolRunner(opts) {
   /**
@@ -303,6 +428,29 @@ export function createToolRunner(opts) {
     };
   }
 
+  /**
+   * 脚本写类工具：转发到**渲染侧**执行。
+   *
+   * 为什么必须转发而不是在这里直接改文件：工程的真身是渲染进程内存里的
+   * `store.project`（脚本源码存在 `scripts[name].source`），磁盘上的 `.bwproj`
+   * 只是导出物、`web/examples/<工程>/scripts/*.js` 只是给 VS Code 的镜像。
+   * 主进程直接改文件会让三方分叉：AI 说改好了 → 编辑器界面没变 → 用户下次保存
+   * 再把 AI 的改动覆盖回去。只有回到渲染侧改权威副本，改动才「真的生效且可撤销」。
+   */
+  async function scriptTool(name, args) {
+    if (typeof opts.scriptRunner !== "function") {
+      throw new Error(
+        `工具 ${name} 未接线：本轮没有可用的渲染侧执行器（scriptRunner）。`
+        + "这不是参数问题 —— 说明宿主没把脚本编辑通道接上，请直接在回答里给出改动内容，"
+        + "让用户自己在「剧本」面板粘贴，不要声称已经改好。"
+      );
+    }
+    const out = await opts.scriptRunner(name, args);
+    const text = String(out?.text ?? "");
+    if (out?.error) return { error: String(out.error), text: `工具 ${name} 失败：${out.error}`, meta: { tool: name } };
+    return { text, meta: { tool: name, ...(out?.meta ?? {}) } };
+  }
+
   return {
     definitions: toolDefinitions(),
     /**
@@ -321,6 +469,7 @@ export function createToolRunner(opts) {
         if (name === "ReadToolResult") return await readToolResultTool(args);
         if (name === "SceneDigest") return await sceneDigestTool(args);
         if (name === "SearchApi") return await searchApiTool(args);
+        if (SCRIPT_TOOLS.includes(name)) return await scriptTool(name, args);
         throw new Error(`未知工具「${name}」（可用：${TOOL_NAMES.join(" / ")}）`);
       } catch (e) {
         return { error: e?.message || String(e), text: `工具 ${name} 执行失败：${e?.message || e}`, meta: { tool: name } };
@@ -333,6 +482,20 @@ export function createToolRunner(opts) {
       if (call?.name === "ReadToolResult") return `sha1=${String(args.sha1 ?? "").slice(0, 8)}… from=${args.from ?? 1}`;
       if (call?.name === "SearchApi") return String(args.query ?? "");
       if (call?.name === "SceneDigest") return String(args.scene ?? "全部场景");
+      // 脚本类：把「脚本名 + 这次想做什么」压成一行，用户在工具块里能直接看懂
+      if (call?.name === "ListScripts") return "全部脚本";
+      if (call?.name === "ReadScript") return String(args.name ?? "");
+      if (call?.name === "WriteScript") {
+        const n = String(args.name ?? "");
+        const lines = String(args.source ?? "").split("\n").length;
+        return `${n} · 整篇写入 ${lines} 行`;
+      }
+      if (call?.name === "PatchScript") {
+        const n = String(args.name ?? "");
+        const dl = String(args.replace ?? "").split("\n").length;
+        return `${n} · 替换 1 处 → ${dl} 行`;
+      }
+      if (call?.name === "DeleteScript") return `${String(args.name ?? "")}${args.force ? " · force" : ""}`;
       return "";
     }
   };

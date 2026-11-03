@@ -110,6 +110,30 @@ function boot(): void {
   (window as unknown as Record<string, unknown>).__BWE__ = {
     store,
     editor,
+    /**
+     * AI 脚本写类工具的落地入口（桌面版主进程经 executeJavaScript 调用）。
+     *
+     * ⚠ 这条通道是**唯一**允许 AI 改工程脚本的入口，因此它：
+     *   1. 只接受 `editor.runScriptTool` 认识的 5 个工具名（别的名字由那一层返回错误）；
+     *   2. 真正的规则判定在 `core/scriptOps.ts`（纯函数、有单测），这里不做第二套判断
+     *      —— 两套规则必然分叉，表现为「工具说成功、编辑器里却是另一种结果」；
+     *   3. 落地一律走 `editor.applyAiScript`（markDirty + commit 快照 → 可 Ctrl+Z 撤销）。
+     * 参数是主进程 JSON 序列化后传进来的，**必须容错**：坏参数要返回错误而不是抛，
+     * 否则 executeJavaScript 以 Promise reject 结束，主进程只能看到一个没有上下文的异常。
+     */
+    runScriptTool: (name: unknown, args: unknown) => {
+      try {
+        const tool = String(name ?? "");
+        const safeArgs =
+          args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+        return editor.runScriptTool(tool, safeArgs);
+      } catch (e) {
+        return {
+          error: (e as Error)?.message || String(e),
+          text: `脚本工具执行失败：${(e as Error)?.message || String(e)}`
+        };
+      }
+    },
     /** 注入一组诊断（验收/排查用，正常使用时没人调） */
     injectProblems: (list: unknown[]) => {
       void import("./core/diagnostics.ts").then((m) => {

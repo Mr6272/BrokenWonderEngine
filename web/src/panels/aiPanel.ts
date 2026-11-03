@@ -7,8 +7,12 @@
  *      aiStatus().mode 不同 —— 面板不需要为"有没有宿主"写分支。
  *   2. **绝不把整个 .bwproj 塞进请求**：上下文只带 sceneDigest（压缩后的几行
  *      文字）+ 诊断摘要 + 当前脚本片段（超过 200 行截断）。
- *   3. **改脚本必须用户确认**：AI 返回的代码只进 diff 预览，点「应用」才写回。
- *      自动写回等于把用户源码交给一个撤销不到的黑箱。
+ *   3. **改脚本：AI 有直接写权限，但必须可撤销**。
+ *      桌面版里 AI 通过 ListScripts / ReadScript / WriteScript / PatchScript / DeleteScript
+ *      直接改**工程内脚本**（不是任意文件），每次改动都走 applyAiScript →
+ *      markDirty + commit 快照，用户一条 Ctrl+Z 就能撤回。
+ *      面板里的「diff 预览 + 应用」这条旧路径**仍然保留**：模型若在正文里贴代码块，
+ *      用户可以只应用其中一段（比让模型直接写更可控）。两条路径并存、互不妨碍。
  *   4. 无 key / mock 模式面板照样能用：顶部一条提示语，mock 流在回答里
  *      明说"这是本地演示"，用户不会误以为调通了模型。
  */
@@ -620,7 +624,7 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
       size: "sm",
       variant: "ghost",
       iconPath: I.wand,
-      title: "AI 返回的代码只做 diff 预览，点「应用」才写回编辑器"
+      title: "让 AI 直接改当前脚本（改完可 Ctrl+Z 撤销；若它只在正文里贴代码，也会给出 diff 供你确认）"
     });
   qEdit.dataset.aiQuick = "edit-script";
   quick.appendChild(qEdit);
@@ -1823,8 +1827,8 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
         el(
           "div",
           { class: "ai-msg system" },
-          "AI 助手：读工程摘要、读脚本诊断、给修复建议。\n"
-          + "下面 4 个按钮不会自动改动你的工程 —— 改脚本也要你点「应用」才写回。"
+          "AI 助手：读工程摘要、读脚本诊断、**直接改工程脚本**（改完可 Ctrl+Z 撤销）。\n"
+          + "它能改的只有工程内脚本，不碰引擎源码与工程文件本体；删除仍被引用的脚本会被拒绝。"
         )
       );
     }

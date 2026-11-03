@@ -656,7 +656,28 @@ test("M3: toolWiringReport 必须能查出「剪枝续读通路断了」（这�
   assert.ok(!report.some((w) => /工具定义缺/.test(w)), `工具定义应齐全：${report.join(" | ")}`);
 });
 
-test("M4: 配了 toolCache 时 toolWiringReport 应无告警（正常接线）", async () => {
+test("M4: 配了 toolCache + scriptRunner 时 toolWiringReport 应无告警（正常接线）", async () => {
+  const dir = await tmpDir();
+  const session = await openSession({ dir, workspace: REPO });
+  const bridge = createAiBridge({
+    session,
+    repoRoot: REPO,
+    workspaceRoot: REPO,
+    apiIndex: createApiIndex(defaultApiDocsPath(REPO)),
+    toolCache: createToolCache(join(dir, "tc")),
+    // ⚠ 脚本写类工具的执行器现在也是「接线」的一部分：只读时代的「完整接线」定义已过时。
+    //    少它就该告警，所以这条夹具必须一起补上，否则它断言的是旧世界。
+    scriptRunner: async (name, args) => ({ text: `stub:${name}:${JSON.stringify(args ?? {})}` }),
+    getSettings: async () => ({ ai: { provider: "mock", models: [], maxTokens: 16384 } }),
+    sendEvent: () => {},
+    log: () => {}
+  });
+  assert.deepEqual(bridge.toolWiringReport(), [], "接线完整时不该有任何告警");
+});
+
+test("M4b: 反向锁 —— 没注入 scriptRunner 时，写类工具的断裂必须被自检报出来", async () => {
+  // 为什么要有这条：这正是「工具描述承诺能改脚本、但宿主没接线」的形态。
+  // 缺了它，模型会反复拿到「未接线」→ 耗轮次 → 最后什么都没交付，而启动日志一片干净。
   const dir = await tmpDir();
   const session = await openSession({ dir, workspace: REPO });
   const bridge = createAiBridge({
@@ -669,7 +690,11 @@ test("M4: 配了 toolCache 时 toolWiringReport 应无告警（正常接线）",
     sendEvent: () => {},
     log: () => {}
   });
-  assert.deepEqual(bridge.toolWiringReport(), [], "接线完整时不该有任何告警");
+  const report = bridge.toolWiringReport();
+  assert.ok(
+    report.some((w) => /scriptRunner/.test(w)),
+    `没注入 scriptRunner 时必须告警，实际：${report.join(" | ")}`
+  );
 });
 
 for (const c of cases) {

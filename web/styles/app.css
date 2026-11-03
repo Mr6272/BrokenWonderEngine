@@ -3483,6 +3483,75 @@ textarea {
   overflow: hidden;
 }
 
+/* ---------- 右侧 AI 栏（与场景编辑器对等的全高栏） ----------
+   为什么是右侧全高栏而不是底部面板：AI 是主力工作面（读工程 / 改脚本 / 看错误），
+   而底部面板的高度（默认 220px、上限窗口 45%）会把对话区压成一条缝。
+   几何纪律与其它栏一致：
+     · 固定 flex-basis + min-width:0，编辑区永远 flex:1 吃掉剩余宽度；
+     · 折叠 = 宽度归零（不切 display，否则画布恢复时缩放会错一帧）；
+     · 手柄在栏左侧，折叠时一起隐藏（否则留一根能拖的悬空竖线）。 */
+.ai-dock {
+  flex: 0 0 var(--ai-w, 460px);
+  width: var(--ai-w, 460px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* ⚠ min-width:0 必须保留：AI 面板里有代码块与长行，
+     不设 0 会让内容把栏顶宽，把画布挤出可视区（1280 下出横向滚动条）。 */
+  min-width: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.ai-dock.collapsed {
+  flex: 0 0 0;
+  width: 0;
+  border-left: 0;
+}
+
+.ai-resizer {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.ai-resizer:hover {
+  background: var(--accent-soft);
+}
+
+.ai-dock-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-2);
+  user-select: none;
+}
+
+.ai-dock-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 在右侧栏里，AI 面板不再受「底部面板高度」约束：
+   对话区拿到整栏高度，输入区固定贴底（与场景编辑器一样「主体伸缩、工具条固定」）。 */
+.ai-dock .ai-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+.ai-dock .ai-panel .ai-thread {
+  min-height: 120px;
+}
+
 /* ---------- 底部面板 ---------- */
 .panel {
   flex: 0 0 var(--panel-h, 220px);
@@ -3776,6 +3845,10 @@ textarea {
     --sidebar-w: 232px;
     --aux-w: 268px;
     --panel-h: 190px;
+    /* AI 栏在 1280 下如果还占 460，编辑区只剩 → 1280-42-232-268-460-5 ≈ 273px，
+       画布虽然还在但已经很难用。收到 380 后编辑区 ≈ 353px，与「辅助栏 + AI 栏」
+       各占一侧的比例仍然对等（AI 仍是主工作面，比辅助栏宽）。 */
+    --ai-w: 380px;
   }
 
   .editor-tabs .editor-tab {
@@ -3799,6 +3872,9 @@ textarea {
   :root {
     --aux-w: 236px;
     --panel-h: 168px;
+    /* 极端窄屏：AI 栏可以比辅助栏窄一点，但不能再回到「一条缝」——
+       320 是「输入框 + 工具块还能读」的下限，配合 min-width:0 保证不横向溢出。 */
+    --ai-w: 320px;
   }
 }
 

@@ -52,6 +52,19 @@ export class Shell {
   readonly sidebarResizer: HTMLDivElement;
   /** 右侧辅助侧边栏（Inspector / 图层 / 大纲） */
   readonly auxPanel: HTMLDivElement;
+  /**
+   * 右侧 **AI 栏**（与场景编辑器对等的全高栏，可拖宽、可折叠）。
+   *
+   * 为什么不再挂在底部面板：底部面板默认 220px、上限被钳到窗口 45%，
+   * 里面塞「对话区 + 快捷动作 + 输入框 + 用量条」后对话区只剩一条缝 ——
+   * AI 是**主力工作面**（读工程、改脚本、看错误），缩在底部与它的使用权重不对等。
+   * 放到右侧后它能拿到整个主工作区的高度，和画布/剧本编辑器平齐。
+   */
+  readonly aiPanel: HTMLDivElement;
+  readonly aiPanelHead: HTMLDivElement;
+  readonly aiPanelBody: HTMLDivElement;
+  /** AI 栏左边缘的拖宽手柄（右侧栏的手柄在手柄条自己身上） */
+  readonly aiResizer: HTMLDivElement;
   private readonly activityHosts = new Map<string, HTMLButtonElement>();
   /**
    * 折叠状态变化回调。
@@ -60,7 +73,7 @@ export class Shell {
    * 而状态是 shell 管的、按钮在 editor 里建的。回调比让 editor 每次自己查询更省事，
    * 也避免"点了按钮但文案没变"这类只改了一半的 bug。
    */
-  private layoutListeners = new Set<(s: { sidebar: boolean; panel: boolean }) => void>();
+  private layoutListeners = new Set<(s: { sidebar: boolean; panel: boolean; ai: boolean }) => void>();
   private sbWidth = 264;
   private panelHeight = 220;
   private activeActivity = "explorer";
@@ -103,6 +116,28 @@ export class Shell {
     this.auxPanel = el("div", { class: "aux-panel" });
     main.appendChild(this.editorArea);
     main.appendChild(this.auxPanel);
+
+    // ---------- 右侧 AI 栏（与场景编辑器对等的全高栏） ----------
+    //
+    // 为什么放在 auxPanel **右边**而不是塞进底部面板：AI 是主力工作面，
+    // 底部面板的高度（220px、上限窗口 45%）会把对话区压成一条缝。
+    // 顺序上 AI 在最右：它是「常驻工作区」，辅助栏（对象属性）是「随选中变化的细节」，
+    // 用户视线从画布往右扫时先看到属性、再看到助手，符合两级信息的递进关系。
+    //
+    // 为什么用 resizer + 固定 flex-basis（而不是 width:40%）：小窗口纪律（1280x720
+    // 是验收下限）要求「任何一栏都能被压下去、编辑区不能消失」。固定 basis + min-width:0
+    // 让编辑区永远 flex:1 吃掉剩余空间，AI 栏自己也受 max-width 约束不会把画布挤没。
+    this.aiResizer = el("div", {
+      class: "ai-resizer",
+      title: "拖动调整 AI 栏宽度，双击恢复默认（Ctrl+Shift+A 折叠/展开）"
+    });
+    main.appendChild(this.aiResizer);
+    this.aiPanel = el("div", { class: "ai-dock" });
+    this.aiPanelHead = el("div", { class: "ai-dock-head" });
+    this.aiPanelBody = el("div", { class: "ai-dock-body" });
+    this.aiPanel.appendChild(this.aiPanelHead);
+    this.aiPanel.appendChild(this.aiPanelBody);
+    main.appendChild(this.aiPanel);
     this.root.appendChild(main);
 
     // ---------- 底部面板 ----------
@@ -199,15 +234,15 @@ export class Shell {
   }
 
   /** 订阅折叠状态变化（按钮文案/图标据此同步）。 */
-  onLayoutChange(fn: (s: { sidebar: boolean; panel: boolean }) => void): () => void {
+  onLayoutChange(fn: (s: { sidebar: boolean; panel: boolean; ai: boolean }) => void): () => void {
     this.layoutListeners.add(fn);
     // 立刻回放一次当前状态，订阅方不用先自己查一遍
-    fn({ sidebar: this.sidebarCollapsed(), panel: this.panelCollapsed() });
+    fn({ sidebar: this.sidebarCollapsed(), panel: this.panelCollapsed(), ai: this.aiPanelCollapsed() });
     return () => this.layoutListeners.delete(fn);
   }
 
   private emitLayout(): void {
-    const s = { sidebar: this.sidebarCollapsed(), panel: this.panelCollapsed() };
+    const s = { sidebar: this.sidebarCollapsed(), panel: this.panelCollapsed(), ai: this.aiPanelCollapsed() };
     for (const fn of Array.from(this.layoutListeners)) fn(s);
   }
 
@@ -220,6 +255,77 @@ export class Shell {
     this.sidebar.style.flex = `0 0 ${this.sbWidth}px`;
     this.sidebar.style.width = `${this.sbWidth}px`;
     this.requestRepaint();
+  }
+
+  // ---------------- 右侧 AI 栏 ----------------
+
+  /**
+   * AI 栏的默认宽度。
+   *
+   * 460px 的依据：AI 面板里最宽的内容是工具块与代码块（行号 + 约 60 字符代码），
+   * 低于 420 就开始出现难看的折行；而 1280 宽窗口下 460 仍给编辑区留下
+   * 1280 - 48(活动栏) - 264(侧边栏) - 300(辅助栏) - 460 - 4(手柄) ≈ 204px，
+   * 画布不至于消失（且小窗口媒体查询里会再收窄）。
+   *
+   * ⚠ 但**默认值必须随窗口宽度响应**：JS 设置的是内联 flex-basis，它会覆盖
+   * CSS 媒体查询里的 `--ai-w` 变量。如果这里写死 460，1280x720 下 AI 栏
+   * 永远占 460，CSS 里精心收窄的 380 根本不生效 —— 这是「两套宽度规则打架」
+   * 的典型形态（改了一处、另一处静默压过去）。所以默认值按窗口宽度的 32% 取，
+   * 上限 460、下限 320。
+   */
+  static readonly AI_WIDTH_DEFAULT = 460;
+  static defaultAiWidth(): number {
+    const byWindow = Math.round(window.innerWidth * 0.32);
+    return Math.max(320, Math.min(Shell.AI_WIDTH_DEFAULT, byWindow));
+  }
+  private aiWidth = Shell.defaultAiWidth();
+
+  /** AI 栏折叠/展开（与侧边栏同一套语义：宽度归零，不切 display）。 */
+  toggleAiPanel(force?: boolean): boolean {
+    const collapsed = force ?? !this.aiPanel.classList.contains("collapsed");
+    this.aiPanel.classList.toggle("collapsed", collapsed);
+    /**
+     * ⚠ 必须**清掉内联 flex-basis**，不能只靠 CSS 的 `.ai-dock.collapsed { flex: 0 0 0 }`。
+     *
+     * 原因：`setAiPanelWidth` 设的是内联 `style.flex`，而内联样式**优先级高于样式表**——
+     * 类名加上了、CSS 规则的 `flex: 0 0 0` 却被内联的 `0 0 460px` 压过去，
+     * 于是「折叠后宽度仍是 460」。实测就是这样（折叠类的断言全过、宽度断言失败）。
+     * 这类 bug 特别隐蔽：状态看起来对（类在了），几何却完全没变。
+     * 折叠时显式清空内联宽度（展开时 setAiPanelWidth 会重新写上）。
+     */
+    if (collapsed) {
+      this.aiPanel.style.flex = "";
+      this.aiPanel.style.width = "";
+    } else {
+      this.setAiPanelWidth(this.aiWidth);
+    }
+    // 手柄在 AI 栏左侧：折叠后必须一起隐藏，否则留一根能拖的悬空竖线
+    this.aiResizer.style.display = collapsed ? "none" : "";
+    this.requestRepaint();
+    this.emitLayout();
+    return collapsed;
+  }
+
+  aiPanelCollapsed(): boolean {
+    return this.aiPanel.classList.contains("collapsed");
+  }
+
+  /**
+   * 设置 AI 栏宽度。
+   *
+   * 上限按**窗口宽度的 46%** 动态收：固定 620px 在 1280 窗口里会占掉近一半，
+   * 加上侧边栏/辅助栏后画布只剩一条缝。下限 320 是「输入框 + 工具块还能看」的底线。
+   */
+  setAiPanelWidth(w: number): void {
+    const cap = Math.round(window.innerWidth * 0.46);
+    this.aiWidth = Math.max(320, Math.min(Math.max(320, cap), w));
+    this.aiPanel.style.flex = `0 0 ${this.aiWidth}px`;
+    this.aiPanel.style.width = `${this.aiWidth}px`;
+    this.requestRepaint();
+  }
+
+  getAiPanelWidth(): number {
+    return this.aiWidth;
   }
 
   // ---------------- 底部面板 ----------------
@@ -353,12 +459,49 @@ export class Shell {
       window.addEventListener("mouseup", onPUp);
     });
 
+    // ---- AI 栏宽度 ----
+    //
+    // ⚠ 手柄在 AI 栏**左侧**，所以拖动方向是反的：
+    //   鼠标往左移（clientX 变小）→ AI 栏变宽。写成 `startW - delta` 而不是 `+`，
+    //   写反的症状是「拖右边反而变窄」，用户会以为手感坏了。
+    let aStartX = 0;
+    let aStartW = 0;
+    let aDragging = false;
+    const onAMove = (e: MouseEvent): void => {
+      if (!aDragging) return;
+      this.setAiPanelWidth(aStartW - (e.clientX - aStartX));
+    };
+    const onAUp = (): void => {
+      if (!aDragging) return;
+      aDragging = false;
+      window.removeEventListener("mousemove", onAMove);
+      window.removeEventListener("mouseup", onAUp);
+      document.body.style.cursor = "";
+    };
+    this.aiResizer.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      aDragging = true;
+      aStartX = e.clientX;
+      aStartW = this.aiPanel.getBoundingClientRect().width || this.aiWidth;
+      document.body.style.cursor = "col-resize";
+      window.addEventListener("mousemove", onAMove);
+      window.addEventListener("mouseup", onAUp);
+    });
+    this.aiResizer.addEventListener("dblclick", () => {
+      this.setAiPanelWidth(Shell.defaultAiWidth());
+    });
+
+    // 初始宽度要显式设一次：CSS 里的 flex-basis 只是兜底，
+    // 用户拖过之后宽度由这里接管（双击手柄可恢复默认）。
+    this.setAiPanelWidth(this.aiWidth);
+
     // ResizeObserver 兜住所有几何变化（含窗口缩放与折叠），比逐处手动 requestRepaint 可靠
     try {
       const ro = new ResizeObserver(() => this.requestRepaint());
       ro.observe(this.editorArea);
       ro.observe(this.sidebar);
       ro.observe(this.panel);
+      ro.observe(this.aiPanel);
     } catch {
       /* 老浏览器没有 ResizeObserver：靠窗口 resize 兜底 */
     }

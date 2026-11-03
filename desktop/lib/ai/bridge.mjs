@@ -161,6 +161,10 @@ const MOCK_THINKING_MS = 500;
  * @param {(o?:object)=>Promise<string>} [opts.sceneDigest]    渲染侧提供的工程摘要
  * @param {import("./apiIndex.mjs").createApiIndex} opts.apiIndex
  * @param {{put:(t:string,m?:object)=>Promise<string>, get:(s:string)=>Promise<string|null>}} [opts.toolCache]
+ * @param {(name:string, args:object)=>Promise<{text:string, meta?:object, error?:string}>} [opts.scriptRunner]
+ *        脚本写类工具（ListScripts/ReadScript/WriteScript/PatchScript/DeleteScript）的执行器。
+ *        ⚠ **必须在渲染侧执行**：工程的真身在渲染进程内存里，主进程只负责转发。
+ *        没注入时这五个工具会明确答「未接线」，不会假装写成功。
  * @param {(msg:string)=>void} [opts.log]
  */
 export function createAiBridge(opts) {
@@ -230,7 +234,15 @@ export function createAiBridge(opts) {
     // ⚠ 传的是**带前缀补全**的实现：工具定义承诺「也接受前 8 位」，内存这条通路必须同样支持，
     //   否则「没配 toolCache」这个配置下，模型给 8 位就查不到（harness S7bc 实测）。
     resolvePruned: async (sha) => resolvePrunedFromMemory(sha),
-    onPruned: rememberPruned
+    onPruned: rememberPruned,
+    /**
+     * 脚本写类工具的执行器：**转发到渲染侧**。
+     *
+     * 主进程没有工程数据 —— `store.project` 在渲染进程内存里。这里只转发，
+     * 真正的改写在渲染侧执行（自带 markDirty + commit 快照 → 用户可 Ctrl+Z 撤销）。
+     * 由 app-main 注入（见 createAiBridge 的 opts.scriptRunner）。
+     */
+    scriptRunner: opts.scriptRunner
   });
   const running = new Map(); // requestId → { abort: AbortController, cancelled:boolean }
   let lastUsage = emptyUsage();
@@ -1365,8 +1377,31 @@ export function createAiBridge(opts) {
     toolWiringReport() {
       const warnings = [];
       const defs = toolRunner.definitions.map((d) => d.function.name);
-      for (const must of ["ReadFile", "ReadToolResult", "SceneDigest", "SearchApi"]) {
+      for (const must of [
+        "ReadFile",
+        "ReadToolResult",
+        "SceneDigest",
+        "SearchApi",
+        "ListScripts",
+        "ReadScript",
+        "WriteScript",
+        "PatchScript",
+        "DeleteScript"
+      ]) {
         if (!defs.includes(must)) warnings.push(`工具定义缺 ${must}（模型无法调用它）`);
+      }
+      /**
+       * ⚠ 写类工具**必须**有渲染侧执行器。
+       *
+       * 这条检查存在的理由就是历史的教训：工具描述承诺「可以改脚本」，但宿主没接线，
+       * 模型照着调、拿到「未接线」、再重试、轮次耗尽，最后一句正文都没有 ——
+       * 用户看到的是「AI 说改好了但什么都没改」。启动期就把这条断裂暴露出来。
+       */
+      if (typeof opts.scriptRunner !== "function") {
+        warnings.push(
+          "脚本写类工具（WriteScript/PatchScript/DeleteScript…）没有渲染侧执行器（scriptRunner）→ "
+          + "模型无法真正改脚本，只会反复拿到「未接线」。宿主必须注入它。"
+        );
       }
       // 剪枝提示指向的续读能力必须真的可达：内存或磁盘至少有一条通路。
       const hasMemory = typeof prunedStore?.get === "function";

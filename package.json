@@ -36,7 +36,10 @@
     "verify:thinking": "node desktop/tools/verify-thinking-events.mjs",
     "verify:script-editor": "node desktop/tools/verify-script-editor.mjs",
     "verify:sessions": "node desktop/tools/verify-sessions.mjs",
-    "verify:ai-resilience": "node desktop/tools/verify-ai-resilience.mjs"
+    "verify:ai-resilience": "node desktop/tools/verify-ai-resilience.mjs",
+    "verify:script-write": "node desktop/tools/verify-script-write.mjs",
+    "verify:script-ops": "esbuild web/tools/ui-checks/verify-script-ops.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/script-ops.mjs --log-level=warning && node .tmp_ui/script-ops.mjs",
+    "verify:ai-dock": "node desktop/tools/verify-ai-dock-layout.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
