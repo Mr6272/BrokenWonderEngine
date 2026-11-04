@@ -14,7 +14,8 @@ export type ApiGroupId =
   | "life" | "world" | "entity" | "prefab" | "input" | "camera" | "time"
   | "draw" | "audio" | "save" | "map" | "nav" | "interact" | "spawner" | "util"
   | "material" | "field" | "sense" | "physics"
-  | "scene" | "spatial" | "collision" | "actions" | "road" | "vehicle" | "combat" | "debug";
+  | "scene" | "spatial" | "collision" | "actions" | "road" | "vehicle" | "combat" | "debug"
+  | "light";
 
 export interface ApiGroup {
   id: ApiGroupId;
@@ -61,7 +62,8 @@ export const API_GROUPS: ApiGroup[] = [
   { id: "road", label: "路网 road", blurb: "道路节点与路段、最短时间路径" },
   { id: "vehicle", label: "车辆 vehicle", blurb: "上下车、油门刹车转向、沿路网自动驾驶" },
   { id: "combat", label: "战斗 combat", blurb: "武器参数、命中判定、格挡与弹药" },
-  { id: "debug", label: "调试 debug", blurb: "碰撞盒 / 路径 / 区域 / 阻挡图的调试绘制" }
+  { id: "debug", label: "调试 debug", blurb: "碰撞盒 / 路径 / 区域 / 阻挡图的调试绘制" },
+  { id: "light", label: "光照 light", blurb: "2D 光照层：总开关、环境光、压暗、光源挂载与动态重建" }
 ];
 
 function d(name: string, signature: string, desc: string, group: ApiGroupId, phase2 = false): ApiDoc {
@@ -488,7 +490,21 @@ export const API_DOCS: ApiDoc[] = [
   // ===== 脚本性能剖析 =====
   d("bwe.prof.enable", "bwe.prof.enable(on = true) → boolean", "开/关按每脚本累计执行耗时（默认关闭）", "debug"),
   d("bwe.prof.report", "bwe.prof.report() → {frames, avgMs, p50Ms, p95Ms, p99Ms, maxMs, scripts: [{name, p95Ms, calls}]}", "整帧耗时直方图 + 每脚本 p95", "debug"),
-  d("bwe.prof.reset", "bwe.prof.reset() → boolean", "清空剖析样本（开关状态不变）", "debug")
+  d("bwe.prof.reset", "bwe.prof.reset() → boolean", "清空剖析样本（开关状态不变）", "debug"),
+
+  // ===== 2D 光照 =====
+  d("bwe.light.enabled", "bwe.light.enabled(flag?) → boolean", "读/写光照总开关（false = 完全不画光照层，等于白天）", "light"),
+  d("bwe.light.ambient", "bwe.light.ambient(color?, intensity?) → {color, intensity}", "读/写环境光（省略 = 读；给任意一个 = 写）", "light"),
+  d("bwe.light.darkness", "bwe.light.darkness(v?) → number", "读/写压暗程度 0..1（0 = 不压暗）", "light"),
+  d("bwe.light.mode", "bwe.light.mode(m?) → string", "读/写模式 \"baked\" | \"dynamic\" | \"both\"", "light"),
+  d("bwe.light.attach", "bwe.light.attach(e, opts?) → boolean", "把一盏光挂到实体上（跟随位置，自动动态）；已有则改参数", "light"),
+  d("bwe.light.detach", "bwe.light.detach(e) → boolean", "移除实体上挂的光", "light"),
+  d("bwe.light.set", "bwe.light.set(e, opts) → boolean", "改实体光的参数（没挂光返回 false）", "light"),
+  d("bwe.light.add", "bwe.light.add(opts) → number", "在世界坐标处加一盏独立光，返回数字 handle", "light"),
+  d("bwe.light.remove", "bwe.light.remove(handle) → boolean", "删独立光（按 add 返回的 handle）", "light"),
+  d("bwe.light.list", "bwe.light.list() → [{id, x, y, radius, color, intensity, type, dynamic}]", "全部活光（场景光 + 脚本光 + 实体光）", "light"),
+  d("bwe.light.stats", "bwe.light.stats() → {enabled, mode, lights, baked, dynamic, rebuilds, lastMs, texW, texH}", "光照运行时统计（性能水位观察）", "light"),
+  d("bwe.light.rebuild", "bwe.light.rebuild() → boolean", "立刻重建动态光照贴图（下一帧绘制生效）", "light")
 ];
 
 // ---------------- 查询 ----------------

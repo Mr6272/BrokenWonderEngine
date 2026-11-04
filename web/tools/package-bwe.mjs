@@ -183,6 +183,24 @@ function positiveIntField(value, fallback, label, warnings) {
   return Math.max(1, rounded);
 }
 
+// ---- 2D 光照导出用的容错助手（契约 docs/_fragments/lighting-contract.md §3）----
+
+/** 合法的光照模式。非法值退回 both（而不是抛错）：导出器绝不能因为一个脏字段就整包失败。 */
+const LIGHTING_MODES = new Set(["baked", "dynamic", "both"]);
+
+/** 夹到 [min,max] 的有限数：非数字 ⇒ 用 fallback（不做告警，光照参数脏了不该刷屏）。 */
+function clampNum(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+/** `#rrggbb` 校验：非法/缺失 ⇒ fallback。运行时 `parseHexColor` 只认 7 位字符串。 */
+function hexColorOr(value, fallback) {
+  const s = typeof value === "string" ? value.trim() : "";
+  return /^#[0-9a-fA-F]{6}$/.test(s) ? s : fallback;
+}
+
 /** 运行时用 int 读的 z：显式截断并告警，避免排序顺序悄悄变。 */
 function truncIntField(value, fallback, label, warnings) {
   const raw = finiteNumber(value, fallback, label, warnings);
@@ -1151,6 +1169,77 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
         const edges = Array.isArray(rn.edges) ? rn.edges : [];
         if (nodes.length || edges.length) {
           sceneJson.roadNetwork = { nodes, edges };
+        }
+      }
+    }
+    // ---- 2D 光照（可选段；契约 docs/_fragments/lighting-contract.md §3）----
+    //
+    // 与 buildings/navLinks 同一条纪律：**只有工程里真的有才写**。
+    // 旧 .bwproj 没有 scene.lighting ⇒ 这里一个键都不加 ⇒ scene_*.json 与改动前逐字节一致，
+    // 运行时 GameData.RtLighting 保持 null ⇒ 光照层完全不启用（零回归）。
+    //
+    // 为什么必须在这里显式透传而不是靠"对象 props 已经带过去了"：
+    //   `lighting` 是**场景级**配置（ambient/darkness/softness/采样率），它不在任何一个对象上；
+    //   `lightmap` 是烘焙产物的**引用**（assetId + 覆盖矩形 + 纹素尺寸）。
+    //   少了这两段，运行时会以为"这个工程没开光照"，编辑器里烘焙得再漂亮进游戏也是白天 ——
+    //   这正是端到端验收第一次跑出来的真实断点（数学全对、像素完全没变化）。
+    if (!isUi) {
+      const lighting = scene?.lighting;
+      if (lighting && typeof lighting === "object") {
+        // 逐字段取值 + 类型兜底：运行时按名字读，任何 NaN/字符串都会让衰减公式炸成 0 或 NaN。
+        // enabled 必须是真布尔：字符串 "false" 在 Gson 里 getAsBoolean() 会得到 false，
+        // 但 `=== true` 这类判断在 JS 侧会误判 —— 统一用 Boolean(...) 归一。
+        sceneJson.lighting = {
+          enabled: lighting.enabled === true,
+          mode: LIGHTING_MODES.has(String(lighting.mode ?? "")) ? String(lighting.mode) : "both",
+          ambientColor: hexColorOr(lighting.ambientColor, "#3A4A6B"),
+          ambientIntensity: clampNum(lighting.ambientIntensity, 0, 1, 0.35),
+          darkness: clampNum(lighting.darkness, 0, 1, 0.35),
+          softness: clampNum(lighting.softness, 0, 128, 16),
+          texelsPerPixel: clampNum(lighting.texelsPerPixel, 0.02, 2, 0.25),
+          dynamicFps: clampNum(lighting.dynamicFps, 1, 60, 15),
+          maxDynamicLights: Math.max(0, Math.trunc(finiteNumber(lighting.maxDynamicLights, 8)))
+        };
+        if (!sceneJson.lighting.enabled) {
+          warnOnce(
+            warnings,
+            `${sceneLabel}：有光照设置但总开关是关的（enabled=false），游戏里按白天渲染；要看到光照请在光照面板打开总开关`
+          );
+        }
+        if (sceneJson.lighting.mode === "baked" && !scene?.lightmap) {
+          warnOnce(
+            warnings,
+            `${sceneLabel}：光照模式是「只用烘焙图」，但这个场景还没有烘焙过 —— 游戏里只会看到环境光。请先点「一键烘焙」`
+          );
+        }
+      }
+      const lm = scene?.lightmap;
+      if (lm && typeof lm === "object" && String(lm.assetId ?? "").trim()) {
+        const lmAssetId = String(lm.assetId).trim();
+        if (!runtimeAssets.has(lmAssetId)) {
+          warnOnce(
+            warnings,
+            `${sceneLabel}：烘焙贴图引用的素材「${lmAssetId}」不在工程素材库里（可能被删了），光照只剩动态层。请重新烘焙`
+          );
+        } else {
+          sceneJson.lightmap = {
+            assetId: lmAssetId,
+            x: finiteNumber(lm.x, 0),
+            y: finiteNumber(lm.y, 0),
+            w: Math.max(0, finiteNumber(lm.w, 0)),
+            h: Math.max(0, finiteNumber(lm.h, 0)),
+            texW: Math.max(0, Math.trunc(finiteNumber(lm.texW, 0))),
+            texH: Math.max(0, Math.trunc(finiteNumber(lm.texH, 0))),
+            texelsPerPixel: Math.max(0, finiteNumber(lm.texelsPerPixel, 0)),
+            lights: Math.max(0, Math.trunc(finiteNumber(lm.lights, 0))),
+            version: Math.max(0, Math.trunc(finiteNumber(lm.version, 0)))
+          };
+          if (sceneJson.lightmap.w <= 0 || sceneJson.lightmap.h <= 0) {
+            warnOnce(
+              warnings,
+              `${sceneLabel}：烘焙贴图的覆盖矩形宽高是 0，运行时会退回「覆盖整张场景」——如果场景尺寸改过，请重新烘焙`
+            );
+          }
         }
       }
     }

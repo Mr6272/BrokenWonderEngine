@@ -22,7 +22,8 @@ import { canvasPalette, invalidateCanvasPalette } from "../ui/palette.ts";
 import { contextMenu, type MenuItem } from "../ui/toast.ts";
 import { clamp } from "../core/dom.ts";
 import { loadFrame } from "../data/assets.ts";
-import { sizeOf, boundsOf, paintObject, paintGrid, paintUiFrame, type PaintCtx } from "./painter.ts";
+import { sizeOf, boundsOf, paintObject, paintGrid, paintUiFrame, paintLightingPreview, type PaintCtx } from "./painter.ts";
+import { collectSceneLighting } from "./lightMath.ts";
 
 type Mode = "none" | "move" | "marquee" | "pan" | "zone" | "scale";
 
@@ -340,7 +341,10 @@ export class CanvasView {
       selectedIds: new Set(store.selection.map((o) => o.id)),
       overrides: this.overrides,
       project,
-      ui: isUiScene(scene)
+      ui: isUiScene(scene),
+      // 光照预览开关：默认开，但只有"场景真的有 enabled 的 lighting"才会画出一笔
+      //（paintLightingPreview 里再判一次 —— 那里才是"缺字段 ⇒ 一行不画"的兜底）
+      showLighting: store.showLighting
     };
 
     // UI 场景画「设计分辨率画框 + 安全区」，世界场景画瓦片网格。
@@ -362,6 +366,22 @@ export class CanvasView {
       // 预制体链接角标：画在对象外面（painter 不认 prefabId，这是画布层的叠加信息）。
       // 不做自动同步，所以它只是「告诉你这个对象是从模板放出来的」。
       if (o.prefabId && this.zoom > 0.5) this.drawPrefabBadge(g, o);
+    }
+
+    // ---- 光照近似预览 ----
+    // 画在对象之后：光照层在运行时也是盖在 drawMap/drawActors 之上（契约 §6）。
+    // 只在世界场景画：UI 场景是屏幕空间设计稿，压暗整屏没有意义也没有对应实现。
+    // 两个开关都满足才画（showLighting 是工具条开关；scene.lighting.enabled 是工程数据）
+    // —— 任一不满足就一行都不画，无光照工程的画面保持逐像素不变。
+    if (!isUiScene(scene) && pctx.showLighting && scene.lighting?.enabled === true) {
+      paintLightingPreview(
+        g,
+        scene,
+        pctx,
+        this.worldToScreen.bind(this),
+        cw,
+        collectSceneLighting(scene, project)
+      );
     }
 
     // 智能对齐参考线
@@ -1052,6 +1072,12 @@ export class CanvasView {
         label: "在这里放出生点",
         onClick: () => this.createAt("SPAWN", world)
       },
+      {
+        // 光源不要求先开「2D 光照」总开关：用户右键放灯，多半正想开始做夜景。
+        // 真正没开时由面板/烘焙给出明确提示（这里只放对象，不改工程级设置）。
+        label: "在这里放一个光源",
+        onClick: () => this.createLightAt(world)
+      },
       { divider: true },
       // 锁定对象的回头路：锁定后在画布上点不到它，必须留一个不用先选中它的解锁入口。
       // 更精细的方式：按住 Alt 在画布上点锁定对象，然后在右栏取消锁定。
@@ -1167,6 +1193,70 @@ export class CanvasView {
     store.markDirty();
     this.cb.onCommit?.(`创建 UI ${base.name}`);
     this.requestPaint();
+  }
+
+  /**
+   * 在空白处放一个光源。
+   *
+   * 为什么和 `createAt` 分开：光源的缺省 props 是**契约 §3.3 写死的一组键**，
+   * 散落在通用 createAt 里会变成"每次加一种对象就多一堆 if；某天有人只改了 props 忘了改
+   * 缺省半径，画布上就出现一盏半径 0、看不见的灯"。集中在一个方法里，改一处就全对。
+   *
+   * 缺省值（逐字照 §3.3 表格 + 编辑器常用手感）：
+   *   lightRadius 140 / lightColor #FFC978 / lightIntensity 1 /
+   *   lightType point / lightShadow 1（默认会被墙挡）
+   * 另外顺手把半径画成一个可碰撞的圆？不：`halfW/halfH` 是**碰撞体**语义，
+   * 拿它表达"照亮范围"会让物理/网格判定凭空多出一块实心方块。光照范围只写在 props。
+   */
+  private createLightAt(world: Point2): void {
+    const scene = store.scene;
+    if (!scene) return;
+    const layer = scene.layers[Math.max(0, scene.layers.length - 1)];
+    let i = 1;
+    const base = "光源";
+    while (scene.objects.some((o) => o.name === `${base} ${i}`)) i++;
+    const obj: SceneObject = {
+      id: cryptoId(),
+      name: `${base} ${i}`,
+      kind: "LIGHT",
+      x: this.snap(world.x),
+      y: this.snap(world.y),
+      z: scene.objects.length,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      halfW: 0,
+      halfH: 0,
+      layerId: layer?.id ?? "",
+      visible: true,
+      locked: false,
+      assetId: "",
+      animMode: "默认",
+      animFps: 8,
+      modules: [],
+      props: {
+        lightRadius: "140",
+        lightColor: "#FFC978",
+        lightIntensity: "1",
+        lightType: "point",
+        lightShadow: "1"
+      },
+      tags: [],
+      parentId: null
+    };
+    scene.objects.push(obj);
+    store.select(obj);
+    store.markDirty();
+    this.cb.onCommit?.("创建光源");
+    this.requestPaint();
+  }
+
+  /**
+   * 对外的「在指定世界坐标放一盏灯」（命令面板 / 触摸板用户用）。
+   * 内部实现与右键菜单完全同一条路径 —— 缺省 props 只有一份。
+   */
+  addLightAt(x: number, y: number): void {
+    this.createLightAt({ x, y });
   }
 
   private createAt(kind: SceneObject["kind"], world: Point2): void {

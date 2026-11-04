@@ -48,6 +48,12 @@ export function renderInspector(host: HTMLElement): void {
   const linkCard = prefabLinkCard(obj);
   if (linkCard) wrap.appendChild(linkCard);
   wrap.appendChild(placeCard(obj));
+  // ★ 光源对象：专属卡片放在「位置」之后、「自定义属性」之前。
+  //   为什么这个位置：用户点中一盏灯，紧接着要改的就是半径/颜色/强度（不是坐标），
+  //   压到 Props 表下面等于让他先滚一屏。而 Props 表是"底层键值"，仍在最后。
+  if (obj.kind === "LIGHT") {
+    wrap.appendChild(lightCard(obj));
+  }
   // ★ UI 场景：先给「文字 / 底色」这类界面专用控件，再给 Props 表。
   //   顺序有意义 —— 用户摆一个文字，第一件想改的就是字与颜色，
   //   把它压在 Props 表下面等于让人先滚一屏才看到。
@@ -451,6 +457,279 @@ function uiElementCard(obj: SceneObject): HTMLElement {
   }
 
   return cardBox(label ? "文字 Text" : "UI 元素 Element", box, I.module);
+}
+
+/**
+ * 光源专属卡片（`kind === "LIGHT"`）。
+ *
+ * 为什么要有：`lightRadius` / `lightColor` 这些键如果只靠下面的「自定义属性」表来编辑，
+ * 用户得先知道键名、自己敲 "#FFC978"、还得记住 `lightShadow` 要写 "0"/"1" ——
+ * 那不是编辑器，是配置文件。这里把契约 §3.3 的键做成**有约束的控件**：
+ * 半径是数字框、颜色是色板、类型是下拉、三态是下拉、动态/遮挡是开关。
+ *
+ * 全部写回 `obj.props`（**键名逐字按契约 §3.3**）：这是导出/运行时/烘焙三方共同的读取面，
+ * 一旦这里另起一套字段名，脚本 `e.setProp("lightRadius", ...)` 就改不动面板上的东西。
+ *
+ * 模块优先的提醒：挂了 `render.light` / `look.light` 模块时，**模块参数优先于 props**
+ * （契约 §3.3）。面板不隐藏这些控件（用户仍要能改基础值），但顶部给一句明确提示 ——
+ * 否则"我在这改了半径却没生效"会成为反复被报的怪事。
+ */
+function lightCard(obj: SceneObject): HTMLElement {
+  const box = el("div", { class: "col" });
+  box.style.marginTop = "10px";
+  box.style.gap = "6px";
+
+  const setProp = (key: string, value: string) => {
+    obj.props = obj.props ?? {};
+    obj.props[key] = value;
+    store.markDirty();
+    window.dispatchEvent(new CustomEvent("bwe:repaint"));
+    // 撤销快照：延时合并（拖滑块不该压满撤销栈）；面板自身不重建，避免刚聚焦的输入框被换掉
+    window.dispatchEvent(new CustomEvent("bwe:commit", { detail: { label: "改光源参数" } }));
+  };
+  const getProp = (key: string, def: string) => {
+    const v = obj.props?.[key];
+    return v == null || String(v).trim() === "" ? def : String(v);
+  };
+  const numProp = (key: string, def: number) => {
+    const n = Number(getProp(key, String(def)));
+    return Number.isFinite(n) ? n : def;
+  };
+  const boolProp = (key: string, def: boolean) => getProp(key, def ? "1" : "0") !== "0";
+
+  // ---- 模块优先级提醒 ----
+  const mod = (obj.modules ?? []).find(
+    (m) => m.enabled !== false && (m.defId === "render.light" || m.defId === "look.light")
+  );
+  if (mod) {
+    box.appendChild(
+      el("div", { class: "hint" },
+        `这个对象挂了「点光源」模块（${mod.defId}）：模块里的 半径/颜色/强度 会**优先**于下面这些值。`
+        + "想按下面的值生效，先去「模块」页把那个模块关掉或删掉。")
+    );
+  }
+
+  // ---- 半径 ----
+  box.appendChild(
+    fieldRow(
+      "半径 Radius",
+      input(getProp("lightRadius", "140"), {
+        numeric: true,
+        hint: "照亮半径（世界像素）。0 或空 = 这盏不发光",
+        onChange: (v) => {
+          const n = Number(v);
+          setProp("lightRadius", String(Number.isFinite(n) && n >= 0 ? Math.round(n) : 140));
+        }
+      })
+    )
+  );
+
+  // ---- 颜色 + 常用色板 ----
+  box.appendChild(
+    fieldRow(
+      "颜色 Color",
+      input(getProp("lightColor", "#FFC978"), {
+        hint: "十六进制颜色，例如 #FFC978（暖黄）/ #80CCFF（月光蓝）/ #FF8844（火把橙）",
+        onChange: (v) => setProp("lightColor", v.trim() || "#FFC978")
+      })
+    )
+  );
+  const swatchRow = el("div", { class: "row tight" });
+  for (const c of ["#FFC978", "#FF8844", "#FF4D4D", "#80CCFF", "#B79BFF", "#4CD4A0", "#FFFFFF"]) {
+    const sw = el("span");
+    sw.style.cssText = `width:18px;height:18px;border-radius:50%;border:1px solid rgba(255,255,255,.2);cursor:pointer;background:${c}`;
+    sw.title = c;
+    sw.addEventListener("click", () => {
+      setProp("lightColor", c);
+      window.dispatchEvent(new CustomEvent("bwe:refresh"));
+    });
+    swatchRow.appendChild(sw);
+  }
+  box.appendChild(swatchRow);
+
+  // ---- 强度 ----
+  box.appendChild(
+    fieldRow(
+      "强度 Intensity",
+      input(getProp("lightIntensity", "1"), {
+        numeric: true,
+        hint: "0..4。1 = 标准亮度，>1 会过曝成白（适合灯心）",
+        onChange: (v) => {
+          const n = Number(v);
+          const ok = Number.isFinite(n) ? Math.max(0, Math.min(4, n)) : 1;
+          setProp("lightIntensity", String(ok));
+        }
+      })
+    )
+  );
+
+  // ---- 类型 ----
+  const type = getProp("lightType", "point").toLowerCase() === "spot" ? "spot" : "point";
+  box.appendChild(
+    fieldRow(
+      "类型 Type",
+      select(
+        [
+          { value: "point", label: "点光 point（四面都亮）" },
+          { value: "spot", label: "聚光 spot（只照一个锥形）" }
+        ],
+        type,
+        {
+          hint: "点光适合火把/路灯；聚光适合手电筒、探照灯、车灯",
+          onChange: (v) => {
+            setProp("lightType", v === "spot" ? "spot" : "point");
+            // 控件要显隐（角度/方向只对聚光有意义）
+            window.dispatchEvent(new CustomEvent("bwe:refresh"));
+          }
+        }
+      )
+    )
+  );
+
+  // ---- 聚光专用：角度 / 方向 / 锥边软化 ----
+  if (type === "spot") {
+    box.appendChild(
+      fieldRow(
+        "聚光角度 Angle",
+        input(getProp("lightAngle", "60"), {
+          numeric: true,
+          hint: "锥形的总张角（度）。60 = 常见手电筒；10 = 激光；120 = 很宽的泛光",
+          onChange: (v) => {
+            const n = Number(v);
+            setProp("lightAngle", String(Number.isFinite(n) ? Math.max(1, Math.min(360, n)) : 60));
+          }
+        })
+      )
+    );
+    box.appendChild(
+      fieldRow(
+        "聚光方向 Dir",
+        input(getProp("lightDir", String(Math.round(obj.rotation || 0))), {
+          numeric: true,
+          hint: "0 = 朝右(+x)，90 = 朝下(+y)，顺时针。留空则跟随对象旋转",
+          onChange: (v) => {
+            const n = Number(v);
+            setProp("lightDir", String(Number.isFinite(n) ? Math.round(((n % 360) + 360) % 360) : 0));
+          }
+        })
+      )
+    );
+    box.appendChild(
+      fieldRow(
+        "锥边软化 Cone Soft",
+        input(getProp("lightConeSoft", "10"), {
+          numeric: true,
+          hint: "锥形边缘的过渡角度（度）。0 = 硬边（像舞台灯），10 比较自然",
+          onChange: (v) => {
+            const n = Number(v);
+            setProp("lightConeSoft", String(Number.isFinite(n) ? Math.max(0, Math.min(90, n)) : 10));
+          }
+        })
+      )
+    );
+  }
+
+  // ---- 衰减指数 ----
+  box.appendChild(
+    fieldRow(
+      "衰减 Falloff",
+      input(getProp("lightFalloff", "2"), {
+        numeric: true,
+        hint: "1..4。1 = 衰减很慢（大范围泛光），2 = 标准，4 = 只在灯心附近亮",
+        onChange: (v) => {
+          const n = Number(v);
+          setProp("lightFalloff", String(Number.isFinite(n) ? Math.max(1, Math.min(4, n)) : 2));
+        }
+      })
+    )
+  );
+
+  // ---- 被遮挡 / 闪烁 ----
+  box.appendChild(
+    fieldRow(
+      "会被墙挡住 Shadow",
+      switchToggle(boolProp("lightShadow", true), (v) => {
+        setProp("lightShadow", v ? "1" : "0");
+        window.dispatchEvent(new CustomEvent("bwe:refresh"));
+      }, "开着 = 墙/遮挡体后面不会被这盏光照到（更真实，也稍慢）；关掉 = 光穿过一切"),
+      "lightShadow：是否被遮挡体挡光（契约 §3.3 缺省 \"1\"）"
+    )
+  );
+
+  box.appendChild(
+    fieldRow(
+      "闪烁 Flicker",
+      input(getProp("lightFlicker", "0"), {
+        numeric: true,
+        hint: "0..1。0 = 常亮；0.25 = 火把那种轻微抖动。烘焙贴图里不含抖动（由运行时动态叠加）",
+        onChange: (v) => {
+          const n = Number(v);
+          setProp("lightFlicker", String(Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0));
+        }
+      })
+    )
+  );
+
+  // ---- 烘焙时排除（动态光）----
+  box.appendChild(
+    fieldRow(
+      "烘焙时排除（动态光）",
+      switchToggle(boolProp("lightDynamic", false), (v) => {
+        setProp("lightDynamic", v ? "1" : "0");
+        window.dispatchEvent(new CustomEvent("bwe:refresh"));
+      }, "开着 = 这盏光不进烘焙贴图，由运行时每帧动态计算。会移动/跟随角色的光必须开"),
+      "lightDynamic：1 = 不进烘焙（移动的光必须为 1，否则烘焙图里的光斑会留在原地）"
+    )
+  );
+
+  // ---- 遮挡体三态 ----
+  // 「不设置」这一态是必须的：不写 lightBlock 时按 tags 判定（wall/occluder/lightblock），
+  // 用户把一盏灯也标成 wall 就会变成"灯自己挡自己"，而三态让"我只想让它当灯"有明确表达。
+  const blockRaw = obj.props?.lightBlock;
+  const blockValue = blockRaw === undefined || String(blockRaw).trim() === "" ? "" : String(blockRaw).trim() === "0" ? "0" : String(blockRaw).trim() === "1" ? "1" : "";
+  const tags = Array.isArray(obj.tags) ? obj.tags : [];
+  const tagBlocks = tags.indexOf("wall") >= 0 || tags.indexOf("occluder") >= 0 || tags.indexOf("lightblock") >= 0;
+  box.appendChild(
+    fieldRow(
+      "挡住光线（遮挡体）",
+      select(
+        [
+          { value: "", label: "不设置（按标签判定）" },
+          { value: "1", label: "是 · 挡住光线" },
+          { value: "0", label: "否 · 光穿过它" }
+        ],
+        blockValue,
+        {
+          hint: "lightBlock：\"1\" 一定挡光、\"0\" 一定不挡；不设置时看 tags 里有没有 wall / occluder / lightblock",
+          onChange: (v) => {
+            obj.props = obj.props ?? {};
+            if (v === "1" || v === "0") obj.props.lightBlock = v;
+            else delete obj.props.lightBlock; // 「不设置」= 删掉这个键，回到标签判定
+            store.markDirty();
+            window.dispatchEvent(new CustomEvent("bwe:repaint"));
+            window.dispatchEvent(new CustomEvent("bwe:refresh"));
+            window.dispatchEvent(new CustomEvent("bwe:commit", { detail: { label: "改遮挡体标记" } }));
+          }
+        }
+      )
+    )
+  );
+  box.appendChild(
+    el("div", { class: "hint" },
+      blockValue === "" && tagBlocks
+        ? "当前按标签判定：这个对象的 tags 里有 wall / occluder / lightblock → 它会挡光。"
+        : blockValue === "" ? "当前按标签判定：tags 里没有遮挡标记 → 它不挡光。" : "")
+  );
+
+  // ---- 一键定位 ----
+  box.appendChild(
+    button("在画布中定位这盏光", () => {
+      store.select(obj);
+      window.dispatchEvent(new CustomEvent("bwe:focus-object", { detail: { id: obj.id, x: obj.x, y: obj.y } }));
+    }, { size: "sm", variant: "ghost", title: "选中它，并把画布视图移到它身上" })
+  );
+
+  return cardBox("光源 Light 2D", box, I.light);
 }
 
 function customPropsCard(obj: SceneObject): HTMLElement {

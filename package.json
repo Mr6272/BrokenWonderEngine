@@ -19,6 +19,9 @@
     "verify:openworld": "node web/tools/verify-openworld.mjs",
     "verify:roundtrip": "node web/tools/verify-editor-roundtrip.mjs",
     "verify:uiscene": "node web/tools/verify-ui-scene.mjs",
+    "gen:lightfix": "node web/tools/gen-lighting-fixture.mjs",
+    "verify:lightmath": "esbuild web/tools/ui-checks/verify-lighting.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/verify-lighting.mjs --log-level=warning && node .tmp_ui/verify-lighting.mjs",
+    "verify:lighte2e": "node web/tools/verify-lighting-e2e.mjs",
     "bench:openworld": "node web/tools/bench-openworld.mjs --json docs/bench-openworld.json",
     "verify:all": "npm run verify:apidocs && npm run typecheck && npm run check:scripts && npm run verify:openworld && npm run verify:roundtrip && npm run verify:uiscene",
     "verify:apidocs:soft": "node web/tools/verify-apidocs.mjs",
@@ -40,7 +43,8 @@
     "verify:script-write": "node desktop/tools/verify-script-write.mjs",
     "verify:script-ops": "esbuild web/tools/ui-checks/verify-script-ops.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/script-ops.mjs --log-level=warning && node .tmp_ui/script-ops.mjs",
     "verify:ai-dock": "node desktop/tools/verify-ai-dock-layout.mjs",
-    "verify:knowledge": "node desktop/tools/verify-knowledge.mjs"
+    "verify:knowledge": "node desktop/tools/verify-knowledge.mjs",
+    "gen:lightexample": "node web/tools/gen-lighting-example.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

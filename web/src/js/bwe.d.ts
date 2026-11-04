@@ -1964,4 +1964,126 @@ declare namespace bwe {
     /** 清空所有样本（开关状态保持不变）。 */
     reset(): boolean;
   };
+
+  // ---- 2D 光照 light ------------------------------------------------------
+
+  /**
+   * 一盏光的参数（`bwe.light.attach` / `set` / `add` 的 opts）。
+   *
+   * 字段名就是 `docs/_fragments/lighting-contract.md` §3.3 里场景 props 的**驼峰短名**；
+   * 省略的字段保持当前值（`attach`/`add` 时是缺省值）。全部可省略。
+   */
+  interface LightOpts {
+    /** 世界坐标 X（只有 `add` 认；`attach`/`set` 忽略它 —— 位置跟实体走）。 */
+    x?: number;
+    /** 世界坐标 Y（只有 `add` 认）。 */
+    y?: number;
+    /** 照亮半径（世界像素，缺省 140；`<= 0` = 不发光）。 */
+    radius?: number;
+    /** 光色 `"#rrggbb"`（缺省 `"#FFC978"`；非法值忽略）。 */
+    color?: string;
+    /** 强度 0..4（缺省 1；`<= 0` = 跳过这盏）。 */
+    intensity?: number;
+    /** `"point"` 点光 / `"spot"` 聚光（缺省 `"point"`）。 */
+    type?: "point" | "spot";
+    /** 聚光锥总角度（度，缺省 60；仅 `spot` 有意义）。 */
+    angle?: number;
+    /** 聚光方向（度，0 = +x，90 = 向下/顺时针；缺省取实体 rotation）。 */
+    dir?: number;
+    /** 锥边软化角（度，缺省 10）。 */
+    coneSoft?: number;
+    /** 距离衰减指数 1..4（缺省 2）。 */
+    falloff?: number;
+    /** 是否被遮挡体挡光（缺省 true）。 */
+    shadow?: boolean;
+    /** 闪烁幅度 0..1（缺省 0 = 不闪）。 */
+    flicker?: number;
+    /** true = 不进烘焙、运行时动态算（`attach` 自动为 true；缺省 false）。 */
+    dynamic?: boolean;
+  }
+
+  /** `bwe.light.list()` 的一盏光。 */
+  interface LightEntry {
+    /** 稳定唯一 id（删/改都用它）。 */
+    id: number;
+    /** 当前世界坐标 X（跟随实体的光每帧被刷新）。 */
+    x: number;
+    /** 当前世界坐标 Y。 */
+    y: number;
+    /** 照亮半径（世界像素）。 */
+    radius: number;
+    /** 光色 `"#rrggbb"`。 */
+    color: string;
+    /** 强度 0..4。 */
+    intensity: number;
+    /** `"point"` / `"spot"`。 */
+    type: "point" | "spot";
+    /** 是否只由运行时动态计算（不进烘焙图）。 */
+    dynamic: boolean;
+  }
+
+  /** `bwe.light.stats()` 的返回。 */
+  interface LightStats {
+    /** 光照系统总开关。 */
+    enabled: boolean;
+    /** 当前模式 `"baked"` / `"dynamic"` / `"both"`。 */
+    mode: "baked" | "dynamic" | "both";
+    /** 活光总数（场景光 + 脚本光 + 实体光）。 */
+    lights: number;
+    /** 烘焙图里的光源数（没有烘焙图为 0）。 */
+    baked: number;
+    /** 参与动态计算的活光数。 */
+    dynamic: number;
+    /** 累计重建次数（诊断用）。 */
+    rebuilds: number;
+    /** 最近一次重建耗时（ms）。 */
+    lastMs: number;
+    /** 动态贴图纹素宽。 */
+    texW: number;
+    /** 动态贴图纹素高。 */
+    texH: number;
+  }
+
+  /** `bwe.light.ambient()` 的返回。 */
+  interface LightAmbient {
+    /** 环境光颜色 `"#rrggbb"`。 */
+    color: string;
+    /** 环境光强度 0..1。 */
+    intensity: number;
+  }
+
+  /**
+   * 2D 光照层（契约 `docs/_fragments/lighting-contract.md` §4）。
+   *
+   * 全部成员都是**方法**形式：读写同一入口 —— 传参 = 写，省略 = 读。
+   * 非法参数**不抛异常**（Rhino 里异常会打断脚本），一律返回 `false` 或当前值。
+   */
+  interface Light {
+    /** 读/写总开关（省略 `flag` = 读）。`false` = 光照层完全不画（= 白天）。 */
+    enabled(flag?: boolean): boolean;
+    /** 读/写环境光：省略全部 = 读；传 `color` 和 `intensity` 任意一个 = 写。 */
+    ambient(color?: string, intensity?: number): LightAmbient;
+    /** 读/写压暗程度 0..1（0 = 白天不压暗；缺省 0.35）。 */
+    darkness(v?: number): number;
+    /** 读/写模式 `"baked"` / `"dynamic"` / `"both"`（非法值忽略，返回当前值）。 */
+    mode(m?: string): string;
+    /** 把一盏光挂到实体上（跟随实体位置，自动 `dynamic`）。已有则就地改参数。 */
+    attach(e: Entity, opts?: LightOpts): boolean;
+    /** 移除实体上由 `attach` 挂的光。 */
+    detach(e: Entity): boolean;
+    /** 改实体光的参数（没有挂光则返回 `false`）。 */
+    set(e: Entity, opts: LightOpts): boolean;
+    /** 在世界坐标处加一盏独立光（`opts.x` / `opts.y`），返回数字 handle。 */
+    add(opts?: LightOpts): number;
+    /** 删独立光（按 `add` 返回的 handle）。 */
+    remove(handle: number): boolean;
+    /** 全部活光（场景 LIGHT 对象派生的 + 脚本光 + 实体光）。 */
+    list(): LightEntry[];
+    /** 运行时统计（性能水位观察）。 */
+    stats(): LightStats;
+    /** 立刻重建动态光照贴图（下一帧绘制时生效，脚本阶段没有 GL 上下文）。 */
+    rebuild(): boolean;
+  }
+
+  const light: Light;
 }

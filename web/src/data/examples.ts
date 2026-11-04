@@ -18,6 +18,7 @@ import { makeInstance, moduleDef } from "./modules.ts";
 import topDownJsProject from "../../examples/俯视角JS示例.bwproj";
 import emergenceProject from "../../examples/涌现沙盘.bwproj";
 import vampireProject from "../../examples/吸血鬼幸存者.bwproj";
+import lightingProject from "../../examples/2D光照示例.bwproj";
 
 // ---------------- 内联素材 ----------------
 
@@ -437,7 +438,7 @@ export function createDressupProject(): Project {
   return p;
 }
 
-export type ExampleId = "minesweeper" | "dressup" | "topdown-js" | "emergence" | "vampire";
+export type ExampleId = "minesweeper" | "dressup" | "topdown-js" | "emergence" | "vampire" | "lighting";
 
 /** 深拷贝：示例工程每次载入都要是一份新对象，避免用户在编辑器里的改动污染模块缓存。 */
 function cloneProject(p: unknown): Project {
@@ -454,6 +455,9 @@ export function buildExample(id: ExampleId): { project: Project; fileName: strin
   }
   if (id === "vampire") {
     return { project: cloneProject(vampireProject), fileName: "吸血鬼幸存者.bwproj" };
+  }
+  if (id === "lighting") {
+    return { project: cloneProject(lightingProject), fileName: "2D光照示例.bwproj" };
   }
   return { project: createMinesweeperProject(), fileName: "扫雷示例.bwproj" };
 }

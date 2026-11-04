@@ -62,6 +62,14 @@ export class Store {
   showColliders = true;
   showZones = true;
   showNames = true;
+  /**
+   * 画布上的**光照近似预览**开关（工具条上的「光照预览」眼睛）。
+   *
+   * 缺省 true：用户打开一个有光照的工程，第一眼就该看到夜色；
+   * 关掉它只是"我要看清素材本色"，数据一行都不动。
+   * 注意它跟 `scene.lighting.enabled`（工程数据）是两回事：这里关掉不影响导出/运行。
+   */
+  showLighting = true;
 
   /** 当前在画的素材（画笔工具） */
   paintAssetId = "";

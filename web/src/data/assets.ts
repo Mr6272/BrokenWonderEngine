@@ -490,6 +490,59 @@ export function importUrl(project: Project, url: string, name: string, group = "
   return e;
 }
 
+/**
+ * 把一张**程序生成**的位图注册成普通 IMAGE 素材（光照贴图 / 缩略图 / 未来其它烘焙产物）。
+ *
+ * 为什么不复用一个 `importFiles(project, [new File([blob], ...)])`：
+ *   那条路径按"文件名去重 + 按扩展名判定类型 + 从文件读尺寸"，烘焙产物没有文件名、
+ *   同名重复烘焙会被它判成"已存在"直接跳过（于是第二次烘焙拿不到新素材 id，
+ *   工程里却回写了一个指向旧图的 lightmap —— 用户看到的是"点了没反应"）。
+ *
+ * 存储格式与 `importFiles` **逐字一致**：`idbPut(STORE_ASSET, id, { frames: [blob], name })`
+ * + `src:"blob"`。这是打包链路（`assetFilesForPack` → Build/assets）零改动就能
+ * 把这张 PNG 拷进游戏的唯一前提；换成别的存法，导出的游戏里就没有光照贴图。
+ *
+ * @returns 新注册的素材条目（已 push 进 `project.assets`）。
+ */
+export async function addRasterAsset(
+  project: Project,
+  opts: { name: string; blob: Blob; width: number; height: number; group?: string }
+): Promise<AssetEntry> {
+  const id = uid();
+  const name = String(opts.name || "图片").trim() || "图片";
+  const w = Math.max(0, Math.round(Number(opts.width) || 0));
+  const h = Math.max(0, Math.round(Number(opts.height) || 0));
+  // 尺寸拿不到时退回浏览器实测：亮度贴图的 texW/texH 是运行时定位的关键值，
+  // 这里少写一个 0 会让 lightmap 引用变成"宽高为 0 的贴图"，画面上完全看不到光。
+  let width = w;
+  let height = h;
+  if ((!width || !height) && typeof createImageBitmap === "function") {
+    try {
+      const bmp = await createImageBitmap(opts.blob);
+      width = bmp.width;
+      height = bmp.height;
+    } catch {
+      /* 解不出来就让调用方给的值继续生效 */
+    }
+  }
+
+  const entry: AssetEntry = {
+    id,
+    name,
+    kind: "IMAGE",
+    src: "blob",
+    path: name,
+    width,
+    height,
+    group: opts.group || "未分组",
+    hiddenFrames: [],
+    frameDurations: []
+  };
+  await idbPut(STORE_ASSET, id, { frames: [opts.blob], name });
+  project.assets.push(entry);
+  return entry;
+}
+
 // ---------------- 工程持久化 ----------------
 
 export async function saveProjectBlob(project: Project): Promise<void> {

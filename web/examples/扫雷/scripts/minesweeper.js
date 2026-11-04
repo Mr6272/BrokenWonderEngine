@@ -116,7 +116,7 @@ function autoCellSize(rows, cols) {
   var portrait = isPortrait(scr.w, scr.h);
   // HUD 固定贴边（顶 108 / 底 116 横屏；顶 92 / 底 116 竖屏），中间是棋盘可用区
   var availW = scr.w - (portrait ? 16 : 24);
-  var availH = scr.h - (portrait ? 92 + 116 + 16 : 108 + 116 + 20);
+  var availH = scr.h - (portrait ? 92 + 132 + 16 : 108 + 116 + 20);
   // ⚠ 关键：格子尺寸按「初始 fit 的 zoom」算一次，缩放后不再重算。
   // 旧写法每帧读 bwe.camera.zoom，玩家双指一放大，cell 就变小 → 棋盘整体缩小，
   // 看起来像「缩放没生效、反而在抖」。
@@ -434,7 +434,10 @@ function drawHud(S) {
   if (isPortrait(W, H)) {
     // 竖屏：顶部只放一条窄标题带，配置条压在底部，棋盘居中
     var topH = 92;
-    var botH = 116;
+    // ⚠ 底带高度必须与 autoCellSize 里的算式同步（见下方 availH 的竖屏分支）：
+    // 三行输入（各 30px = 90）+ 上下留边 8 + 底部安全距离 18 ≈ 132。
+    // 旧值 116 让最后一行离屏幕底只剩 18px，手指点在屏幕边缘时容易触发系统手势。
+    var botH = 132;
     drawFrameTop(W, topH);
     drawFrameBottom(W, H - botH, botH);
     putLabel("标题 扫雷", 8, 2 + 22 / 2);
@@ -682,20 +685,26 @@ function drawConfigBar(W, botY, botH) {
   text(rangeTip, 16, botY + botH - 12, 11, "#404040", "left");
 }
 
+/**
+ * 在按钮里画一个三角形箭头（▲ / ▼）。
+ *
+ * <p>旧实现是<b>写死的 1px 像素线段</p>，只能适配 22×9 的小按钮；竖屏把箭头放大到
+ * 26×11 之后，那个小箭头缩在角落里，看着像按钮没画内容。这里改成按按钮宽高
+ * <b>自适应</b>：箭头半宽 = 按钮宽的 0.26、半高 = 按钮高的 0.34，并保证至少 3px 可见。
+ */
 function drawArrow(r, up) {
   var cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-  if (up) {
-    box(cx - 4, cy, 2, 1, BLACK);
-    box(cx + 3, cy, 2, 1, BLACK);
-    box(cx - 3, cy - 1, 6, 1, BLACK);
-    box(cx - 2, cy - 2, 4, 1, BLACK);
-    box(cx - 1, cy - 3, 2, 1, BLACK);
-  } else {
-    box(cx - 4, cy + 1, 2, 1, BLACK);
-    box(cx + 3, cy + 1, 2, 1, BLACK);
-    box(cx - 3, cy + 2, 6, 1, BLACK);
-    box(cx - 2, cy + 3, 4, 1, BLACK);
-    box(cx - 1, cy + 4, 2, 1, BLACK);
+  // 半宽/半高（画三角用），随按钮尺寸缩放。
+  // 竖屏箭头按钮是 26x11 —— 系数取 0.42/0.62 才能让三角填满视觉重心；
+  // 旧值 0.34/0.45 画出来只有 4 行高（占按钮 36%），放大看像个小黑点。
+  var hw = Math.max(3, Math.floor(r.w * 0.42));
+  var hh = Math.max(3, Math.floor(r.h * 0.62));
+  // 逐行扫描：从顶点往底边，宽度逐行加 2（步进 = 1px 每侧），画成实心三角
+  for (var i = 0; i < hh; i++) {
+    var w = 2 + i * 2;                 // 该行宽度
+    if (w > hw * 2) { w = hw * 2; }
+    var y = up ? (cy - hh + 1 + i) : (cy + hh - 1 - i);
+    box(cx - w / 2, y, w, 1, BLACK);
   }
 }
 
@@ -829,38 +838,66 @@ function drawTitleButtonsTiny(W, titleH) {
 }
 
 /** 竖屏底带：三行步进器（每行一个「标签 + 值 + 上下」）。 */
+/**
+ * 竖屏底部配置条：三行「标签 + 输入框 + ▲▼ + 右侧两个按钮」。
+ *
+ * <p><b>为什么必须按「列」分区而不是按「行」叠</b>（玩家反馈「竖屏按钮太挤」的根因）：
+ * 旧布局里输入框右边距只留 66px，▲▼ 箭头放在 {@code x = W-66}，而右下的
+ * 「模式 / 重局」按钮放在 {@code x = W-60}、{@code y = gy+4} / {@code gy+30} ——
+ * <b>两者的 x 范围重叠、y 也重叠</b>：
+ * <pre>
+ *   行0 输入框 ──────────────▲▼(W-66..W-44)  [模式](W-60..W-8)
+ *   行1 输入框 ──────────────▲▼(W-66..W-44)  [重局](W-60..W-8)
+ * </pre>
+ * 箭头被压在按钮下面、点击还会互相抢（点箭头可能触发重局），而且箭头本身只有
+ * 22×9 —— 在 480dpi 屏上每格约 1.6mm，手指根本点不准。
+ *
+ * <p>现在的分区：<b>左边是输入区（标签+框+箭头），右边独占一列放按钮</b>，
+ * 水平方向互不相交；箭头放大到 26×11 且两键留 2px 缝；按钮加高到 24、字号 14。
+ */
 function drawConfigBarPortrait(W, botY, botH) {
-  var rowH = 26;
+  var rowH = 30;
   var gy = botY + 8;
+  // ---- 水平分区（先算好，后面所有元素都按它排，杜绝重叠）----
+  var btnW = 64;                       // 右侧按钮列宽
+  var btnX = W - 8 - btnW;             // 648 @ W=720
+  var arrowW = 26, arrowH = 11;        // 箭头放大：旧 22x9 太难点
+  var arrowX = btnX - 8 - arrowW;      // 614
+  var fieldX = 40;                     // 标签占 10..34
+  var fieldW = arrowX - 6 - fieldX;    // 568
+  var fieldH = 22;
+
   var items = [
-    { id: "rows", cfgKey: "labelRows", label: "行", min: 5, max: 30 },
-    { id: "cols", cfgKey: "labelCols", label: "列", min: 5, max: 30 },
-    { id: "mines", cfgKey: "labelMineCount", label: "雷", min: 1, max: Math.max(1, MS.rows * MS.cols - 9) },
+    { id: "rows", label: "行", min: 5, max: 30 },
+    { id: "cols", label: "列", min: 5, max: 30 },
+    { id: "mines", label: "雷", min: 1, max: Math.max(1, MS.rows * MS.cols - 9) },
   ];
   for (var i = 0; i < items.length; i++) {
     var it = items[i];
     var y = gy + i * rowH;
-    // 竖屏标签用小字短名（配置对象里是长名，这里只取一个字）
-    var shortName = it.id === "rows" ? "行" : it.id === "cols" ? "列" : "雷";
-    text(shortName, 10, y + 17, 14, "#202020", "left");
-    var fx = 34, fw = W - 34 - 66, fh = 20;
-    bevelSunken(fx, y + 2, fw, fh);
-    syncInputField(it.id, fx, y + 2, fw, fh, MS[it.id], it.min, it.max, W);
-    var shown2 = curFieldText(it.id, String(MS[it.id]));
-    var bad2 = inputHint(it.id);
+    text(it.label, 12, y + rowH / 2, 15, "#202020", "left");
+    // 输入框（凹陷）
+    var fy = y + (rowH - fieldH) / 2;
+    bevelSunken(fieldX, fy, fieldW, fieldH);
+    syncInputField(it.id, fieldX, fy, fieldW, fieldH, MS[it.id], it.min, it.max, W);
+    var shown = curFieldText(it.id, String(MS[it.id]));
+    var bad = inputHint(it.id);
     if (bwe.textinput.editing === it.id) {
-      box(fx, y + 2, fw, fh, bad2 ? "#ffe0e0" : "#ffffff");
+      box(fieldX, fy, fieldW, fieldH, bad ? "#ffe0e0" : "#ffffff");
     }
-    text(shown2, fx + fw / 2, y + 18, 15, bad2 ? "#c00000" : BLACK, "center");
-    if (bad2) {
-      text(bad2, fx + fw + 30, y + 18, 10, "#c00000", "left");
+    text(shown, fieldX + fieldW / 2, fy + fieldH / 2, 16, bad ? "#c00000" : BLACK, "center");
+    if (bad) {
+      text(bad, fieldX, fy - 7, 11, "#c00000", "left");
     }
     if (bwe.textinput.editing === it.id) {
-      var tw2 = bwe.draw.measureText(shown2, 15).w;
-      box(fx + fw / 2 + tw2 / 2 + 2, y + 5, 2, fh - 6, "#1a66ff");
+      var tw = bwe.draw.measureText(shown, 16).w;
+      box(fieldX + fieldW / 2 + tw / 2 + 3, fy + 3, 2, fieldH - 6, "#1a66ff");
     }
-    var up = { x: fx + fw + 6, y: y + 2, w: 22, h: 9 };
-    var dn = { x: fx + fw + 6, y: y + 13, w: 22, h: 9 };
+    // ▲▼：各自 26x11，中间留 2px 缝（旧版 9+9 相接，界线在手指下看不清）
+    var gap = 2;
+    var upY = y + (rowH - (arrowH * 2 + gap)) / 2;
+    var up = { x: arrowX, y: upY, w: arrowW, h: arrowH };
+    var dn = { x: arrowX, y: upY + arrowH + gap, w: arrowW, h: arrowH };
     bevelRaise(up.x, up.y, up.w, up.h);
     bevelRaise(dn.x, dn.y, dn.w, dn.h);
     drawArrow(up, true);
@@ -868,15 +905,20 @@ function drawConfigBarPortrait(W, botY, botH) {
     if (clicked(up)) { changeValue(it.id, 1, it.max, it.min); }
     if (clicked(dn)) { changeValue(it.id, -1, it.max, it.min); }
   }
-  // 竖屏右下：上面「模式」，下面「重局」——一列两个按钮，宽 52 高 22。
-  var mb = { x: W - 60, y: gy + 4, w: 52, h: 22 };
+
+  // ---- 右侧按钮列（独占，与输入区不重叠）----
+  // 与三行输入框垂直对齐：模式按钮对齐第 1 行中线、重局按钮对齐第 2 行中线，
+  // 而不是把两个按钮整体居中 —— 后者在放大图里看着「飘在行间」。
+  var btnH = 24;
+  var rowCy0 = gy + rowH / 2;                    // 第 0 行中线
+  var mb = { x: btnX, y: rowCy0 - btnH / 2, w: btnW, h: btnH };
   bevelRaise(mb.x, mb.y, mb.w, mb.h);
   if (MS.modeIdx === 1) { box(mb.x + 2, mb.y + 2, mb.w - 4, mb.h - 4, "#cfe0ff"); }
-  text(MS.modeIdx === 1 ? "复雷" : "普通", mb.x + mb.w / 2, mb.y + mb.h / 2, 13, BLACK, "center");
+  text(MS.modeIdx === 1 ? "复雷" : "普通", mb.x + mb.w / 2, mb.y + mb.h / 2, 14, BLACK, "center");
   if (clicked(mb)) { toggleMode(); }
 
-  var nb = { x: W - 60, y: gy + 30, w: 52, h: 22 };
+  var nb = { x: btnX, y: rowCy0 + rowH - btnH / 2, w: btnW, h: btnH };
   bevelRaise(nb.x, nb.y, nb.w, nb.h);
-  text(cfg("labelRestart", "重局"), nb.x + nb.w / 2, nb.y + nb.h / 2, 13, BLACK, "center");
+  text(cfg("labelRestart", "重局"), nb.x + nb.w / 2, nb.y + nb.h / 2, 14, BLACK, "center");
   if (clicked(nb)) { bwe.mine.reset(); }
 }

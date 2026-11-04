@@ -154,6 +154,79 @@ export interface SceneObject {
   prefabId?: string | null;
 }
 
+/**
+ * ★ 2D 光照系统的**编辑器侧**设置（optional，缺省 = 旧工程）。
+ *
+ * 权威契约：`docs/_fragments/lighting-contract.md` §3.1（字段名一个都不能改：
+ * Java 侧 `GameData.RtLighting` 按这些名字读，改名等于「编辑器能存、运行时读不出」）。
+ *
+ * 「缺失 / enabled=false ⇒ 光照系统整体不启用」是硬约束：老工程没有 `lighting`，
+ * 打开、保存、导出、运行都必须与今天**逐像素一致**。所以这里全部 optional，
+ * 运行时解析缺省为 null，而不是补一份默认值再走一遍渲染。
+ */
+export interface LightingModel {
+  /** 总开关。缺省 false；false ⇒ 运行时光照完全不启用（=白天） */
+  enabled: boolean;
+  /** 光照模式：只有烘焙贴图 / 只有运行时动态 / 两者叠加 */
+  mode: "baked" | "dynamic" | "both";
+  /** 环境光颜色 "#rrggbb" */
+  ambientColor: string;
+  /** 环境光强度 0..1 */
+  ambientIntensity: number;
+  /** 压暗程度 0..1（0 = 不压暗） */
+  darkness: number;
+  /** 柔化半径（世界像素，0..128） */
+  softness: number;
+  /** 采样率：1 世界像素 = 多少纹素（缺省 0.25） */
+  texelsPerPixel: number;
+  /** 运行时动态光照重算上限帧率 */
+  dynamicFps: number;
+  /** 运行时动态光源数量上限 */
+  maxDynamicLights: number;
+}
+
+/** 光照设置的缺省值（只在用户真的要编辑时才落盘，不用于旧工程的隐式行为）。 */
+export const DEFAULT_LIGHTING: LightingModel = {
+  enabled: false,
+  mode: "both",
+  ambientColor: "#3A4A6B",
+  ambientIntensity: 0.35,
+  darkness: 0.35,
+  softness: 16,
+  texelsPerPixel: 0.25,
+  dynamicFps: 15,
+  maxDynamicLights: 8
+};
+
+/**
+ * 一份烘焙产物在工程里的引用（`docs/_fragments/lighting-contract.md` §3.2）。
+ *
+ * `assetId` 指向 `project.assets` 里一条 IMAGE 素材（二进制在 IndexedDB，
+ * 与用户导入的图完全同一套存储格式 —— 这样打包链路零改动就能把 PNG 拷进 Build）。
+ * 缺失 ⇒ 没有烘焙图：`mode=baked` 时画面只有环境光 + 压暗。
+ */
+export interface LightmapRef {
+  /** 工程 assets[] 里的 IMAGE 素材 id（烘焙产物） */
+  assetId: string;
+  /** 覆盖矩形左上角世界坐标（烘焙固定 0,0） */
+  x: number;
+  y: number;
+  /** 覆盖矩形宽高（世界像素 = 场景矩形） */
+  w: number;
+  h: number;
+  /** 实际纹素尺寸（可能因 2048 上限被缩小） */
+  texW: number;
+  texH: number;
+  /** 实际采样率 sEff（运行时按它反推纹素中心，不重算） */
+  texelsPerPixel: number;
+  /** 参与烘焙的光源数 */
+  lights: number;
+  /** ISO 时间戳 */
+  bakedAt: string;
+  /** 烘焙算法版本（当前 = 1） */
+  version: number;
+}
+
 export interface SceneModel {
   id: string;
   name: string;
@@ -193,6 +266,19 @@ export interface SceneModel {
   buildings?: unknown[];
   navLinks?: unknown[];
   roadNetwork?: { nodes?: unknown[]; edges?: unknown[] };
+  /**
+   * ★ 2D 光照设置（optional，缺省 = 旧工程，零行为变化）。
+   * 权威契约：`docs/_fragments/lighting-contract.md` §3.1。
+   * 缺失 ⇒ 运行时光照完全不启用，画面与改动前逐像素一致；
+   * 编辑器画布也**一行都不画**光照预览（见 `app/painter.ts`）。
+   */
+  lighting?: LightingModel;
+  /**
+   * ★ 烘焙出的光照贴图引用（optional，缺省 = 没有烘焙图）。
+   * 权威契约：`docs/_fragments/lighting-contract.md` §3.2。
+   * 由「一键烘焙」（`app/lightBake.ts`）回写；缺失 ⇒ `mode=baked` 时只有环境光。
+   */
+  lightmap?: LightmapRef;
 }
 
 /**
@@ -643,6 +729,71 @@ function normalizeScripts(raw: unknown): Record<string, ScriptEntry> {
   return out;
 }
 
+/** 数值兜底：非有限值或超界时回到缺省，并夹在 [min,max]。 */
+function clampNum(v: unknown, def: number, min: number, max: number): number {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * 规范化 `scene.lighting`。
+ *
+ * 返回 `null` = 「这一段本来就没有」——调用方据此**不写字段**。
+ * 为什么不补默认值：契约 §0.5 要求旧工程"打开→保存→导出"零行为变化，
+ * 一旦给旧工程凭空补上 `lighting.enabled=false`，虽然语义相同，但 diff 里多出一整段，
+ * 而且给未来「缺省值调整」埋了颗雷（老工程会带着当年的默认值一起走）。
+ *
+ * 半截数据（用户手改 JSON、AI 写了一半）则逐字段兜底：宁可落一份完整合法的设置，
+ * 也不让 undefined 漏到烘焙公式里（NaN 进光照数学会让整张贴图变成 0）。
+ */
+export function normalizeLighting(raw: unknown): LightingModel | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<LightingModel>;
+  const mode: LightingModel["mode"] =
+    r.mode === "baked" || r.mode === "dynamic" || r.mode === "both" ? r.mode : DEFAULT_LIGHTING.mode;
+  const color = typeof r.ambientColor === "string" && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(r.ambientColor.trim())
+    ? r.ambientColor.trim()
+    : DEFAULT_LIGHTING.ambientColor;
+  return {
+    enabled: r.enabled === true,
+    mode,
+    ambientColor: color,
+    ambientIntensity: clampNum(r.ambientIntensity, DEFAULT_LIGHTING.ambientIntensity, 0, 1),
+    darkness: clampNum(r.darkness, DEFAULT_LIGHTING.darkness, 0, 1),
+    softness: clampNum(r.softness, DEFAULT_LIGHTING.softness, 0, 128),
+    texelsPerPixel: clampNum(r.texelsPerPixel, DEFAULT_LIGHTING.texelsPerPixel, 0.02, 2),
+    dynamicFps: clampNum(r.dynamicFps, DEFAULT_LIGHTING.dynamicFps, 1, 60),
+    maxDynamicLights: Math.round(clampNum(r.maxDynamicLights, DEFAULT_LIGHTING.maxDynamicLights, 0, 64))
+  };
+}
+
+/**
+ * 规范化 `scene.lightmap`。
+ *
+ * `assetId` 为空 ⇒ 视为「没有烘焙图」（返回 null）：一份指向空 id 的引用没有任何意义，
+ * 留着只会让运行时去加载一个不存在的贴图。
+ */
+export function normalizeLightmap(raw: unknown): LightmapRef | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<LightmapRef>;
+  const assetId = typeof r.assetId === "string" ? r.assetId.trim() : "";
+  if (!assetId) return null;
+  return {
+    assetId,
+    x: clampNum(r.x, 0, -4096, 4096),
+    y: clampNum(r.y, 0, -4096, 4096),
+    w: clampNum(r.w, 0, 0, 1e7),
+    h: clampNum(r.h, 0, 0, 1e7),
+    texW: Math.round(clampNum(r.texW, 1, 1, 2048)),
+    texH: Math.round(clampNum(r.texH, 1, 1, 2048)),
+    texelsPerPixel: clampNum(r.texelsPerPixel, 0.25, 1e-4, 8),
+    lights: Math.round(clampNum(r.lights, 0, 0, 100000)),
+    bakedAt: typeof r.bakedAt === "string" ? r.bakedAt : "",
+    version: Math.round(clampNum(r.version, 1, 0, 1000))
+  };
+}
+
 /**
  * 补齐缺失字段。
  * 从磁盘读进来的 JSON 可能缺字段（旧版本工程、手工改过的文件），
@@ -704,6 +855,14 @@ export function normalizeProject(raw: unknown): Project {
     if (typeof ext.designH === "number" && ext.designH > 0) {
       (sc as unknown as Record<string, unknown>).designH = Math.round(ext.designH);
     }
+    // ★ 光照两段同上：normalizeProject 是「打开 .bwproj」的唯一入口，漏一行 =
+    //   用户开一个有光照的工程 → 改一个对象 → 保存，整套光照设置被静默抹掉。
+    //   缺失时**不写**（不补默认值）：旧工程存回去仍是没有 lighting 的旧工程，
+    //   运行时因此继续走「光照整体不启用」的老路径（契约 §0.5 零回归）。
+    const lighting = normalizeLighting(ext.lighting);
+    if (lighting) (sc as unknown as Record<string, unknown>).lighting = lighting;
+    const lightmap = normalizeLightmap(ext.lightmap);
+    if (lightmap) (sc as unknown as Record<string, unknown>).lightmap = lightmap;
     const objs = Array.isArray(s.objects) ? s.objects : [];
     for (const o of objs) {
       sc.objects.push({

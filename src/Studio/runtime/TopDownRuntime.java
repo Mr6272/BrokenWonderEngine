@@ -136,6 +136,17 @@ public final class TopDownRuntime implements GLEventListener {
     ScriptStick stick;
     /** 文本输入框（bwe.textinput）：点一下就能直接键入数字/文字，两端共用状态机。 */
     ScriptTextInput textInput;
+    /**
+     * 2D 光照系统（契约 {@code docs/_fragments/lighting-contract.md}）。
+     *
+     * <p><b>永不为 null</b>：没有 {@code scene.lighting} 的旧工程也会拿到一个
+     * {@code isEnabled()==false} 的实例 —— 这样 {@code bwe.light.*} 的所有调用都安全
+     * （返回 false / 缺省值），而渲染侧一根 quad 都不画、GL 状态一个字节都不动
+     * （{@link Lighting#draw} 在未启用时<b>第一行</b>就 return）。
+     *
+     * <p>包内可见：{@code ScriptLight}（{@code bwe.light} 的注册方）直接读写它。
+     */
+    final Lighting lighting;
     private final List<DressPart> dressParts = new ArrayList<>();
     private GameData.RtObject dressController;
     private String dressTag = "";
@@ -362,6 +373,20 @@ public final class TopDownRuntime implements GLEventListener {
         batchTexture = -1;
     }
 
+    /**
+     * 光照层的「结束当前精灵批」入口（<b>包内可见</b>，契约 lighting-java-api.md §5）。
+     *
+     * <p>为什么需要它：{@link Lighting#draw} 要自己 {@code glBindTexture} 光照贴图并
+     * {@code glDisable(GL_TEXTURE_2D)}，而批的纹理断言是「{@code batchTexture} 就是当前绑定的纹理」。
+     * 如果批里还有残留精灵，绑定被改掉之后继续 {@code flushSpriteBatch} 就会拿着错的纹理画。
+     *
+     * <p>{@code flushSprites} 本身刻意保持 private（它带着「恢复干净状态」的语义，
+     * 是绘制路径的内部约定，不该被外部随手调）；这里只暴露一个别名，语义完全一样。
+     */
+    void flushSpritesForLighting(GL2 gl) {
+        flushSprites(gl);
+    }
+
 
 
     /** 脚本侧设置染色（包内可见，ScriptApi 调）。null / 缺省 = 清除染色。 */
@@ -421,6 +446,8 @@ public final class TopDownRuntime implements GLEventListener {
         this.stick = new ScriptStick(this);
         this.textInput = new ScriptTextInput();
         this.textInput.setKeyboardHost(visible -> { });
+        // 测试桩同样要有一个「未启用」的光照实例（scene==null ⇒ isEnabled() 恒 false）。
+        this.lighting = new Lighting(this);
     }
 
     TopDownRuntime(File bootFile) throws IOException {
@@ -456,6 +483,9 @@ public final class TopDownRuntime implements GLEventListener {
         this.textInput = new ScriptTextInput();
         // 桌面端有物理键盘，软键盘后端是空实现（接口存在只为两端统一）。
         this.textInput.setKeyboardHost(visible -> { });
+        // ★ 光照必须在 scripts 之前建：脚本 onSceneStart 里可能马上调 bwe.light.*
+        //   （契约 lighting-java-api.md §5）。scene 已载入 ⇒ 能读到 lighting/lightmap 段。
+        this.lighting = new Lighting(this);
         // 脚本要在场景对象就绪后启动（onStart 里可能马上要 find/spawn）。
         try {
             this.scripts = new ScriptEngine(this);
@@ -1593,6 +1623,10 @@ public final class TopDownRuntime implements GLEventListener {
         if (scripts != null && scripts.render != null) {
             scripts.render.clearTextTextures();
         }
+
+        // ⑥ 光照贴图：id 属于旧上下文，本类只复位「已解析/已上传」的假定；
+        //    真正的重新上传仍由上面的 pendingUploads 重排机制负责（本类不自己 glGenTextures）。
+        lighting.invalidateGpuResources();
     }
 
     /** 上传待处理纹理（包内可见：玩法模块自绘时也要触发上传）。 */
@@ -2123,6 +2157,14 @@ public final class TopDownRuntime implements GLEventListener {
         drawMap(gl);
         drawActors(gl);
 
+        // ★ 2D 光照层：世界画面之上、UI 场景层之下（契约 lighting-contract.md §6）。
+        //
+        // 为什么必须夹在这里：光照是「世界的一部分」（灯照在地面和角色上），
+        // 如果画在 UI 场景之后，界面会被压暗/加光（菜单文字变成橙的）—— 那是错的。
+        // 同时它必须在 drawActors 之后：先把所有世界精灵画完，再统一压暗 + 加光。
+        // 未启用（旧工程）时 lighting.draw 直接 return，一个 GL 调用都不发 → 逐像素零回归。
+        lighting.draw(gl);
+
         // ★ UI 场景层：世界画面之上、脚本 HUD 之下。
         //
         // 为什么夹在中间（而不是最上层）：脚本 HUD（bwe.draw.*）通常是「临时调试信息 / 数值」，
@@ -2185,6 +2227,10 @@ public final class TopDownRuntime implements GLEventListener {
         // 这两步必须放在「逻辑全部跑完、渲染尚未开始」的位置。
         commitDestroy();
         commitSceneSwitch();
+        // ⑦ 光照：场景光源收集 / 实体跟随 / 按 dynamicFps 节流重建动态贴图。
+        //    必须放在 commitSceneSwitch() <b>之后</b>：切换场景后要先让新场景的 actors 就位，
+        //    否则本帧收集到的还是上一场景的光源（新场景第一帧会少灯）。
+        lighting.update(dt);
         updateTitle();
     }
 

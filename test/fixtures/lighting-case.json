@@ -1,0 +1,395 @@
+{
+    "$comment": "2D 光照烘焙仲裁 fixture。由 web/tools/gen-lighting-fixture.mjs 生成，勿手改。expect 的每个分量是 0..255 整数 RGB；alpha 恒 255（不透明）。容差：每通道 <= 2。",
+    "contract": "docs/_fragments/lighting-contract.md",
+    "cases": [
+        {
+            "name": "main",
+            "note": "softness=0：校验衰减/聚光锥/遮挡/采样率。L1 有 shadow，L2 无 shadow（隔离锥体测试）",
+            "version": 1,
+            "width": 256,
+            "height": 192,
+            "texelsPerPixel": 0.5,
+            "softness": 0,
+            "ambient": {
+                "color": "#3A4A6B",
+                "intensity": 0.35
+            },
+            "lights": [
+                {
+                    "id": "L1",
+                    "x": 64,
+                    "y": 64,
+                    "radius": 100,
+                    "color": "#FFC978",
+                    "intensity": 1,
+                    "type": "point",
+                    "falloff": 2,
+                    "shadow": true
+                },
+                {
+                    "id": "L2",
+                    "x": 200,
+                    "y": 40,
+                    "radius": 120,
+                    "color": "#80CCFF",
+                    "intensity": 0.8,
+                    "type": "spot",
+                    "angle": 60,
+                    "dir": 135,
+                    "coneSoft": 10,
+                    "falloff": 2,
+                    "shadow": false
+                }
+            ],
+            "occluders": [
+                {
+                    "x": 96,
+                    "y": 64,
+                    "hw": 8,
+                    "hh": 32
+                }
+            ],
+            "expect": {
+                "texW": 128,
+                "texH": 96,
+                "sEff": 0.5
+            },
+            "samples": [
+                {
+                    "i": 32,
+                    "j": 32,
+                    "world": [
+                        64,
+                        64
+                    ],
+                    "expect": [
+                        255,
+                        221,
+                        154,
+                        255
+                    ]
+                },
+                {
+                    "i": 40,
+                    "j": 26,
+                    "world": [
+                        80,
+                        52
+                    ],
+                    "expect": [
+                        182,
+                        154,
+                        114,
+                        255
+                    ]
+                },
+                {
+                    "i": 82,
+                    "j": 32,
+                    "world": [
+                        164,
+                        64
+                    ],
+                    "expect": [
+                        62,
+                        93,
+                        121,
+                        255
+                    ]
+                },
+                {
+                    "i": 46,
+                    "j": 4,
+                    "world": [
+                        92,
+                        8
+                    ],
+                    "expect": [
+                        57,
+                        55,
+                        55,
+                        255
+                    ]
+                },
+                {
+                    "i": 60,
+                    "j": 32,
+                    "world": [
+                        120,
+                        64
+                    ],
+                    "expect": [
+                        23,
+                        30,
+                        42,
+                        255
+                    ]
+                },
+                {
+                    "i": 46,
+                    "j": 48,
+                    "world": [
+                        92,
+                        96
+                    ],
+                    "expect": [
+                        20,
+                        26,
+                        37,
+                        255
+                    ]
+                },
+                {
+                    "i": 85,
+                    "j": 36,
+                    "world": [
+                        170,
+                        72
+                    ],
+                    "expect": [
+                        61,
+                        91,
+                        119,
+                        255
+                    ]
+                },
+                {
+                    "i": 115,
+                    "j": 10,
+                    "world": [
+                        230,
+                        20
+                    ],
+                    "expect": [
+                        20,
+                        26,
+                        37,
+                        255
+                    ]
+                },
+                {
+                    "i": 125,
+                    "j": 90,
+                    "world": [
+                        250,
+                        180
+                    ],
+                    "expect": [
+                        20,
+                        26,
+                        37,
+                        255
+                    ]
+                },
+                {
+                    "i": 1,
+                    "j": 93,
+                    "world": [
+                        2,
+                        186
+                    ],
+                    "expect": [
+                        20,
+                        26,
+                        37,
+                        255
+                    ]
+                },
+                {
+                    "i": 43,
+                    "j": 35,
+                    "world": [
+                        86,
+                        70
+                    ],
+                    "expect": [
+                        167,
+                        142,
+                        107,
+                        255
+                    ]
+                },
+                {
+                    "i": 92,
+                    "j": 52,
+                    "world": [
+                        184,
+                        104
+                    ],
+                    "expect": [
+                        20,
+                        26,
+                        37,
+                        255
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "ambientOnly",
+            "note": "没有光源：整张图 = 环境光，逐点必须完全一致",
+            "version": 1,
+            "width": 64,
+            "height": 64,
+            "texelsPerPixel": 1,
+            "softness": 0,
+            "ambient": {
+                "color": "#3A4A6B",
+                "intensity": 0.42
+            },
+            "lights": [],
+            "occluders": [],
+            "expect": {
+                "texW": 64,
+                "texH": 64,
+                "sEff": 1
+            },
+            "samples": [
+                {
+                    "i": 2,
+                    "j": 2,
+                    "world": [
+                        2,
+                        2
+                    ],
+                    "expect": [
+                        24,
+                        31,
+                        45,
+                        255
+                    ]
+                },
+                {
+                    "i": 32,
+                    "j": 32,
+                    "world": [
+                        32,
+                        32
+                    ],
+                    "expect": [
+                        24,
+                        31,
+                        45,
+                        255
+                    ]
+                },
+                {
+                    "i": 61,
+                    "j": 61,
+                    "world": [
+                        61,
+                        61
+                    ],
+                    "expect": [
+                        24,
+                        31,
+                        45,
+                        255
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "scale",
+            "note": "1024x768 @ 0.25 = 256x192；用于校验尺寸截断与 sEff",
+            "version": 1,
+            "width": 1024,
+            "height": 768,
+            "texelsPerPixel": 0.25,
+            "softness": 0,
+            "ambient": {
+                "color": "#101820",
+                "intensity": 0.5
+            },
+            "lights": [
+                {
+                    "id": "S1",
+                    "x": 512,
+                    "y": 384,
+                    "radius": 400,
+                    "color": "#FFFFFF",
+                    "intensity": 1,
+                    "type": "point",
+                    "falloff": 2,
+                    "shadow": false
+                }
+            ],
+            "occluders": [],
+            "expect": {
+                "texW": 256,
+                "texH": 192,
+                "sEff": 0.25
+            },
+            "samples": [
+                {
+                    "i": 128,
+                    "j": 96,
+                    "world": [
+                        512,
+                        384
+                    ],
+                    "expect": [
+                        255,
+                        255,
+                        255,
+                        255
+                    ]
+                },
+                {
+                    "i": 0,
+                    "j": 0,
+                    "world": [
+                        2,
+                        2
+                    ],
+                    "expect": [
+                        8,
+                        12,
+                        16,
+                        255
+                    ]
+                },
+                {
+                    "i": 255,
+                    "j": 191,
+                    "world": [
+                        1021,
+                        766
+                    ],
+                    "expect": [
+                        8,
+                        12,
+                        16,
+                        255
+                    ]
+                }
+            ]
+        }
+    ],
+    "stats": [
+        {
+            "name": "main",
+            "texW": 128,
+            "texH": 96,
+            "sEff": 0.5,
+            "sumRaw": 6758.2423,
+            "sumBlurred": 6758.2423
+        },
+        {
+            "name": "ambientOnly",
+            "texW": 64,
+            "texH": 64,
+            "sEff": 1,
+            "sumRaw": 1612.3783,
+            "sumBlurred": 1612.3783
+        },
+        {
+            "name": "scale",
+            "texW": 256,
+            "texH": 192,
+            "sEff": 0.25,
+            "sumRaw": 22645.7286,
+            "sumBlurred": 22645.7286
+        }
+    ]
+}

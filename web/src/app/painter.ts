@@ -12,6 +12,13 @@ import type { AssetEntry, Project, SceneObject, SceneModel } from "../core/model
 import { scenePixelSize, totalFrames, uiSafeArea, visibleFrames } from "../core/model.ts";
 import { loadFrame } from "../data/assets.ts";
 import { canvasPalette } from "../ui/palette.ts";
+import type { LightSourceSpec } from "./lightMath.ts";
+
+/** 色板里的颜色是 `#rrggbb`；非法输入退回缺省，避免无效 `fillStyle` 静默变黑。 */
+function safeHex(color: unknown, fallback: string): string {
+  const s = String(color ?? "").trim();
+  return /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(s) ? s.slice(0, 7) : fallback;
+}
 
 export interface PaintCtx {
   project: Project;
@@ -31,6 +38,16 @@ export interface PaintCtx {
    * 而不是画成灰块占位 —— 否则用户在 UI 场景里摆文字等于盲摆。
    */
   ui?: boolean;
+  /**
+   * 是否绘制**编辑态光照近似预览**（压暗 + 各光源径向渐变）。
+   *
+   * 缺省 false（= 不画）。两个条件必须同时满足才会真的画：
+   *   1. `pctx.showLighting === true`（画布工具条的「光照预览」开关）；
+   *   2. `scene.lighting?.enabled === true`。
+   * 任一不满足 ⇒ 光照预览**一行都不画**，无光照工程的渲染与改动前逐像素一致
+   * （契约 §0.5 零回归）。所以这里绝不能"有 lighting 字段就画一层半透明黑"。
+   */
+  showLighting?: boolean;
 }
 
 /** 文字对象的判定：tags 含 `label`（与运行时 TopDownRuntime.drawActor 同一判据）。 */
@@ -558,6 +575,131 @@ function kindShort(kind: SceneObject["kind"]): string {
     case "LIGHT": return "光源";
     default: return "对象";
   }
+}
+
+// ---------------- 光照近似预览 ----------------
+
+/**
+ * 编辑态光照预览：**整图压暗 + 每盏光一个径向渐变**。
+ *
+ * 与烘焙数学的关系：这是**近似**，不是同一套公式 ——
+ *   - 烘焙（`lightMath.ts`）逐纹素算衰减/聚光锥/遮挡/柔化，结果准确但慢（秒级）；
+ *   - 预览要在拖动画布时每帧重画，所以只用 `createRadialGradient` 表达"亮度中心 + 衰减到 0"，
+ *     拿不到聚光锥、遮挡阴影、柔化；
+ *   - 两者的**光照参数**（半径 / 颜色 / 强度 / 位置）来自同一套 `props`，所以用户调参数时
+ *     看到的位置与范围是对的，只是边缘更"圆滑"（这是刻意的取舍，面板上的「一键烘焙」
+ *     才是准的）。
+ *
+ * 性能纪律：每帧最多画 {@link MAX_PREVIEW_LIGHTS} 盏。按"亮度"（intensity × 半径）排序取前 32，
+ * 其余不画 —— 100 盏灯的夜景图逐帧建 100 个渐变 + 100 次 fillRect 会明显掉帧，
+ * 而人眼在同一位置看不到第 33 盏灯的差别。截断时画面右上角明确提示，不让用户以为丢光了。
+ */
+export const MAX_PREVIEW_LIGHTS = 32;
+
+/** 画在画布右上角（屏幕坐标）的"预览只画前 N 个光源"提示。 */
+export function paintLightPreviewNotice(g: CanvasRenderingContext2D, cw: number, shown: number, total: number): void {
+  if (total <= shown) return;
+  const text = `光照预览只画了最亮的 ${shown} / ${total} 盏（完整效果请用「一键烘焙」看）`;
+  g.save();
+  g.font = '11px "Microsoft YaHei UI", sans-serif';
+  const tw = g.measureText(text).width;
+  const x = Math.max(8, cw - tw - 18);
+  const y = 10;
+  g.fillStyle = "rgba(8,10,14,0.72)";
+  roundRect(g, x - 8, y - 4, tw + 16, 20, 5);
+  g.fill();
+  g.fillStyle = "#ffd166";
+  g.fillText(text, x, y + 11);
+  g.restore();
+}
+
+/**
+ * 在画布上画一层光照近似。调用方负责"要不要画"的判断（`showLighting && scene.lighting?.enabled`）。
+ *
+ * 顺序（与运行时 §6 的绘制顺序一致）：先压暗，再加光。
+ *   1. 整图压暗：`darkness` 作为纯黑 alpha；`darkness <= 0` 时不压（白天）。
+ *   2. 逐光源径向渐变：颜色 = 光色，alpha 中心 = intensity（夹到 0..1），
+ *      半径按 `lightRadius` 换算成屏幕像素。用 `"lighter"` 合成模式叠加，
+ *      语义与运行时的 `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`（加光）一致。
+ *
+ * 只画场景矩形内（不画到"地图之外"的空白画布上）：地图外压黑会让人以为地图边界变了。
+ */
+export function paintLightingPreview(
+  g: CanvasRenderingContext2D,
+  scene: SceneModel,
+  pctx: PaintCtx,
+  toScreen: ToScreen,
+  cw: number,
+  lights: LightSourceSpec[]
+): void {
+  const lighting = scene.lighting;
+  if (!lighting || lighting.enabled !== true) return;
+
+  const t = Math.max(4, pctx.tileSize || 32);
+  const size = scenePixelSize(scene, t);
+  const a = toScreen(0, 0);
+  const b = toScreen(size.w, size.h);
+  const w = b.x - a.x;
+  const h = b.y - a.y;
+  if (w <= 0 || h <= 0) return;
+
+  const zoom = pctx.zoom;
+
+  g.save();
+
+  // ---- 1) 压暗 ----
+  const darkness = Number.isFinite(lighting.darkness) ? Math.max(0, Math.min(1, lighting.darkness)) : 0.35;
+  if (darkness > 0) {
+    g.fillStyle = `rgba(0,0,0,${darkness})`;
+    g.fillRect(a.x, a.y, w, h);
+  }
+
+  // ---- 2) 加光 ----
+  // 光源集合由调用方（画布）用 `lightMath.collectSceneLighting` 采好再传进来：
+  // 这样 painter 不 import lightMath，`lightMath` 反过来要 import `painter.sizeOf`
+  // 复用尺寸真相 —— 两边互相 import 会绕出一个循环依赖，esbuild 打包后
+  // 初始化顺序一变就可能在运行时拿到 undefined（编辑器会白屏，且很难查）。
+  const all = lights;
+  if (all.length) {
+    // 亮度排序：intensity × 半径 大者优先（照亮范围贡献最大）。同分时保持原顺序（稳定）。
+    const rank = (l: { intensity?: number; radius?: number }) => {
+      const i = Number(l.intensity);
+      const r = Number(l.radius);
+      return (Number.isFinite(i) ? i : 1) * (Number.isFinite(r) ? r : 140);
+    };
+    const sorted = all
+      .map((l, idx) => ({ l, idx, k: rank(l) }))
+      .sort((x, y) => (y.k - x.k) || (x.idx - y.idx))
+      .slice(0, MAX_PREVIEW_LIGHTS)
+      .map((x) => x.l);
+
+    // 加光合成模式：与运行时的 GL_SRC_ALPHA/GL_ONE 同语义（叠亮，而不是遮挡）
+    g.globalCompositeOperation = "lighter";
+    for (const light of sorted) {
+      const intensity = Math.max(0, Math.min(1, Number.isFinite(Number(light.intensity)) ? Number(light.intensity) : 1));
+      const radius = Number.isFinite(Number(light.radius)) ? Number(light.radius) : 140;
+      if (intensity <= 0 || radius <= 0) continue;
+      const color = safeHex(light.color, "#FFC978");
+      const c = toScreen(Number(light.x) || 0, Number(light.y) || 0);
+      const r = radius * zoom;
+      if (r < 1) continue;
+      // 渐变从 alpha=intensity 中心衰减到 0；制造 3 个色标让亮度曲线更像平方衰减（合同 falloff=2 的手感）
+      const grad = g.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
+      grad.addColorStop(0, hexA(color, intensity));
+      grad.addColorStop(0.45, hexA(color, intensity * 0.42));
+      grad.addColorStop(0.78, hexA(color, intensity * 0.1));
+      grad.addColorStop(1, hexA(color, 0));
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(c.x, c.y, r, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.globalCompositeOperation = "source-over";
+
+    paintLightPreviewNotice(g, cw, sorted.length, all.length);
+  }
+
+  g.restore();
 }
 
 // ---------------- 绘图小工具 ----------------

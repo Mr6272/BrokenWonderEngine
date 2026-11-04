@@ -50,7 +50,7 @@ export const KINDS: Record<GameObjectKind, { cn: string; en: string; hint: strin
   ZONE: { cn: "触发区", en: "Trigger Area", hint: "不可见的区域，进入或点击时触发逻辑", icon: "zone" },
   SPAWN: { cn: "出生点", en: "Spawn Point", hint: "玩家或敌人的初始位置", icon: "spawn" },
   PORTAL: { cn: "传送口", en: "Portal", hint: "走到这里切换到另一张地图", icon: "portal" },
-  LIGHT: { cn: "光源", en: "Light", hint: "照亮周围，用于夜间与室内氛围", icon: "light" }
+  LIGHT: { cn: "光源", en: "Light", hint: "照亮周围一圈（2D 光照系统）", icon: "light" }
 };
 
 /** 素材类型。 */

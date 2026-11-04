@@ -230,6 +230,15 @@ final class ScriptApi {
                 ScriptProf.install(ScriptApi.this);
             }
         });
+        // 2D 光照脚本层（契约 docs/_fragments/lighting-contract.md §4 的 bwe.light）。
+        // 放在最后：它只转发给 host.lighting（TopDownRuntime 构造时已建好），
+        // 不依赖任何其它命名空间，也不被别的命名空间依赖。
+        installSafely("light", new Runnable() {
+            @Override
+            public void run() {
+                ScriptLight.install(ScriptApi.this);
+            }
+        });
     }
 
     private void installSafely(String name, Runnable body) {
@@ -2659,6 +2668,8 @@ final class ScriptApi {
             {"render.blink", "look.blink"},
             {"render.sortByY", "look.sortByY"},
             {"render.playOnce", "look.playOnce"},
+            // 光照模块：Web 编辑器 id = render.light，桌面旧 id = look.light（契约 §3.3）。
+            {"render.light", "look.light"},
     };
 
     private static String aliasOf(String id) {

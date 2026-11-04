@@ -19,6 +19,7 @@
 | 材质 / 火水烟 / 感知 AI / 物理 / 确定性随机 | [emergence：涌现式模拟基底](emergence.md) |
 | 场景切换 / 多楼层空间 / 碰撞与触发 | [scene](scene.md) · [spatial](spatial.md) · [collision](collision.md) |
 | 可配置改键 / 路网车辆 / 战斗 / 调试绘制 | [actions](actions.md) · [road](road.md) · [vehicle](vehicle.md) · [combat](combat.md) · [debug](debug.md) |
+| 2D 光照：入夜 / 火把 / 加光与压暗 | [light：2D 光照](light.md) |
 | 编辑器里那些「积木」分别做什么 | [modules：可视化模块目录](modules.md) |
 
 ## Phase 说明
@@ -312,9 +313,9 @@
 编辑器里的「积木」。共 **43 个**内置模块，分 7 类：怎么动 / 怎么显示 / 怎么感知 / 什么时候做 / 怎么打 / 怎么说话 / 画面与声音。
 **重要**：模块目录（`BuiltinModules.java`）是**编辑器**侧的积木清单，**不等于**运行时真的执行 —— 运行时只实现了其中一部分。每个模块的「运行时」列写清了这一点，见 [modules.md](modules.md#一模块总表)。
 
-### 11. 开放世界子命名空间（8 个）
+### 11. 开放世界子命名空间（9 个）
 
-多层建筑、路网车辆、可配置输入、战斗与调试绘制。这些命名空间彼此独立，旧工程不引用它们时行为完全不变。
+多层建筑、路网车辆、可配置输入、战斗与调试绘制、2D 光照。这些命名空间彼此独立，旧工程不引用它们时行为完全不变。
 
 | 命名空间 | 页面 | 说明 |
 |---|---|---|
@@ -326,6 +327,7 @@
 | 车辆 `bwe.vehicle` | [vehicle.md](vehicle.md) | 上下车 / 劫车、油门刹车转向、自动驾驶 |
 | 战斗 `bwe.combat` | [combat.md](combat.md) | 武器参数表、命中结算、格挡、弹药 |
 | 调试 `bwe.debug` | [debug.md](debug.md) | 碰撞盒 / 路径 / 区域 / 阻挡图的调试绘制 |
+| 光照 `bwe.light` | [light.md](light.md) | 2D 光照层：总开关、环境光、压暗、光源挂载与动态重建 |
 
 **常见配对**：
 
@@ -336,6 +338,7 @@
 | 让键位可配置（不改游戏逻辑） | [actions.md](actions.md) |
 | 判断"碰到了没" | [collision.md](collision.md) |
 | 排查"我看不到它在哪" | [debug.md](debug.md) |
+| 做白天↔夜晚、给角色挂火把、爆炸闪光 | [light.md](light.md) |
 
 ---
 

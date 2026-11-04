@@ -55,7 +55,7 @@ if (!existsSync(RUNTIME_SRC)) {
 
 // 与 packaging 完全相同的源文件选择规则
 const sources = readdirSync(RUNTIME_SRC)
-  .filter((f) => f.endsWith(".java") && f !== "GameLauncher.java")
+  .filter((f) => f.endsWith(".java") && f !== "GameLauncher.java" && !f.endsWith("Test.java"))
   .map((f) => join(RUNTIME_SRC, f));
 
 if (sources.length === 0) {

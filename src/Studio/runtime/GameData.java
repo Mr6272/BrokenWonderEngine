@@ -187,6 +187,73 @@ public final class GameData {
         public final List<RtNavLink> navLinks = new ArrayList<>();
         /** 道路网络（车辆用；行人不走这个）。 */
         public RtRoadNetwork road;
+
+        // ---------- 2D 光照段（契约 docs/_fragments/lighting-contract.md §3.1 / §3.2） ----------
+
+        /**
+         * 光照配置（{@code scene_*.json} 顶层 {@code lighting}）。
+         *
+         * <p><b>null = 没有光照配置</b>，这不是「缺省功能的空对象」，而是<b>旧工程的零回归开关</b>：
+         * {@link Lighting#isEnabled()} 直接返回 false、一根 quad 都不画、GL 状态一个字节都不动，
+         * 画面与改动前逐像素一致。所以这里刻意用 {@code null} 而不是「默认 enabled=false 的对象」——
+         * 后者会让 {@code bwe.light.enabled(true)} 在没有光照数据的工程上「打开」一个空系统。
+         */
+        public RtLighting lighting;
+        /** 烘焙产物引用（{@code scene_*.json} 顶层 {@code lightmap}）。null = 没有烘焙图。 */
+        public RtLightmap lightmap;
+    }
+
+    /**
+     * 光照配置（契约 §3.1 的 {@code LightingModel}，字段名一一对应）。
+     *
+     * <p>全部缺省值与契约表格一致；解析时任何字段缺失都走这里的缺省，
+     * 所以「只写了 {@code {"enabled": true}} 的工程」也能跑。
+     */
+    public static final class RtLighting {
+        /** 总开关。false ⇒ 运行时光照完全不启用（= 白天）。 */
+        public boolean enabled = false;
+        /** {@code "baked"} | {@code "dynamic"} | {@code "both"}。 */
+        public String mode = "both";
+        /** 环境光颜色 {@code #rrggbb}。 */
+        public String ambientColor = "#3A4A6B";
+        /** 环境光强度 0..1。 */
+        public float ambientIntensity = 0.35f;
+        /** 压暗程度 0..1（0 = 白天，不压暗）。 */
+        public float darkness = 0.35f;
+        /** 柔化半径（世界像素，0..128）。 */
+        public float softness = 16f;
+        /** 采样率（纹素 / 世界像素）。 */
+        public float texelsPerPixel = 0.25f;
+        /** 运行时动态光照重算上限帧率。 */
+        public float dynamicFps = 15f;
+        /** 运行时动态光源上限。 */
+        public int maxDynamicLights = 8;
+    }
+
+    /**
+     * 烘焙贴图引用（契约 §3.2 的 {@code LightmapRef}）。
+     *
+     * <p>{@code texW/texH/texelsPerPixel} 是<b>烘焙时的真实值</b>，运行时按它反推纹理坐标，
+     * <b>不重算</b> —— 否则尺寸被 2048 上限截断过的工程会整体错位。
+     */
+    public static final class RtLightmap {
+        /** 工程 {@code assets[]} 里的 IMAGE 素材 id（烘焙产物）。 */
+        public String assetId = "";
+        /** 覆盖矩形左上角世界坐标（契约固定 0,0）。 */
+        public float x = 0f;
+        public float y = 0f;
+        /** 覆盖矩形宽高（世界像素 = 场景矩形）。 */
+        public float w = 0f;
+        public float h = 0f;
+        /** 实际纹素尺寸。 */
+        public int texW = 0;
+        public int texH = 0;
+        /** 实际 {@code sEff}（纹素 / 世界像素）。 */
+        public float texelsPerPixel = 0f;
+        /** 参与烘焙的光源数（诊断用）。 */
+        public int lights = 0;
+        /** 烘焙算法版本（{@link LightMap#VERSION}；对不上就不复用这张图）。 */
+        public int version = 0;
     }
 
     /** 一栋建筑：若干楼层 + 出入口。 */
@@ -455,7 +522,70 @@ public final class GameData {
         if (root.has("roadNetwork") && root.get("roadNetwork").isJsonObject()) {
             s.road = readRoad(root.getAsJsonObject("roadNetwork"));
         }
+        // ---- 2D 光照段（可选；缺失 = null = 旧工程零行为变化） ----
+        //
+        // ⚠ 这里必须判「有没有这个键」，不能写成 readLighting(root) 无条件返回对象：
+        //   契约 §3.1 的「lighting 缺失 ⇒ enabled=false，零行为变化」是靠 Lighting 拿到 null
+        //   才成立的（否则 bwe.light 会在没有光照数据的工程上「看起来可用」却什么都不画）。
+        if (root.has("lighting") && root.get("lighting").isJsonObject()) {
+            s.lighting = readLighting(root.getAsJsonObject("lighting"));
+        }
+        if (root.has("lightmap") && root.get("lightmap").isJsonObject()) {
+            s.lightmap = readLightmap(root.getAsJsonObject("lightmap"));
+        }
         return s;
+    }
+
+    /**
+     * 读光照配置（契约 §3.1）。任何字段缺失/类型不对都走 {@link RtLighting} 的缺省值。
+     *
+     * <p>{@code mode} 只接受 {@code baked/dynamic/both}，其它值一律按缺省 {@code both} ——
+     * 运行时不该因为编辑器写了错字就整层不画（那是最难排查的「灯不亮了」）。
+     */
+    private static RtLighting readLighting(JsonObject o) {
+        RtLighting l = new RtLighting();
+        l.enabled = o.has("enabled") && o.get("enabled").isJsonPrimitive()
+                && o.get("enabled").getAsBoolean();
+        String m = str(o, "mode", "both").trim().toLowerCase(java.util.Locale.ROOT);
+        if ("baked".equals(m) || "dynamic".equals(m) || "both".equals(m)) {
+            l.mode = m;
+        }
+        String color = str(o, "ambientColor", "#3A4A6B").trim();
+        if (color.startsWith("#") && (color.length() == 4 || color.length() == 7)) {
+            l.ambientColor = color;
+        }
+        // 数值统一走 float 重载：写 num(o,"darkness",0.35) 会命中 int 重载、getAsInt() 把 0.35 截成 0
+        // （GameData.loadScene 里已有同类注释，是这个项目踩过的坑）。
+        l.ambientIntensity = clamp01(num(o, "ambientIntensity", 0.35f));
+        l.darkness = clamp01(num(o, "darkness", 0.35f));
+        l.softness = Math.max(0f, Math.min(128f, num(o, "softness", 16f)));
+        l.texelsPerPixel = Math.max(0.01f, Math.min(4f, num(o, "texelsPerPixel", 0.25f)));
+        l.dynamicFps = Math.max(1f, Math.min(240f, num(o, "dynamicFps", 15f)));
+        l.maxDynamicLights = Math.max(0, Math.min(64, num(o, "maxDynamicLights", 8)));
+        return l;
+    }
+
+    /** 读烘焙贴图引用（契约 §3.2）。任何字段缺失都走安全缺省。 */
+    private static RtLightmap readLightmap(JsonObject o) {
+        RtLightmap m = new RtLightmap();
+        m.assetId = str(o, "assetId", "");
+        m.x = num(o, "x", 0f);
+        m.y = num(o, "y", 0f);
+        m.w = num(o, "w", 0f);
+        m.h = num(o, "h", 0f);
+        m.texW = Math.max(0, num(o, "texW", 0));
+        m.texH = Math.max(0, num(o, "texH", 0));
+        m.texelsPerPixel = num(o, "texelsPerPixel", 0f);
+        m.lights = Math.max(0, num(o, "lights", 0));
+        m.version = num(o, "version", 0);
+        return m;
+    }
+
+    private static float clamp01(float v) {
+        if (!(v > 0f)) {
+            return 0f;      // 含 NaN / 负数
+        }
+        return v > 1f ? 1f : v;
     }
 
     /** 读一栋建筑（含楼层/房间/出入口）。任何字段缺失都走安全缺省。 */

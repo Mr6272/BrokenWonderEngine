@@ -29,6 +29,8 @@ import { renderModulePanel } from "../panels/modulePanel.ts";
 import { renderScenePanel } from "../panels/scenePanel.ts";
 import { renderPrefabPanel } from "../panels/prefabPanel.ts";
 import { renderInspector } from "../panels/inspector.ts";
+import { renderLightingPanel } from "../panels/lightingPanel.ts";
+import { bakeSceneLighting } from "./lightBake.ts";
 import {
   renderScriptList,
   renderScriptEditor,
@@ -152,6 +154,19 @@ export class Editor {
     store.onProject(() => this.resetHistoryIfProjectReplaced());
     // 面板重建请求按帧合并：一次数据变化可能同时触发多个 bwe:refresh
     window.addEventListener("bwe:refresh", () => this.schedulePanels());
+    // 面板要求「把这个对象挪到视野中央」（光源清单点行、Inspector 的定位按钮）。
+    // 为什么走事件而不是让面板持有 canvas：面板不该知道画布存在（它们分属两侧 UI）；
+    // 事件让"谁想定位"与"怎么定位"解耦，画布也能换成另一个实现。
+    window.addEventListener("bwe:focus-object", (e) => {
+      const d = (e as CustomEvent).detail as { id?: string; x?: number; y?: number } | undefined;
+      if (!d) return;
+      const obj = store.scene?.objects.find((o) => o.id === d.id);
+      if (obj) store.select(obj);
+      const x = typeof d.x === "number" ? d.x : obj?.x;
+      const y = typeof d.y === "number" ? d.y : obj?.y;
+      if (typeof x === "number" && typeof y === "number") this.canvas.centerOn(x, y);
+      this.canvas.requestPaint();
+    });
 
     // AI 面板的「应用」按钮：真正写回剧本编辑器（面板只负责发起，外壳负责落地）
     setAiScriptApplyHook((name, code) => this.applyAiScript(name, code));
@@ -243,6 +258,7 @@ export class Editor {
           "project.example.topdown",
           "project.example.emergence",
           "project.example.vampire",
+          "project.example.lighting",
           "-",
           "project.package",
           "project.settings",
@@ -871,7 +887,11 @@ export class Editor {
       [
         { id: "inspector", label: "对象", hint: "选中对象的属性与挂载模块", render: renderInspector },
         { id: "layers", label: "图层", hint: "图层可见性与锁定", render: renderScenePanel },
-        { id: "outline", label: "大纲", hint: "场景中所有对象的树状列表", render: renderOutlinePanel }
+        { id: "outline", label: "大纲", hint: "场景中所有对象的树状列表", render: renderOutlinePanel },
+        // 光照面板：总开关 / 烘焙 / 光源清单。放右栏而不是左栏资源管理器：
+        // 它改的是「这张地图现在什么天气」，与对象属性是同一级别的东西，
+        // 且烘焙按钮点完要立刻在画布上看到效果 —— 右栏离画布最近。
+        { id: "lighting", label: "光照", hint: "2D 光照：总开关、烘焙、光源清单", render: renderLightingPanel }
       ],
       "inspector"
     );
@@ -1208,6 +1228,46 @@ export class Editor {
     });
   }
 
+  // ==========================================================================
+  // 光照（编辑入口）
+  // ==========================================================================
+
+  /**
+   * 命令面板 / 菜单里的「一键烘焙」落点。
+   *
+   * 为什么要绕到面板而不是直接调 `bakeSceneLighting`：
+   *   烘焙结果必须写在**面板上**（统计 + 警告列表），否则用户在命令面板点一下，
+   *   只看到一个 toast，想知道"为什么只烘了 0 盏灯 / 警告了什么"就无从查起。
+   *   所以这里先切到光照页（让结果可见），再执行烘焙。
+   */
+  private async bakeLightingNow(): Promise<void> {
+    this.auxTab.focus("lighting");
+    // 让面板先渲染出来再烘焙：烘焙完会发 bwe:refresh，面板正是靠它重画统计的
+    await new Promise<void>((r) => window.setTimeout(r, 0));
+    const out = await bakeSceneLighting(store.scene, store.project);
+    if (!out.ok) {
+      warn(`烘焙没做成：${out.error}`);
+      return;
+    }
+    ok(`光照已烘焙：${out.texW}×${out.texH} · ${out.lights} 盏灯 · ${Math.round(out.ms)} ms`);
+    for (const w of out.warnings) warn(w);
+  }
+
+  /** 「在视图中央放一个光源」：不动鼠标也能加灯（键盘流用户/触摸板用户）。 */
+  private addLightAtViewCenter(): void {
+    const scene = store.scene;
+    if (!scene) {
+      warn("先打开一张场景");
+      return;
+    }
+    const c = this.canvas.viewCenterWorld();
+    this.canvas.addLightAt(c.x, c.y);
+    // 光照总开关没开时，提醒一句（不擅自改工程级设置：用户可能只是想先摆灯）
+    if (!scene.lighting?.enabled) {
+      this.hint("已放好光源。光照总开关还关着：到右栏「光照」页打开才能看到夜色");
+    }
+  }
+
   /** 只重渲染右栏（对象 Inspector / 图层 / 大纲）。 */
   refreshRightPanel(): void {
     this.auxTab.show(this.auxTab.current());
@@ -1374,6 +1434,18 @@ export class Editor {
       { id: "view.problems", title: "显示问题面板", key: "Ctrl+Shift+M", group: "视图", icon: "problems", run: () => { this.setBottomTab("problems"); this.shell.togglePanel(false); } },
       { id: "view.output", title: "显示输出面板", group: "视图", icon: "terminal", run: () => { this.setBottomTab("output"); this.shell.togglePanel(false); } },
       { id: "view.commandPalette", title: "命令面板", key: "Ctrl+Shift+P", group: "视图", icon: "search", run: () => openCommandPalette() },
+      { id: "view.toggleLighting", title: "切换光照预览显示", group: "视图", icon: "light", hint: "只影响编辑器的近似预览，不改工程数据、不影响导出/运行", run: () => {
+        store.showLighting = !store.showLighting;
+        this.hint(store.showLighting ? "光照预览已开启（近似效果，完整效果请烘焙）" : "光照预览已关闭（看清素材本色）");
+        this.canvas.requestPaint();
+      } },
+
+      // ---------------- 光照 ----------------
+      { id: "light.panel", title: "光照面板", group: "光照", icon: "light", hint: "2D 光照总开关、烘焙参数与光源清单", run: () => {
+        this.auxTab.focus("lighting");
+      } },
+      { id: "light.bake", title: "一键烘焙光照", group: "光照", icon: "light", hint: "把这张场景的光照算成贴图存进工程（导出/运行直接用它）", run: () => void this.bakeLightingNow() },
+      { id: "light.add", title: "在视图中央放一个光源", group: "光照", icon: "light", hint: "放一盏半径 140 的暖黄点光，随后可在右栏调参数", run: () => this.addLightAtViewCenter() },
 
       // ---------------- 工程 ----------------
       { id: "project.settings", title: "工程设置", group: "工程", icon: "settings", run: () => { this.shell.toggleSidebar(false); this.showSidebarView("settings"); } },
@@ -1387,6 +1459,7 @@ export class Editor {
       { id: "project.example.topdown", title: "俯视角 JS 示例（.bwproj）", group: "工程", icon: "module", run: () => this.newBuiltinExample("topdown-js") },
       { id: "project.example.emergence", title: "涌现沙盘示例（.bwproj）", group: "工程", icon: "module", run: () => this.newBuiltinExample("emergence") },
       { id: "project.example.vampire", title: "吸血鬼幸存者（.bwproj）", group: "工程", icon: "module", run: () => this.newBuiltinExample("vampire") },
+      { id: "project.example.lighting", title: "2D 光照示例（.bwproj）", group: "工程", icon: "module", hint: "点光/聚光/遮挡/一键烘焙，打开即可预览", run: () => this.newBuiltinExample("lighting") },
 
       // ---------------- 剧本 ----------------
       { id: "script.open", title: "打开剧本编辑器", group: "剧本", icon: "script", run: () => this.openTab("script") },
@@ -1948,7 +2021,8 @@ export class Editor {
       dressup: "换装示例已载入：点「预览」试玩；每个部位的造型和素材在「模块」→「换装部件」里改。",
       "topdown-js": "俯视角 JS 示例已载入：脚本在「剧本」标签里切到 JS 看 player/chaser/npc/hud/system；点「试跑」直接开窗口。",
       emergence: "涌现沙盘已载入：脚本在「剧本」标签（world/player/guard/civilian/bottle/hud）。点火看火势蔓延、烧穿木栅开路，守卫会被噪音引来——规则都在 bwe.material / bwe.field / bwe.ai 里组合。",
-      vampire: "吸血鬼幸存者已载入：点「预览」直接开打。WASD 走位、武器自动开火、1/2/3 选强化、R 重开；六个脚本（player/enemy/bullet/gem/director/hud）都在「剧本」标签里。"
+      vampire: "吸血鬼幸存者已载入：点「预览」直接开打。WASD 走位、武器自动开火、1/2/3 选强化、R 重开；六个脚本（player/enemy/bullet/gem/director/hud）都在「剧本」标签里。",
+      lighting: "2D 光照示例已载入：点「预览」看夜晚的灯与影。按 R 切夜色档位（白天/黄昏/深夜/极暗）、按 B 手动重建动态贴图。画布上 5 盏灯各有用途——① 点光、② 聚光、③ 闪烁火把（不进烘焙）、④ 积木模块光、⑤ 墙前灯（演示遮挡阴影）。想试「一键烘焙」：右栏「光照」页 → 点烘焙按钮 → 再预览对比。"
     };
     this.loadExampleProject(() => built.project, built.fileName, tips[id]);
   }
