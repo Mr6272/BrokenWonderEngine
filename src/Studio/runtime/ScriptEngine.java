@@ -190,10 +190,15 @@ final class ScriptEngine {
     final boolean[] pressed = new boolean[512];
     final boolean[] released = new boolean[512];
 
-    // 鼠标（宿主只有 pointerDown，没有抬起事件：按下状态只维持这一帧）
+    // 鼠标：mousePressed = 本帧刚按下（来自点击队列）；mouseNow = 本帧按住。
+    // 桌面宿主有真正的抬起事件（mouseReleased → mouseButton(b, false)），按住状态记在 mouseHeld，
+    // 每帧并进 mouseNow —— 于是「按住左键连射」成立。没有抬起事件的宿主（安卓触摸）
+    // 从不写 mouseHeld，行为与原来一致：按下状态只维持这一帧。
     final boolean[] mouseNow = new boolean[3];
     final boolean[] mousePrev = new boolean[3];
     final boolean[] mousePressed = new boolean[3];
+    /** 宿主线程（AWT EDT）写、脚本线程读：volatile 数组元素不保证可见性，所以读写都走 synchronized 小方法。 */
+    private final boolean[] mouseHeld = new boolean[3];
     int lastWorldX;
     int lastWorldY;
     int lastScreenX;
@@ -597,6 +602,31 @@ final class ScriptEngine {
         }
     }
 
+    /**
+     * 鼠标键按住 / 松开（AWT EDT 线程）。button：0 左 / 1 中 / 2 右。
+     *
+     * <p>只记按住状态；「刚按下」的边沿仍由 {@link #pointerDown} 的点击队列给出，
+     * 所以先 press 后 release 落在同一帧里也不会丢掉 {@code pressed}。
+     */
+    synchronized void mouseButton(int button, boolean down) {
+        if (button >= 0 && button < mouseHeld.length) {
+            mouseHeld[button] = down;
+        }
+    }
+
+    /** 失焦时松开全部鼠标键（AWT 失焦不补发 mouseReleased，与 keys[] 同一个坑）。 */
+    synchronized void releaseMouseButtons() {
+        java.util.Arrays.fill(mouseHeld, false);
+    }
+
+    private synchronized void mergeMouseHeld() {
+        for (int i = 0; i < mouseHeld.length; i++) {
+            if (mouseHeld[i]) {
+                mouseNow[i] = true;
+            }
+        }
+    }
+
     /** 指针抬起：释放虚拟摇杆占用。 */
     void pointerUp() {
         if (host != null) {
@@ -832,6 +862,7 @@ final class ScriptEngine {
         }
 
         processClicks();
+        mergeMouseHeld();
         processKeys();
         drawCmds.clear();
 

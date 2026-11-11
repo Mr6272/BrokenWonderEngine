@@ -86,7 +86,9 @@ function buildScene(assets: any[]): SceneModel {
   const layerNames = ["背景 BG", "棋盘 Board", "HUD HUD", "角色 Actors"];
   const layerIds = layerNames.map(() => uid());
   const layers = layerNames.map((name, i) => ({ id: layerIds[i], name, visible: true, locked: false, order: i }));
-  const scene = createScene("扫雷 · Minesweeper", 64, 36);
+  // 地图 64×64 瓦片 = 2048×2048 世界像素：必须容得下最大棋盘（64×64 格 × 32px）。
+  // 棋盘比地图大的话，Android 双指平移会被引擎按地图范围钳死，边缘格子永远拖不到。
+  const scene = createScene("扫雷 · Minesweeper", 64, 64);
   scene.layers = layers as any;
   scene.bgmAssetId = "ms-bgm";
   scene.onStartScript = "minesweeper";
@@ -117,12 +119,13 @@ function buildScene(assets: any[]): SceneModel {
   // 只能用「统一倍率 cover」铺满（多余部分裁掉），绝不改长宽比。
   //   k = max(2048/540, 1152/960) = 3.793 → 2048 × 3641，上下各裁掉约 1245px。
   const BG_SRC_W = 540, BG_SRC_H = 960;
-  const bgK = Math.max(2048 / BG_SRC_W, 1152 / BG_SRC_H);
-  objAt("背景 BG", "PROP", 1024, 576,
+  const bgK = Math.max(2048 / BG_SRC_W, 2048 / BG_SRC_H);
+  objAt("背景 BG", "PROP", 1024, 1024,
     BG_SRC_W * bgK / 2, BG_SRC_H * bgK / 2, 0, 0, "ms-bg", ["prop", "bg"], bgK, bgK);
 
   // 棋盘（内置 game.minesweeper 模块）
-  const board = objAt("棋盘 Minesweeper", "PROP", 1024, 600, 28 * 32 / 2, 20 * 32 / 2, 1, 5, "ms-tile", ["prop", "minesweeper"], 1, 1);
+  // 棋盘放地图正中；世界尺寸由脚本按行列重算（fitBoard 只改 props.w/h 元数据，不动素材）。
+  const board = objAt("棋盘 Minesweeper", "PROP", 1024, 1024, 64 * 32 / 2, 64 * 32 / 2, 1, 5, "ms-tile", ["prop", "minesweeper"], 1, 1);
   board.modules = [{
     defId: "game.minesweeper",
     label: "扫雷棋盘",
@@ -130,9 +133,9 @@ function buildScene(assets: any[]): SceneModel {
     enabled: true,
     collapsed: false,
     values: {
-      rows: "12",
-      cols: "16",
-      mines: "40",
+      rows: "64",
+      cols: "64",
+      mines: "640",
       cellSize: "32",
       mode: "普通 Normal",
       winCondition: "清空所有安全格 Clear Safe Cells",
@@ -159,18 +162,44 @@ function buildScene(assets: any[]): SceneModel {
   hudCfg.tags = ["hud", "hudcfg"];
   hudCfg.props = {
     color: "#00000000", solid: "0",
+    // ---- 标题 / 状态 ----
     bgTitle: "扫雷 · Minesweeper",
+    bgTitleComplex: "扫雷 · 复雷加殊 Complexweeper",
     bgTips: "左键翻开 · 右键插旗 · 点笑脸重开",
     labelMines: "剩余雷数",
     labelTime: "用时",
+    // ---- 步进器（横屏用「行 Rows」全名，竖屏自动取空格前的短名）----
     labelRows: "行 Rows",
     labelCols: "列 Cols",
     labelMineCount: "雷 Mines",
+    // ---- 按钮 ----
     labelNewGame: "新游戏",
     labelRestart: "重开",
-    labelWin: "通关！点笑脸再来一局",
-    labelLose: "踩雷了，点笑脸重开",
-    labelRange: "行 5–30 · 列 5–30 · 雷 1–(行×列−9)",
+    labelModeNormal: "模式：普通",
+    labelModeComplex: "模式：复雷",
+    labelHelp: "帮助",
+    labelClose: "关闭",
+    labelResetView: "复位视角",
+    // ---- 读数 / 范围提示 ----
+    labelRange: "行 5–64 · 列 5–64 · 雷 1–(行×列−9) · 点数值可直接输入 · 大棋盘靠平移浏览",
+    labelRangeComplex: "复雷加殊：点数字连锁翻开需①旗数正确 ②虚实比例正确",
+    // ---- 顶带状态行 / 胜负横幅（两组键互不覆盖）----
+    labelWinStatus: "恭喜！全部安全格已翻开",
+    labelLoseStatus: "踩到雷了，按笑脸或「新游戏」重开",
+    labelWin: "✓ 通关！",
+    labelLose: "✗ 踩雷了",
+    labelRestartHint: "点笑脸 / 新游戏 再来一局",
+    // ---- 帮助面板 ----
+    helpTitle: "扫雷玩法",
+    help1: "翻开：点一下未翻开的格子；数字表示周围 8 格里有几颗雷。",
+    help2: "插旗：手机上长按格子（电脑右键）标雷，剩余雷数跟着减。",
+    help3: "连锁：点已翻开的数字格，旗数与数字对齐时把周围一次翻开。",
+    help4: "首击必安全：第一下永远不是雷；翻开全部安全格即通关。",
+    help5: "复雷加殊：雷有虚实（+1/−1/+i/−i），数字是周围雷之和的模长，连锁翻开还要求旗的虚实比例也对。",
+    help6: "手机：双指缩放画面、双指拖动平移；点数值框可直接键入行列雷数。",
+    // ---- 手机安全边距：不在这里写死，脚本按横/竖屏自动取默认值
+    //（safeTop：竖屏 8 / 横屏 0；safeBottom：竖屏 14 / 横屏 8）。
+    // 需要微调时在编辑器里给「HUD 配置」加 safeTop / safeBottom 两个 prop。
     silver: "#c0c0c0",
     silverLight: "#ffffff",
     silverDark: "#808080",
@@ -191,10 +220,12 @@ function buildScene(assets: any[]): SceneModel {
 
 function main(): void {
   const p: Project = createProject("BWE 扫雷 · 秋天的旗");
+  // 打包方向写死：地图改成 64×64 正方形后，靠宽高比推断会把两份工程都判成横屏。
+  p.orientation = "landscape";
   p.author = "BWE";
   p.tileSize = 32;
   p.gridW = 64;
-  p.gridH = 36;
+  p.gridH = 64;
   const assets = buildAssets();
   console.log("[gen-minesweeper] assets " + assets.length +
     " · png " + assets.filter((a) => a.kind === "IMAGE").length +
@@ -219,28 +250,33 @@ function main(): void {
   // ---- 竖屏版：同一套素材/脚本，画布 36×64 竖长，HUD 走竖屏分支 ----
   const pp = JSON.parse(JSON.stringify(p)) as Project;
   pp.name = "BWE 扫雷 · 秋天的旗（竖屏）";
-  pp.gridW = 36;
+  pp.orientation = "portrait";
+  pp.gridW = 64;
   pp.gridH = 64;
   const psc = pp.scenes[0];
-  (psc as any).widthTiles = 36;
+  // 竖屏地图同样 64×64 瓦片：棋盘必须整盘都能拖到，地图不能比棋盘小。
+  (psc as any).widthTiles = 64;
   (psc as any).heightTiles = 64;
   for (const o of psc.objects) {
     if (o.name === "背景 BG") {
       // 竖屏 540×960 屏：素材原尺寸 1:1 铺满，零缩放
       const k2 = Math.max(540 / 540, 960 / 960);
-      o.x = 576; o.y = 1024;
+      o.x = 1024; o.y = 1024;
       o.halfW = 540 * k2 / 2; o.halfH = 960 * k2 / 2;
       o.scaleX = k2; o.scaleY = k2;
       o.props = { ...o.props, w: String(540 * k2), h: String(960 * k2) };
     }
     if (o.name === "棋盘 Minesweeper") {
-      o.x = 576; o.y = 1024;
-      o.props = { ...o.props, w: "896", h: "640" };
+      o.x = 1024; o.y = 1024;
+      // 64 格 × 32px = 2048（脚本 fitBoard 会按实际行列/格子重算这两个元数据）
+      o.props = { ...o.props, w: "2048", h: "2048" };
+      // 竖屏**不再行列互换**：上线规格就是 64×64。
+      // 旧的 16×12 配 640 雷会被引擎钳成「几乎每格都是雷」，直接不可玩。
     }
   }
   const outPortrait = join(dirname(OUT), "扫雷-竖屏.bwproj");
   writeFileSync(outPortrait, JSON.stringify(pp, null, 2) + NL, "utf8");
-  console.log("[gen-minesweeper] wrote " + outPortrait + "  (竖屏 36×64)");
+  console.log("[gen-minesweeper] wrote " + outPortrait + "  (竖屏地图 64×64)");
 }
 
 main();

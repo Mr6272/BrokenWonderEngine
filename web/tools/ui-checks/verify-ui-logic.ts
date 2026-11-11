@@ -19,7 +19,7 @@ function check(name: string, cond: boolean, detail?: string): void {
   else { fail++; console.log(`  FAIL ${name}${detail ? " — " + detail : ""}`); }
 }
 
-// ---- 命令注册表：用与 editor 相同的 id 集合（实际 editor 里注册 47 条）----
+// ---- 命令注册表：用与 editor 相同的 id 集合（实际 editor 里注册 48 条）----
 const fake = [
   { id: "file.new", title: "新建工程", key: "Ctrl+N", group: "文件", run() {} },
   { id: "file.open", title: "打开工程…", key: "Ctrl+O", group: "文件", run() {} },
@@ -51,6 +51,7 @@ const fake = [
   { id: "project.example.topdown", title: "俯视角 JS 示例（.bwproj）", group: "工程", run() {} },
   { id: "project.example.emergence", title: "涌现沙盘示例（.bwproj）", group: "工程", run() {} },
   { id: "project.example.vampire", title: "吸血鬼幸存者（.bwproj）", group: "工程", run() {} },
+  { id: "project.example.alienShooter", title: "孤胆枪手（.bwproj）", group: "工程", run() {} },
   { id: "script.open", title: "打开剧本编辑器", group: "剧本", run() {} },
   { id: "script.jsApi", title: "JS 脚本 API 速查", group: "剧本", run() {} },
   { id: "script.goToProblems", title: "查看问题列表", group: "剧本", run() {} },
@@ -71,13 +72,13 @@ const fake = [
 registerCommands(fake as never);
 
 console.log("== 命令注册表 ==");
-check("可进命令面板的命令数 = 42（47 注册 - 5 隐藏）", allCommands().length === 42, `实际 ${allCommands().length}`);
+check("可进命令面板的命令数 = 43（48 注册 - 5 隐藏）", allCommands().length === 43, `实际 ${allCommands().length}`);
 const groups = commandsByGroup();
 check("分组数 ≥ 7", groups.length >= 7, `实际 ${groups.length}`);
 check("分组首位是「文件」", groups[0]?.group === "文件", groups[0]?.group);
 
 console.log("== 模糊过滤 ==");
-check("空查询返回全部", filterCommands("").length === 42, `实际 ${filterCommands("").length}`);
+check("空查询返回全部", filterCommands("").length === 43, `实际 ${filterCommands("").length}`);
 const save = filterCommands("保存");
 check("「保存」能筛出保存相关", save.length >= 2 && save.length <= 8, `命中 ${save.length}：${save.map((c) => c.title).join(" / ")}`);
 check("「保存」第一条是保存或另存为", /保存/.test(save[0]?.title ?? ""), save[0]?.title);

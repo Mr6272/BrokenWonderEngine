@@ -45,7 +45,7 @@
 `boolean` — 当前是否**按住**
 
 **说明**
-✅ 已实现。键盘查「本帧按住状态」；鼠标查「按下状态持续」 —— 鼠标的实现是 `mouseNow || mousePressed`，因为宿主只有 `pointerDown` 而没有抬起事件，**鼠标按下状态只维持一帧**（下一帧就变 false）。
+✅ 已实现。键盘查「本帧按住状态」；鼠标同样是**真按住**：宿主把 AWT 的 `mousePressed` / `mouseReleased` 转给 `ScriptEngine.mouseButton(button, down)`，按住期间每帧都是 `true`，松开后变 `false`（窗口失焦时自动全部松开，不会卡键）。所以「按住左键连射」直接写 `if (bwe.input.down("Mouse0")) fire();` 即可（示例：孤胆枪手 player.js）。
 无法识别的键名恒为 `false`（不抛异常）。
 
 **示例**
@@ -59,7 +59,7 @@ if (bwe.input.down("Mouse0")) {
 ```
 
 **另见**
-[bwe.input.pressed](#bweinputpressedkey--boolean) · [bwe.input.axis](#bweinputax--vec2)
+[bwe.input.pressed](#bweinputpressedkey--boolean) · [bwe.input.axis](#bweinputax--vec2) · [bwe.input.block](#bweinputblockid-x-y-w-h--boolean) · [bwe.input.block](#bweinputblockid-x-y-w-h--boolean)
 
 ---
 
@@ -111,7 +111,7 @@ function onUpdate(ctx, dt) {
 `boolean` — 本帧**刚抬起**（边沿）
 
 **说明**
-✅ 已实现。鼠标的 released 通过「上一帧按下 && 本帧没按」推断 —— 由于鼠标按下状态只维持一帧，这个值基本总是 `true`（右键亦然），实际用途很小。
+✅ 已实现。鼠标的 released 通过「上一帧按住 && 本帧没按住」推断：松开鼠标的那一帧为 `true`，其余帧为 `false`（右键亦然）。
 
 **示例**
 ```js
@@ -180,7 +180,7 @@ function onUpdate(ctx, dt) {
 |---|---|---|
 | `x` / `y` | number | **逻辑屏幕坐标**（左上原点，像素） |
 | `worldX` / `worldY` | number | 已过视口反变换的**世界坐标** |
-| `left` / `middle` / `right` | boolean | `mouseNow \|\| mousePressed`（按住状态，只维持一帧） |
+| `left` / `middle` / `right` | boolean | `mouseNow \|\| mousePressed`（按住状态：按住期间持续为 true，松开即 false） |
 | `wheel` | number | **恒为 0** —— 宿主没有接滚轮事件，这个字段是占位 |
 
 **说明**
@@ -247,6 +247,64 @@ function onSceneEnd(ctx) {
 
 **另见**
 [bwe.input.mouse](#bweinputmouse--mousestate) · [bwe.draw.sprite](draw-audio-save.md#bwedrawspriteasset-x-y-opts--void)（自绘准星）
+
+### bwe.input.block(id, x, y, w, h) → boolean
+
+**签名**
+`bwe.input.block(id: string, x: number, y: number, w: number, h: number): boolean`
+
+**参数**
+| 名称 | 类型 | 说明 |
+|---|---|---|
+| id | string | 区域名；同 id 重复调用即覆盖 |
+| x, y | number | 矩形左上角（**屏幕逻辑像素**，不是世界坐标） |
+| w, h | number | 矩形宽高；任一 ≤ 0 等于撤销该区域 |
+
+**返回**
+`boolean` —— 是否登记成功（id 为空或宽高非法返回 `false`）。
+
+**说明**
+✅ 已实现。登记一块**界面区**：落在其中的点击被界面吃掉，**不再传给可视化模块**
+（扫雷棋盘 `game.minesweeper`、换装部件等）。
+
+引擎的点击派发顺序是「虚拟摇杆 → 文本输入框 → 脚本 → 可视化模块」，脚本拿到点击后
+**无法阻止**它继续往下传。小棋盘时代无所谓 —— 棋盘完全落在上下两条 HUD 带之间，
+两者像素范围不相交。但 64×64 = 4096 格在任何手机上都不可能「整盘可见又可读」
+（720 逻辑像素宽 ÷ 64 格 = 每格 11px，看不清也点不准），只能保持格子可读 + 平移浏览，
+于是棋盘必然伸到 HUD 底下 —— 不登记界面区的话，**点「新游戏」会顺带把底下的格子翻开
+（很可能直接踩雷）**。
+
+⚠ 用**持久 keyed 矩形**而不是「每帧清空再登记」：清空与登记之间存在窗口，
+UI 线程正好在那一刻派发点击就会漏防（表现为偶发误翻，最难查的那类 bug）。
+正确写法是每帧用同一个 id 覆盖同一块区域，值恒定，不存在空窗。
+
+**示例**
+```js
+// 每帧按当前布局登记两条 HUD 带（同 id 覆盖，无空窗）
+function drawHud(L) {
+  bwe.input.block("hudTop", 0, 0, L.W, L.topH);
+  bwe.input.block("hudBottom", 0, L.H - L.botH, L.W, L.botH);
+}
+```
+
+**另见**
+[bwe.input.unblock](#bweinputunblockid--boolean) · [bwe.textinput.rect](text-input.md)（输入框自带命中优先）
+
+### bwe.input.unblock(id) → boolean
+
+**签名**
+`bwe.input.unblock(id: string): boolean`
+
+**参数**
+| 名称 | 类型 | 说明 |
+|---|---|---|
+| id | string | 要撤销的界面区名 |
+
+**返回**
+`boolean` —— 该 id 之前是否存在（即是否真的撤销掉了什么）。
+
+**说明**
+✅ 已实现。撤销 `bwe.input.block` 登记的界面区。
 
 ---
 
@@ -702,7 +760,7 @@ function onUpdate(ctx, dt) {
 | 情况 | 行为 |
 |---|---|
 | `bwe.input.down("不存在的键")` | 恒 `false`，不崩溃 |
-| 鼠标按下状态 | **只维持一帧**（宿主没有鼠标抬起事件）；`down("Mouse0")` 实际上等价于「本帧刚按下」 |
+| 鼠标按下状态 | 真按住（宿主转发按下/抬起，失焦自动松开）；同一帧里先按后抬也不会丢 `pressed` |
 | `bwe.input.mouse.wheel` | **恒 0**（没有接滚轮事件）—— 别拿它做缩放 |
 | `bwe.input.cursor(false)` | 用 1×1 全透明自定义光标实现「隐藏」；平台不支持时静默保留系统光标 |
 | `bwe.input.axis()` | 只认 **WASD + 方向键**，不能改绑 |

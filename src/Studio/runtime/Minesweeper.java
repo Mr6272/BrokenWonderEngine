@@ -56,6 +56,9 @@ final class Minesweeper {
     private static final Color C_FLAG_RED = new Color(0xf0, 0x52, 0x5f);
     private static final Color C_FLAG_POLE = new Color(0x30, 0x30, 0x30);
 
+    /** 行列上限：64×64 = 4096 格（专家级棋盘）。改这里要同步 ScriptApi 与编辑器参数上限。 */
+    static final int MAX_SIDE = 64;
+
     int rows = 10;
     int cols = 10;
     int cell = 32;
@@ -161,8 +164,8 @@ final class Minesweeper {
         this.rt = rt;
         this.actor = actor;
         this.caps = caps == null ? new GridModules.Bundle() : caps;
-        rows = Math.max(3, Math.min(40, m.intOf("rows", 10)));
-        cols = Math.max(3, Math.min(40, m.intOf("cols", 10)));
+        rows = Math.max(3, Math.min(MAX_SIDE, m.intOf("rows", 10)));
+        cols = Math.max(3, Math.min(MAX_SIDE, m.intOf("cols", 10)));
         cell = Math.max(16, Math.min(64, m.intOf("cellSize", 32)));
         // 参数按能力生效：没挂对应模块的能力保持关闭（或保持默认但不参与逻辑）。
         // 例如只挂 grid.board 时，wantedMines=0 → 不生成雷，棋盘就是一张空白网格。

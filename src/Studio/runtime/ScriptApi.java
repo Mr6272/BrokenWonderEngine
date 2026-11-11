@@ -1118,6 +1118,25 @@ final class ScriptApi {
             }
             return Boolean.valueOf(code > 0 && code < engine.released.length && engine.released[code]);
         });
+        // 界面屏蔽区：见 TopDownRuntime.hudBlocks 的注释（大棋盘平移后按钮不误翻格子）。
+        method(inputObj, "block", (cx, thisObj, args) -> {
+            String id = ScriptJs.str(ScriptJs.arg(args, 0), "");
+            if (id.isEmpty()) {
+                return Boolean.FALSE;
+            }
+            float x = ScriptJs.fnum(ScriptJs.arg(args, 1), 0f);
+            float y = ScriptJs.fnum(ScriptJs.arg(args, 2), 0f);
+            float w = ScriptJs.fnum(ScriptJs.arg(args, 3), 0f);
+            float h = ScriptJs.fnum(ScriptJs.arg(args, 4), 0f);
+            if (w <= 0f || h <= 0f) {
+                host.hudBlocks.remove(id);
+                return Boolean.FALSE;
+            }
+            host.hudBlocks.put(id, new float[]{x, y, w, h});
+            return Boolean.TRUE;
+        });
+        method(inputObj, "unblock", (cx, thisObj, args) ->
+                Boolean.valueOf(host.hudBlocks.remove(ScriptJs.str(ScriptJs.arg(args, 0), "")) != null));
         method(inputObj, "axis", (cx, thisObj, args) -> {
             boolean left = engine.held[java.awt.event.KeyEvent.VK_A] || engine.held[java.awt.event.KeyEvent.VK_LEFT];
             boolean right = engine.held[java.awt.event.KeyEvent.VK_D] || engine.held[java.awt.event.KeyEvent.VK_RIGHT];
@@ -1427,8 +1446,8 @@ final class ScriptApi {
             // 玩法模式：只认文档里的四种写法，认不出（含未传）就当「不改」
             int modeIdx = opts == null ? -1 : mineModeIndex(ScriptJs.get(opts, "mode"));
             Minesweeper m = host.minesweeper;
-            if (rows > 0) m.rows = Math.max(3, Math.min(40, rows));
-            if (cols > 0) m.cols = Math.max(3, Math.min(40, cols));
+            if (rows > 0) m.rows = Math.max(3, Math.min(Minesweeper.MAX_SIDE, rows));
+            if (cols > 0) m.cols = Math.max(3, Math.min(Minesweeper.MAX_SIDE, cols));
             boolean changed = rows > 0 || cols > 0 || modeIdx >= 0;
             if (mines > 0) m.wantedMines = mines;
             if (seed >= 0) m.seed = seed;

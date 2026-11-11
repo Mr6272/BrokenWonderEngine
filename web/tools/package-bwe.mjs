@@ -1984,4 +1984,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   });
 }
 
-export { safeSegment, safeVersion, extensionForAsset, writeBuild };
+export { safeSegment, safeVersion, extensionForAsset, writeBuild, decideOrientation };

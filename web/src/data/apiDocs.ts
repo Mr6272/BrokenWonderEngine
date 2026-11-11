@@ -176,6 +176,9 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.input.axis", "bwe.input.axis() → {x, y}", "方向轴，WASD + 方向键都算，已归一化", "input"),
   d("bwe.input.mouse", "bwe.input.mouse → {x, y, worldX, worldY, left, middle, right, wheel}", "鼠标状态；worldX/Y 已过视口反变换", "input"),
   d("bwe.input.cursor", "bwe.input.cursor(visible)", "显示 / 隐藏鼠标光标", "input"),
+  d("bwe.input.block", "bwe.input.block(id, x, y, w, h) → boolean",
+    "登记一块「界面区」（屏幕逻辑像素矩形）。落在其中的点击被界面吃掉，不再传给可视化模块（扫雷棋盘等）。同 id 重复调用即覆盖，w/h ≤0 等于撤销。大棋盘（如 64×64）必然伸到 HUD 底下，不登记就会出现「点新游戏顺带翻开底下的格子」", "input"),
+  d("bwe.input.unblock", "bwe.input.unblock(id) → boolean", "撤销某块界面区", "input"),
 
   // ===== 相机 =====
   d("bwe.camera.follow", "bwe.camera.follow(e, {smooth = 0.15, lookAhead = 0})", "跟随实体；传 null 取消跟随", "camera"),

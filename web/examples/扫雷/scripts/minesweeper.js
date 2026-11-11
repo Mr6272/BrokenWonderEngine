@@ -1,16 +1,21 @@
 /**
- * 扫雷 · Minesweeper 主脚本（BWE Studio 场景的 onStartScript）。
+ * 扫雷 · Minesweeper 主脚本（横屏工程与竖屏工程**共用这一份**，功能完全一致）。
  *
  * 设计要点：
  *   1. 素材（格子的风车小花 / 旗帜人头 / 雷）= 像素图，由 Java 端棋盘直接绘制，
  *      脚本**不**碰这些图，也不拉伸它们。
  *   2. 所有文字 / 数字 / 按钮全部走 `bwe.draw.text` + `bwe.draw.rect` 的独立图层：
-      HUD 与像素素材彻底分离（文字永远是可编辑的、不被烤进图里）。
+ *      HUD 与像素素材彻底分离（文字永远是可编辑的、不被烤进图里）。
  *   3. UI 是 Win98 / Win2000 的经典银灰立体风格：标题栏 + 凸起按钮 + 凹陷输入框 +
-      红字 LED 计数器 + 上左亮/下右暗的 3D 边框。
- *   4. 行 / 列 / 雷数在游戏内自选：底栏三组 +/- 步进器，实时调用
-      `bwe.mine.set({rows, cols, mines})` 重建棋盘。
+ *      红字 LED 计数器 + 上左亮/下右暗的 3D 边框。
+ *   4. 行 / 列 / 雷数在游戏内自选：− / + 步进键 + 点数值框直接键入（手机弹系统软键盘）。
  *   5. HUD 只占屏幕上/下两条带，绝不压住棋盘（棋盘位置由 camera.worldToScreen 实测）。
+ *   6. **手机适配的关键**：相机按「上下 HUD 之间的可用区正好铺满棋盘」取景，
+ *      而不是按整张地图取景。旧版走引擎默认的整图 contain（竖屏地图 1152×2048 塞进
+ *      720×1602 视口 → zoom 只有 0.625），32px 的格子在手机上只剩 20px，
+ *      既看不清也点不准。现在格子稳定放大，一指一格。
+ *   7. 横屏与竖屏**只有 HUD 布局一套差别**：状态行、雷/旗/规格读数、步进器、
+ *      模式切换、新游戏、帮助、复位视角，两边一一对等，缺一个就是 bug。
  */
 
 // ---------------------------------------------------------------- 常量
@@ -22,10 +27,10 @@ var SILVER_DARK = "#808080";
 var SILVER_OUT = "#404040";
 var BLACK = "#000000";
 var TITLE_BLUE1 = "#0a246a";
-var TITLE_BLUE2 = "#a6caf0";
 var LED_RED = "#ff0000";
 var LED_BG = "#1a0000";
 var TEXT_DARK = "#000000";
+var HINT_GRAY = "#303030";
 
 var SFX = {
   flag: { a: "ms-sfx-flag", v: 0.85 },
@@ -33,23 +38,54 @@ var SFX = {
 };
 var BGM = { a: "ms-bgm", v: 0.28 };
 
-// 自选行列/雷数的当前值
+/** 引擎的视口缩放上下限（Viewport.MIN_ZOOM / MAX_ZOOM），超出会被钳掉。 */
+var ZOOM_MIN = 0.15;
+var ZOOM_MAX = 4;
+
+/**
+ * 行列雷数的取值范围（与 Java 侧 Minesweeper.MAX_SIDE 一致，留 9 格首击安全区）。
+ * 64×64 = 4096 格，是「超专家」棋盘。
+ */
+var ROW_MIN = 5, ROW_MAX = 64;
+var COL_MIN = 5, COL_MAX = 64;
+
+/** 格子边长的取值范围（世界像素；Java 侧同样钳 16~64）。 */
+var CELL_MIN = 16, CELL_MAX = 64;
+
+/**
+ * 可读格子的下限（屏幕像素）。
+ *
+ * <p>这是 64×64 能玩的关键：4096 格在任何手机上都<b>不可能</b>「整盘可见又可读」
+ * ——720 逻辑像素宽 ÷ 64 格 = 每格 11px，数字看不清、手指也点不准。
+ * 所以大棋盘改成「保持可读 + 平移浏览」：格子至少这么大，装不下就靠拖动看别的区域。
+ */
+var CELL_READABLE = 28;
+
+/**
+ * 棋盘世界边长上限（= 工程地图边长 64 格 × tileSize 32 = 2048）。
+ *
+ * <p>必须是硬上限，不能只靠屏幕算：Android 的双指平移由引擎按<b>地图范围</b>钳制
+ * （AndroidRuntimeBridge.setCamera → Viewport.clampCamera），棋盘一旦比地图大，
+ * 超出地图的那部分格子<b>永远拖不到</b> —— 表现为「有些雷怎么都点不到、无法通关」。
+ * 反过来把格子压到棋盘正好等于地图，整盘就都在可拖范围内。
+ * 同时这也把离屏位图/纹理限制在 2048×2048（≈16MB），不会出现 4096² 的巨型纹理。
+ */
+var BOARD_MAX = 2048;
+
 var MS = {
   cell: 32,
-  winX: 0, winY: 0,       // 标题栏拖动的窗口偏移（相对 HUD 基准）
-  drag: null,
-  baseZoom: 0,      // 整图 fit 的基准 zoom（格子尺寸按它算，缩放后不再变）
+  engineCell: 0,          // 引擎里棋盘当前的格子尺寸（state() 不回传，自己记）
+  baseZoom: 1,            // 本脚本给相机设的取景倍数（键盘平移按它换算速度）
   rows: 12,
   cols: 16,
   mines: 40,
-  curElapsed: 0,
-  started: false,
   modeIdx: 0,             // 0 = 普通扫雷，1 = 复雷加殊 Complexweeper
+  help: false,            // 帮助面板（占底带，棋盘随之重取景）
+  fitKey: "",             // 上次取景的参数指纹；变了才重算（不跟双指缩放抢方向盘）
+  viewW: 0, viewH: 0,     // 上次取景时的视口尺寸
 };
 
 var prev = { flags: -1, over: false, won: false };
-var mousePrev = false;
-var hoverId = "";
 
 function wlog(s) { try { bwe.log("[ms] " + s); } catch (e) { } }
 
@@ -66,19 +102,22 @@ function onSceneStart(ctx) {
   // ⚠ 这里**不挂虚拟按键**（bwe.stick）：扫雷是纯触摸/鼠标操作（点格子、
   // 点笑脸、点配置箭头、直接输入数字），根本不需要 WASD/空格/回车/Tab/Esc
   // 这些键盘模拟。挂了只会在屏幕上凭空多出四个按钮，挡住棋盘和 HUD。
-  // 需要虚拟按键的是「桌面向键盘操作」的游戏（平台跳跃、RPG 移动等），
-  // 由那些工程自己调 bwe.stick.mount()，不要塞进扫雷。
   try {
     bwe.textinput.onSubmit(function (id, text) { applyInputField(id, text); });
   } catch (e) { wlog("textinput fail " + e); }
 
-  MS.rows = 12; MS.cols = 16; MS.mines = 40;
-  // 模式以模块参数为准：先读一次运行时状态，再重建棋盘。
-  // ⚠ 顺序很重要：pushBoard() 会把 MS.modeIdx 下发给 bwe.mine.set()，
-  // 如果先 pushBoard() 就晚了 —— 那会把模块参数里设的「复雷加殊」覆盖回「普通」。
+  // 初始规格**以工程里棋盘模块的参数为准**（横屏 12 行×16 列，竖屏 16 行×12 列 ——
+  // 竖屏把行列反过来，正好让长边吃满手机的长边），不在脚本里硬编码。
   try {
     var s0 = bwe.mine.state();
-    if (s0 && typeof s0.modeIndex === "number") { MS.modeIdx = s0.modeIndex; }
+    if (s0) {
+      if (s0.rows > 0) { MS.rows = s0.rows; }
+      if (s0.cols > 0) { MS.cols = s0.cols; }
+      if (s0.mines > 0) { MS.mines = s0.mines; }
+      // 模式以模块参数为准：必须在 pushBoard() 之前读，
+      // 否则 pushBoard() 会把「复雷加殊」覆盖回「普通」。
+      if (typeof s0.modeIndex === "number") { MS.modeIdx = s0.modeIndex; }
+    }
   } catch (e) { wlog("state fail " + e); }
   pushBoard();
   wlog("start · " + MS.rows + "×" + MS.cols + " · " + MS.mines + " 雷 · 模式 "
@@ -87,16 +126,20 @@ function onSceneStart(ctx) {
 }
 
 function pushBoard() {
+  var L = layout();
+  clampConfig();
   try {
     // 自动挑格子大小：让棋盘刚好填满上下 HUD 之间的可用区
     bwe.mine.set({
       rows: MS.rows, cols: MS.cols, mines: MS.mines, seed: 0,
-      cellSize: autoCellSize(MS.rows, MS.cols),
+      cellSize: autoCellSize(MS.rows, MS.cols, L),
       // 模式一并下发：set() 里 mode 变化也会 reset，合并成一次调用避免重置两次
       mode: MS.modeIdx === 1 ? "complex" : "normal",
     });
   } catch (e) { wlog("mine.set fail " + e); }
+  MS.engineCell = MS.cell;
   fitBoard();
+  fitCamera(L, true);
 }
 
 /** 在当前两种模式之间切换，并重建棋盘（行列雷数保持不变）。 */
@@ -106,37 +149,32 @@ function toggleMode() {
   wlog("模式 " + (MS.modeIdx ? "复雷加殊" : "普通"));
 }
 
+// ---------------------------------------------------------------- 布局（横屏 / 竖屏唯一的差别）
+
 /**
  * 屏幕可用区能容下的最大格子边长（世界像素，16~64）。
- * 关键：棋盘是按**世界坐标**画的，再被相机缩放；所以要先把屏幕可用像素
- * 除回 zoom 才是世界像素，否则格子会小得看不清。
+ *
+ * ⚠ 关键：这里**不再除以 zoom**。旧写法每帧读 `bwe.camera.zoom` 反算世界像素，
+ * 玩家双指一放大，cell 就跟着变小 → 棋盘整体缩小，看起来像「缩放没生效、还在抖」。
+ * 现在格子尺寸只由「可用区像素 / 行列数」决定，取景倍数交给相机（见 fitCamera）。
  */
-function autoCellSize(rows, cols) {
-  var scr = screenSize();
-  var portrait = isPortrait(scr.w, scr.h);
-  // HUD 固定贴边（顶 108 / 底 116 横屏；顶 92 / 底 116 竖屏），中间是棋盘可用区
-  var availW = scr.w - (portrait ? 16 : 24);
-  var availH = scr.h - (portrait ? 92 + 132 + 16 : 108 + 116 + 20);
-  // ⚠ 关键：格子尺寸按「初始 fit 的 zoom」算一次，缩放后不再重算。
-  // 旧写法每帧读 bwe.camera.zoom，玩家双指一放大，cell 就变小 → 棋盘整体缩小，
-  // 看起来像「缩放没生效、反而在抖」。
-  // 现在用「整图 fit 时的基准 zoom」：只有屏幕尺寸/行列数变化才重算。
-  var zoom = MS.baseZoom;
-  if (!zoom || zoom <= 0.05) {
-    zoom = 1;
-    try { zoom = bwe.camera.zoom || 1; } catch (e) { zoom = 1; }
-    if (zoom <= 0.05) { zoom = 1; }
-    MS.baseZoom = zoom;
-  }
-  var byW = Math.floor((availW / cols) / zoom);
-  var byH = Math.floor((availH / rows) / zoom);
+function autoCellSize(rows, cols, L) {
+  L = L || layout();
+  var byW = Math.floor(L.bandW / cols);
+  var byH = Math.floor(L.bandH / rows);
   var cell = Math.min(byW, byH);
-  cell = Math.max(16, Math.min(64, cell));
+  // 装不下时**不继续缩**：小于可读下限就没意义了（看不清还点不准），
+  // 改成保持可读尺寸 + 平移浏览整盘。
+  if (cell < CELL_READABLE) { cell = CELL_READABLE; }
+  // 但也不能超过「地图 ÷ 行列数」，否则棋盘比地图大，那部分拖不到（见 BOARD_MAX）。
+  var byBoard = Math.floor(BOARD_MAX / Math.max(rows, cols));
+  if (cell > byBoard) { cell = byBoard; }
+  cell = Math.max(CELL_MIN, Math.min(CELL_MAX, cell));
   MS.cell = cell;
   return cell;
 }
 
-/** 把棋盘对象的显示尺寸设成 rows×cell，让它和实际绘制的棋盘一致。 */
+/** 把棋盘对象的逻辑尺寸设成 cols×cell / rows×cell，让它和实际绘制的棋盘一致。 */
 function fitBoard() {
   try {
     var b = bwe.world.find("棋盘 Minesweeper");
@@ -151,6 +189,185 @@ function fitBoard() {
     b.setProp("w", w);
     b.setProp("h", h);
   } catch (e) { wlog("fitBoard fail " + e); }
+}
+
+/**
+ * 取景：把棋盘**居中到上下 HUD 之间的可用区**，必要时缩小到刚好塞进去。
+ *
+ * <p>为什么必须脚本接管相机：引擎默认视图是「整张地图 contain 居中」，
+ * 而扫雷的地图（竖屏 36×64 格 = 1152×2048 世界像素）远大于棋盘本身，
+ * 于是手机上 zoom≈0.625，32px 格子被压成 20px —— 看不清、点不准。
+ * 现在格子尺寸直接按可用区算（见 autoCellSize），zoom 常态就是 1。
+ *
+ * <p>⚠ zoom **只降不升**（钳到 ≤1）：棋盘纹理是按 cell 画的像素图，
+ * 放大走 GL_NEAREST 会糊成大色块。宁可留一点边，也不放大。
+ *
+ * <p>只按 fitKey 变化时重算（行列数 / 格子尺寸 / 可用区 / 视口尺寸）。
+ * 双指缩放与拖动是玩家的手动接管，**不能**每帧被这里覆盖回去。
+ */
+function fitCamera(L, force) {
+  L = L || layout();
+  var st;
+  try { st = bwe.mine.state(); } catch (e) { return; }
+  var cell = MS.cell || 32;
+  var bw = Math.max(1, st.cols * cell), bh = Math.max(1, st.rows * cell);
+  var z = Math.min(L.bandW / bw, L.bandH / bh);
+  // 大棋盘（64×64）：缩到「整盘可见」会把格子压到 11px，看不清也点不准。
+  // 格子尺寸已经按可读下限算过，所以这里**保持 1:1**（GL_NEAREST 下 1:1 最锐利），
+  // 装不下的部分靠双指/鼠标拖动浏览。
+  if (z > 1) { z = 1; }
+  if (cell * z < CELL_READABLE) { z = CELL_READABLE / cell; }
+  z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+  // 向下取整到两位小数：向上取整会让棋盘比可用区大出不到 1px，正好压住 HUD 边线；
+  // 同时 0.9999999 与 1 的差别会让 fitKey 每帧都变，于是永远在重取景，
+  // 玩家的双指缩放会被立刻抹掉。
+  z = Math.floor(z * 100) / 100;
+  var key = st.rows + "x" + st.cols + "/" + cell + "@" + L.bandW + "x" + L.bandH
+    + "|" + L.bandY0 + "," + L.H + "|" + (L.portrait ? "p" : "l");
+  if (!force && key === MS.fitKey) { return; }
+  MS.fitKey = key;
+  MS.baseZoom = z;
+  try {
+    var b = bwe.world.find("棋盘 Minesweeper");
+    var bx = b ? b.x : L.W / 2, by = b ? b.y : L.H / 2;
+    // screenY(worldY) = H/2 + (worldY - camY) * zoom
+    // 要让棋盘中心落在带中心 bandCy：camY = by - (bandCy - H/2)/zoom
+    var bandCy = (L.bandY0 + L.bandY1) / 2;
+    var c = clampCam(bx, by - (bandCy - L.H / 2) / z, bx, by, bw, bh, z, L);
+    bwe.camera.setZoom(z);
+    bwe.camera.setPos(c.x, c.y);
+  } catch (e) { wlog("camera fail " + e); }
+}
+
+/**
+ * 读数/提示行占的垂直空间（缝 10 + 字形盒高 size*1.32 + 收尾 4）。
+ *
+ * ⚠ 底带高度与提示行的 y 必须用**同一个**算式：以前一个写 6+fs、另一个写 fs*0.5，
+ * 结果 13px 的字顶边比上一行按钮底只低 5px，文字挤在 −/+ 按钮下边缘上。
+ */
+function tipGap(fs) {
+  return 10 + Math.round(fs * 1.32) + 4;
+}
+
+/** 提示行实际字号（与 drawConfigBar 里画读数用的字号保持一致）。 */
+function tipFs(L) {
+  return Math.max(11, L.fs - 2);
+}
+
+/**
+ * 把视野钳在棋盘内（只有棋盘比视野大时才钳，否则整屏都是棋盘，不用动）。
+ *
+ * <p>为什么脚本自己钳：桌面端脚本一旦接管相机，引擎就不再钳制
+ * （{@code applyCameraPolicy} 见 scriptCameraControl 直接 return），
+ * 平移过头会看到一片地图底色。Android 的双指平移由引擎按**地图**钳，
+ * 而棋盘（≤2048）始终在地图（64 瓦片 × 32 = 2048）内，那边不会跑飞。
+ *
+ * <p>返回 {x, y} 而不是数组：bwe.camera.setPos(a, b) 是两个数参数，
+ * 传数组进去 Rhino 会取不到数字而退回默认值（表现为「纵向拖不动」）。
+ */
+function clampCam(camX, camY, bx, by, bw, bh, z, L) {
+  var halfW = L.W / (2 * z), halfH = L.H / (2 * z);
+  if (bw > halfW * 2) {
+    camX = Math.max(bx - bw / 2 + halfW, Math.min(bx + bw / 2 - halfW, camX));
+  }
+  if (bh > halfH * 2) {
+    camY = Math.max(by - bh / 2 + halfH, Math.min(by + bh / 2 - halfH, camY));
+  }
+  return { x: camX, y: camY };
+}
+
+/**
+ * 键盘平移（桌面/编辑器）：方向键或 WASD。
+ *
+ * <p>为什么不用鼠标拖动：引擎在**按下**那一帧就把点击派发给棋盘，
+ * 按下起拖会先翻开一格（可能正好是雷），所以拖动平移在扫雷里不安全。
+ * Android 的双指平移不受影响（短按才派发点击，双指手势会取消本次点击）。
+ */
+var PAN_SPEED = 420;   // 世界像素/秒
+
+function handlePan(dt, L) {
+  var dx = 0, dy = 0;
+  try {
+    if (bwe.input.down("ArrowLeft") || bwe.input.down("KeyA")) { dx -= 1; }
+    if (bwe.input.down("ArrowRight") || bwe.input.down("KeyD")) { dx += 1; }
+    if (bwe.input.down("ArrowUp") || bwe.input.down("KeyW")) { dy -= 1; }
+    if (bwe.input.down("ArrowDown") || bwe.input.down("KeyS")) { dy += 1; }
+  } catch (e) { return; }
+  if (dx === 0 && dy === 0) { return; }
+  var z = MS.baseZoom || 1;
+  try {
+    var st = bwe.mine.state();
+    var cell = MS.cell || 32;
+    var b = bwe.world.find("棋盘 Minesweeper");
+    if (!b) { return; }
+    // 读当前相机再增量：直接算绝对值会和双指缩放互相覆盖
+    var p = bwe.camera.pos;
+    var c = clampCam(p.x + dx * PAN_SPEED * dt / z, p.y + dy * PAN_SPEED * dt / z,
+      b.x, b.y, st.cols * cell, st.rows * cell, z, L);
+    bwe.camera.setPos(c.x, c.y);
+  } catch (e2) { }
+}
+
+/**
+ * 当前 HUD 布局。**所有**尺寸只从这里出，杜绝「底带高度改了、格子算式没跟着改」
+ * 这类注释里警告过的同步坑。
+ *
+ * @returns {{W:number,H:number,portrait:boolean,safeTop:number,safeBot:number,
+ *            topH:number,botH:number,bandY0:number,bandY1:number,bandW:number,bandH:number,
+ *            rowH:number,btnW:number,ledW:number,ledH:number,face:number,fs:number,s:number,titleH:number}}
+ */
+function layout() {
+  var scr = screenSize();
+  var W = scr.w, H = scr.h;
+  var portrait = isPortrait(W, H);
+  // 安全边距：刘海/挖孔屏与全面屏手势条。Android 主题已是全屏，
+  // 但手势导航条仍会盖住最底下一小条，所以底带留可配置的内缩（HUD 配置里改）。
+  var safeTop = Math.max(0, numCfg("safeTop", portrait ? 8 : 0));
+  var safeBot = Math.max(0, numCfg("safeBottom", portrait ? 14 : 8));
+  // 窄屏（桌面小窗 / 低逻辑分辨率）按比例缩，但触摸目标不得低于 34×30。
+  var s = Math.max(0.72, Math.min(1, W / 720));
+
+  var rowH = Math.round(Math.max(40, Math.min(52, 44 * s)));
+  var ledW = Math.round(Math.max(76, Math.min(120, 108 * s)));
+  var ledH = Math.round(Math.max(34, Math.min(48, 44 * s)));
+  var fs = Math.round(Math.max(12, Math.min(17, 15 * s)));
+  // 标题条固定 40：要装得下一整颗按钮（手机上点得到），不随屏宽缩
+  var titleH = 40;
+  // 笑脸不能超过 LED 行高，否则会压到下面的状态行
+  var face = Math.round(Math.max(34, Math.min(ledH, 46 * s)));
+  // 步进键：**横竖屏都是「− / +」左右并排、整行高**。
+  // 旧版是上下叠的 22×9 小箭头，手机上只有 2mm，根本点不准（自检会直接判失败）。
+  var stepW = Math.round(Math.max(34, Math.min(46, 42 * s)));
+  var fieldH = Math.max(26, rowH - 10);
+
+  // 顶带：标题条 + 「说明文字 + LED/笑脸」行 + 状态行。
+  // ⚠ 这里的每一项必须与 drawInfoBar 的 y 算式一一对应，改一处要同时改另一处，
+  // 否则状态行会被裁掉或压进棋盘可用区（棋盘按 bandY0 取景）。
+  var labelH = Math.max(12, fs - 2);
+  var msgH = Math.round(fs * 1.32);            // 状态行的字形盒高
+  var topH = 2 + titleH + 4 + (labelH + 6) + ledH + 4 + (msgH + 6) + 6 + safeTop;
+  // 底带：三行步进器 + 读数/提示行；帮助打开时整块换成帮助面板
+  //（棋盘随之重取景，保证帮助区永远在棋盘矩形之外 —— 点「关闭」不会顺带翻开一格）。
+  var botH;
+  if (MS.help) {
+    // 面板上下各留 8px 边距；内容高度由 helpLayout 一处算出，
+    // 与 drawHelpPanel 画文字用的是同一份数据（否则「高度按 A 算、文字按 B 画」会裁行）
+    botH = 8 + helpLayout(W, H, portrait, fs).panelH + 8 + safeBot;
+  } else {
+    botH = 8 + rowH * 3 + tipGap(Math.max(11, fs - 2)) + safeBot;
+  }
+  var bandY0 = topH;
+  var bandY1 = H - botH;
+  var bandW = Math.max(40, W - (portrait ? 12 : 20));
+  var bandH = Math.max(40, bandY1 - bandY0);
+
+  return {
+    W: W, H: H, portrait: portrait, safeTop: safeTop, safeBot: safeBot,
+    topH: topH, botH: botH, bandY0: bandY0, bandY1: bandY1, bandW: bandW, bandH: bandH,
+    rowH: rowH, fieldH: fieldH, stepW: stepW,
+    btnW: Math.round(Math.max(64, Math.min(92, 84 * s))),
+    ledW: ledW, ledH: ledH, face: face, fs: fs, s: s, titleH: titleH, labelH: labelH,
+  };
 }
 
 // ---------------------------------------------------------------- 每帧
@@ -174,7 +391,35 @@ function onUpdate(dt) {
   prev.over = S.over;
   prev.won = S.won;
 
-  try { drawHud(S); } catch (e) { drawErr(e); }
+  // —— 视口变化（转屏 / 改窗口大小 / 手机分屏）→ 重算格子并重新取景 ——
+  //
+  // ⚠ 重算格子必须走 bwe.mine.set（Java 侧 GridBoard 的 cell 是 final，只能重建），
+  // 代价是**这一局会重新开始**。为什么仍然要做：不重算的话，转屏后格子尺寸停留在
+  // 旧视口的值（竖屏 16 行在横屏视口下算出 25px），手机上小到看不清、点不准 ——
+  // 那比重新开一局严重得多。首次 onSceneStart 时视口已经是最终值，不会白重置。
+  var L = layout();
+  if (L.W !== MS.viewW || L.H !== MS.viewH) {
+    MS.viewW = L.W; MS.viewH = L.H;
+    var newCell = autoCellSize(S.rows, S.cols, L);
+    // 只有引擎里真的不是这个尺寸才重建（state() 不回传 cellSize，所以自己记一份）
+    if (newCell !== MS.engineCell) {
+      try { bwe.mine.set({ cellSize: newCell }); } catch (e) { wlog("resize set fail " + e); }
+      MS.engineCell = newCell;
+      fitBoard();
+    }
+    fitCamera(L, true);
+  } else {
+    // 帮助开合会改底带高度 → 可用区变，需要重取景（fitKey 自己会判断）
+    fitCamera(L, false);
+  }
+
+  handlePan(dt, L);
+  try { drawHud(S, L); } catch (e) { drawErr(e); }
+}
+
+/** 把一块屏幕区域登记为「界面区」，让引擎吃掉落在其中的点击（见 TopDownRuntime.hudBlocks）。 */
+function blockBand(id, x, y, w, h) {
+  try { bwe.input.block(id, x, y, w, h); } catch (e) { /* 老引擎没这个 API：静默降级 */ }
 }
 
 function drawErr(e) {
@@ -192,6 +437,9 @@ function screenSize() {
   return { w: w, h: h };
 }
 
+/** 屏幕是横屏还是竖屏：竖屏时 HUD 走竖屏分支（见 layout）。 */
+function isPortrait(W, H) { return H > W * 1.05; }
+
 /**
  * 纯色矩形。
  * @param {number} x
@@ -204,28 +452,6 @@ function box(x, y, w, h, fill) {
   bwe.draw.rect(x, y, w, h, { fill: fill, alpha: 1 });
 }
 
-/**
- * 带 1px 描边的矩形。
- * @param {number} x
- * @param {number} y
- * @param {number} w
- * @param {number} h
- * @param {string} fill
- * @param {string} stroke
- */
-function frame(x, y, w, h, fill, stroke) {
-  bwe.draw.rect(x, y, w, h, { fill: fill, alpha: 1, stroke: stroke, width: 1 });
-}
-
-/**
- * 画字符串。
- * @param {string} s
- * @param {number} x
- * @param {number} y
- * @param {number} size
- * @param {string} color
- * @param {"left"|"center"|"right"} align
- */
 /**
  * 画字符串。**y 是这一行文字的垂直中心**（不是顶部）。
  *
@@ -244,6 +470,15 @@ function text(s, x, y, size, color, align) {
   bwe.draw.text(x, y - h / 2, s, {
     size: size, color: color, align: a, shadow: false,
   });
+}
+
+/** 量一段文字的宽度（帮助面板自动换行用）。 */
+function textW(s, size) {
+  try {
+    var m = bwe.draw.measureText(s, size);
+    if (m && m.w > 0) { return m.w; }
+  } catch (e) { }
+  return s.length * size * 0.62;
 }
 
 /** Win98 凸起边框（亮边在上/左，暗边在下/右）。 */
@@ -275,29 +510,57 @@ function hit(r) {
   } catch (e) { return false; }
 }
 
+/** 左键当前按住（桌面拖动/长按视觉用）。 */
 function mouseDown() {
   try { return !!bwe.input.down("mouse0"); } catch (e) { return false; }
 }
 
+/** 左键本帧刚按下（所有点击判定用它，见 clicked）。 */
+function mousePressed() {
+  try { return !!bwe.input.pressed("mouse0"); } catch (e) { return false; }
+}
+
 /**
- * 一次点击：只在「刚按下」那一帧、并且指针落在 r 内时返回 true。
- * 帧末统一更新 mousePrev（见 drawHud 末尾），所以一次按下只会命中一个按钮。
+ * 一次点击：本帧刚按下、且指针落在 r 内时为 true。
+ * 同一帧里多个按钮只有第一个命中（pressed 每帧只给一次边沿）。
+ *
+ * ⚠ 手机侧语义：Android 把「短按」翻译成一次左键（抬起才派发），
+ * 「长按 400ms」翻译成一次右键（插旗）。所以 HUD 按钮在手机上点一下就生效，
+ * 格子靠长按插旗 —— 帮助面板里写明了这一点。
  */
 function clicked(r) {
-  if (MS.drag) { return false; }
-  return hit(r) && mouseDown() && !mousePrev;
+  // 边沿由引擎给（bwe.input.pressed）：手机上一次短按只在一帧里为真，
+  // 自己记上一帧状态的话，相邻两帧的两次点击会漏掉第二次。
+  return hit(r) && mousePressed();
+}
+
+/**
+ * 凸起按钮 + 文字 + 点击判定（横竖屏共用，保证两边按钮长得一样、点得一样）。
+ * @param {{x:number,y:number,w:number,h:number}} r
+ * @param {string} label
+ * @param {number} fs 字号
+ * @param {string} tint 当前选中态的底色（无选中态传 null）
+ * @param {string} [id] 调试/自检用标识（进 BTN 表）
+ * @returns {boolean} 本帧是否被点击
+ */
+function button(r, label, fs, tint, id) {
+  bevelRaise(r.x, r.y, r.w, r.h);
+  if (tint) { box(r.x + 2, r.y + 2, r.w - 4, r.h - 4, tint); }
+  if (hit(r) && mouseDown()) { box(r.x + 2, r.y + 2, r.w - 4, r.h - 4, "#a8a8a8"); }
+  text(label, r.x + r.w / 2, r.y + r.h / 2, fs, BLACK, "center");
+  pushBtn(id || label, r);
+  return clicked(r);
+}
+
+/** 登记一个可点区域（自检工具据此验证触摸目标尺寸与互不重叠；不参与渲染）。 */
+function pushBtn(id, r) {
+  BTN.push({ id: id, x: r.x, y: r.y, w: r.w, h: r.h });
 }
 
 function pad3(n) {
   var s = String(Math.max(0, Math.floor(n)));
   while (s.length < 3) { s = "0" + s; }
   return s;
-}
-
-function fmtTime(sec) {
-  var s = Math.floor(sec);
-  var mm = Math.floor(s / 60), ss = s % 60;
-  return pad3(mm) + ":" + (ss < 10 ? "0" : "") + ss;
 }
 
 // ---------------------------------------------------------------- 棋盘屏幕位置
@@ -318,11 +581,9 @@ function boardScreenRect() {
   } catch (e) { return out; }
 }
 
-// ---------------------------------------------------------------- HUD
-
 // ---------------------------------------------------------------- 可编辑 HUD 配置
 
-/** HUD 配置对象（场景里叫「HUD 配置」）：文案 / 配色 / 字号都在它的 props 里。 */
+/** HUD 配置对象（场景里叫「HUD 配置」）：文案 / 配色 / 安全边距都在它的 props 里。 */
 var HUD = null;
 var HUDP = {};
 
@@ -347,6 +608,11 @@ function cfg(key, fallback) {
   return (v !== undefined && v !== null && String(v).length) ? String(v) : fallback;
 }
 
+/** 读一条数值配置（安全边距等）；非法值退回 fallback。 */
+function numCfg(key, fallback) {
+  var v = Number(cfg(key, String(fallback)));
+  return isFinite(v) ? v : fallback;
+}
 
 // ---------------------------------------------------------------- 可编辑 label
 
@@ -373,342 +639,419 @@ function putLabel(name, x, y) {
   try { e.setPos(x, y); } catch (e2) { }
 }
 
-/** 读 label 当前文案（编辑器里改过就以此为准）。 */
-function labelText(name, fallback) {
-  findLabels();
-  var e = LABELS[name];
-  if (!e) { return fallback; }
-  try {
-    var t = e.prop("text");
-    if (t && String(t).length) { return String(t); }
-  } catch (e2) { }
-  return fallback;
-}
+var BTN = [];         // 本帧可点区域（pushBtn 登记；自检据此验证触摸目标与重叠）
 
+// ---------------------------------------------------------------- HUD 主流程
 
-// ---------------------------------------------------------------- 可拖动的窗口
-
-/** 标题栏拖动：按住蓝条拖，整个「窗口」（HUD 两条带 + 棋盘视口）跟着平移。 */
-function updateWindowDrag(W) {
-  var titleR = { x: 2, y: 2, w: W - 4, h: 24 };
-  var over = hit(titleR);
-  var down = mouseDown();
-  if (over && down && !mousePrev) {
-    MS.drag = { x: mousePos().x - MS.winX, y: mousePos().y - MS.winY };
-  }
-  if (!down) {
-    MS.drag = null;
-  } else if (MS.drag) {
-    MS.winX = mousePos().x - MS.drag.x;
-    MS.winY = mousePos().y - MS.drag.y;
-    // 限制在屏幕内，别拖丢
-    var maxX = Math.max(0, W * 0.5);
-    var maxY = 200;
-    MS.winX = Math.max(-maxX, Math.min(maxX, MS.winX));
-    MS.winY = Math.max(-maxY, Math.min(maxY, MS.winY));
-  }
-}
-
-function mousePos() {
-  try {
-    var m = bwe.input.mouse;
-    return { x: m.x, y: m.y };
-  } catch (e) { return { x: 0, y: 0 }; }
-}
-
-
-var BTN = [];         // 本帧可点区域（供调试）
-var BTN_ACT = {};     // id → 动作
-
-/** 屏幕是横屏还是竖屏：竖屏时 HUD 改到左右两侧。 */
-function isPortrait(W, H) { return H > W * 1.05; }
-
-function drawHud(S) {
-  BTN = []; BTN_ACT = {};
-  var wasDown = mouseDown();
-  var scr = screenSize();
-  var W = scr.w, H = scr.h;
+function drawHud(S, L) {
+  BTN = [];
+  var W = L.W, H = L.H;
   var br = boardScreenRect();
-  updateWindowDrag(W);
 
-  if (isPortrait(W, H)) {
-    // 竖屏：顶部只放一条窄标题带，配置条压在底部，棋盘居中
-    var topH = 92;
-    // ⚠ 底带高度必须与 autoCellSize 里的算式同步（见下方 availH 的竖屏分支）：
-    // 三行输入（各 30px = 90）+ 上下留边 8 + 底部安全距离 18 ≈ 132。
-    // 旧值 116 让最后一行离屏幕底只剩 18px，手指点在屏幕边缘时容易触发系统手势。
-    var botH = 132;
-    drawFrameTop(W, topH);
-    drawFrameBottom(W, H - botH, botH);
-    putLabel("标题 扫雷", 8, 2 + 22 / 2);
-    putLabel("提示 玩法", 8, topH - 10);
-    drawInfoBarPortrait(W, topH, S);
-    drawConfigBarPortrait(W, H - botH, botH);
-    drawOverlay(W, H, br, S);
-    mousePrev = mouseDown();
-    return;
+  box(0, 0, W, L.topH, SILVER);
+  bevelSunken(0, 0, W, L.topH);
+  box(0, H - L.botH, W, L.botH, SILVER);
+  bevelSunken(0, H - L.botH, W, L.botH);
+  // 大棋盘（64×64）会伸到两条带底下。引擎的点击派发是「脚本 → 棋盘」且脚本无法拦截，
+  // 所以必须显式声明这两块是界面区，否则点「新游戏」会顺带翻开底下的格子（可能直接踩雷）。
+  blockBand("hudTop", 0, 0, W, L.topH);
+  blockBand("hudBottom", 0, H - L.botH, W, L.botH);
+
+  drawInfoBar(W, L, S);
+  if (MS.help) {
+    drawHelpPanel(W, L);
+  } else {
+    drawConfigBar(W, L, S);
   }
-
-  // 横屏：上下两条带
-  //
-  // ⚠ 这里**不能**用棋盘的屏幕位置来定 HUD 高度。
-  // 旧写法是 topH2 = br.y - 10、botY = br.y + br.h + 10 —— 一旦玩家缩放/平移
-  // （手机上双指手势、桌面改 zoom），棋盘在屏幕上的位置就变，两条灰带跟着变高变矮，
-  // 表现是「UI 一直在跳」。
-  // HUD 是界面层，必须固定在屏幕边缘：顶带固定高度、底带贴底，中间留给棋盘的可用区
-  // 只用来「提示」不参与布局。
-  var topH2 = 108;
-  var botH2 = 116;
-  var botY = H - botH2;
-  // 棋盘可用区（供 autoCellSize / 提示文案用；布局不再依赖它）
-  var availH = botY - topH2;
-  drawFrameTop(W, topH2);
-  drawFrameBottom(W, botY, botH2);
-  putLabel("标题 扫雷", 10, 2 + 26 / 2);
-  putLabel("标签 剩余雷数", 16 + 100, 60);
-  putLabel("标签 用时", W - 16 - 96 - 96, 60);
-  putLabel("标签 行", 24, botY + 24);
-  putLabel("标签 列", 24 + 216, botY + 24);
-  putLabel("标签 雷", 24 + 432, botY + 24);
-  putLabel("提示 玩法", 16, botY + botH - 12);
-  drawInfoBar(W, topH2, S);
-  drawConfigBar(W, botY, botH2);
-  drawOverlay(W, H, br, S);
-  mousePrev = mouseDown();
+  drawOverlay(W, H, br, L, S);
 }
 
-function drawFrameTop(W, h) {
-  box(0, 0, W, h, SILVER);
-  bevelSunken(0, 0, W, h);
-}
-function drawFrameBottom(W, y, h) {
-  box(0, y, W, h, SILVER);
-  bevelSunken(0, y, W, h);
-}
-
-/** 只铺上、下两条带（中间留给棋盘，绝不盖住游玩区）。 */
-function drawFrame(W, H, topH, botY, botH) {
-  box(0, 0, W, topH, SILVER);
-  bevelSunken(0, 0, W, topH);
-  box(0, botY, W, botH, SILVER);
-  bevelSunken(0, botY, W, botH);
-}
-
-/** 顶带：标题栏 + 两个 LED 计数器 + 笑脸按钮。 */
-function drawInfoBar(W, topH, S) {
-  var titleH = 26;
+/**
+ * 顶带：标题栏 + 两个 LED 计数器 + 笑脸 + 状态行（横竖屏内容完全一致）。
+ */
+function drawInfoBar(W, L, S) {
+  var portrait = L.portrait;
+  var pad = portrait ? 8 : 16;
+  var titleH = L.titleH;
+  var ty = L.safeTop + 2;
   // 标题栏（Win98 经典深蓝 → 浅蓝渐变，用两段纯色近似）
-  box(2, 2, W - 4, titleH, TITLE_BLUE1);
-  box(2, 2, W - 4, 10, "#2a4b9b");
-  text(MS.modeIdx === 1 ? "扫雷 · 复雷加殊 Complexweeper" : cfg("bgTitle", "扫雷 · Minesweeper"),
-    10, 2 + titleH / 2, 15, cfg("silverLight", "#ffffff"), "left");
-  // 右上角三个窗口按钮
-  drawTitleButtons(W, titleH);
+  box(2, ty, W - 4, titleH, TITLE_BLUE1);
+  box(2, ty, W - 4, Math.round(titleH * 0.4), "#2a4b9b");
+  var titleTxt = MS.modeIdx === 1
+    ? cfg("bgTitleComplex", "扫雷 · 复雷加殊 Complexweeper")
+    : cfg("bgTitle", "扫雷 · Minesweeper");
+  text(titleTxt, pad + 2, ty + titleH / 2, Math.max(12, L.fs - 1), cfg("silverLight", "#ffffff"), "left");
 
-  // LED 计数器：剩余雷数 / 用时
-  var cy = titleH + 12;
-  var cw = 96, ch = 40;
-  var leftX = 16, rightX = W - 16 - cw;
+  // 标题栏右侧：一个带文字的「复位视角」按钮（横竖屏同一颗）。
+  // 旧版横屏画的是三个 22×16 的假窗口按钮（最小化/最大化/关窗），
+  // 既点不准、语义也和游戏无关；竖屏干脆没有。现在两边一一对等。
+  var rw = Math.round(Math.max(72, 92 * L.s)), rh = Math.max(34, titleH - 6);
+  var rbtn = { x: W - 4 - rw, y: ty + (titleH - rh) / 2, w: rw, h: rh };
+  if (button(rbtn, cfg("labelResetView", "复位视角"), Math.max(12, L.fs - 2), null, "resetView")) { resetView(); }
+
+  // LED 计数器：剩余雷数 / 用时（说明文字独占一行，在计数器上方）
+  var labelH = Math.max(12, L.fs - 2);
+  var cy = ty + titleH + 4 + labelH + 6;
+  var cw = L.ledW, ch = L.ledH;
+  var leftX = pad, rightX = W - pad - cw;
   drawCounter(leftX, cy, cw, ch, S.mines - S.flags);
   drawCounter(rightX, cy, cw, ch, Math.min(999, S.elapsed));
   // 计数器上方的说明文字（同样来自可编辑配置）
-  text(cfg("labelMines", "剩余雷数"), leftX, cy - 6, 11, "#303030", "left");
-  text(cfg("labelTime", "用时"), rightX, cy - 6, 11, "#303030", "left");
+  text(cfg("labelMines", "剩余雷数"), leftX, cy - labelH / 2 - 4, Math.max(10, L.fs - 4), HINT_GRAY, "left");
+  text(cfg("labelTime", "用时"), rightX, cy - labelH / 2 - 4, Math.max(10, L.fs - 4), HINT_GRAY, "left");
 
-  // 中间：状态标签 + 笑脸按钮
-  var faceW = 34, faceH = 34;
-  var faceX = Math.floor((W - faceW) / 2), faceY = cy + 3;
-  var face = { x: faceX, y: faceY, w: faceW, h: faceH };
-  var down = mouseDown() && hit(face);
-  if (down) { bevelSunken(face.x, face.y, face.w, face.h); }
+  // 中间：笑脸按钮（新游戏）
+  var fw = L.face;
+  var face = { x: Math.floor((W - fw) / 2), y: cy + Math.floor((ch - fw) / 2), w: fw, h: fw };
+  if (mouseDown() && hit(face)) { bevelSunken(face.x, face.y, face.w, face.h); }
   else { bevelRaise(face.x, face.y, face.w, face.h); }
   drawFace(face, S);
+  pushBtn("face", face);
   if (clicked(face)) {
     bwe.mine.reset();
     wlog("新游戏");
   }
 
-  // 标题下的状态文字
-  var msg;
-  if (MS.modeIdx === 1) {
-    msg = S.over
-      ? (S.won ? "复雷加殊 · 全部安全格已翻开" : "踩到雷了，按笑脸重开")
-      : (S.started
-        ? "复雷加殊 · 数字 = 周围雷之和的模长 · 点数字可连锁翻开"
-        : "左键翻开第一格（首击必安全）· 点数字可连锁翻开（数量与虚实比例都要对）");
-  } else {
-    msg = S.over
-      ? (S.won ? "恭喜！全部安全格已翻开" : "踩到雷了，按笑脸重开")
-      : (S.started
-        ? "进行中 · 左键翻开 / 右键插旗 · 点数字可连锁翻开"
-        : "左键翻开第一格（首击必安全）· 点数字可连锁翻开（旗数要对）");
-  }
-  text(msg, 16 + cw + 14, cy + 26, 15, TEXT_DARK, "left");
-
-  // 行/列/雷数 只读显示
-  text("雷 " + S.mines + " · 旗 " + S.flags + " · " + S.rows + "×" + S.cols,
-    W - 16 - cw - 250, cy + 26, 15, TEXT_DARK, "left");
+  // 状态行：当前局面 + 操作提示（横竖屏都有，内容一致）
+  var msgY = cy + ch + 4 + Math.round(L.fs * 0.66);   // 字形盒垂直居中
+  text(statusLine(S), W / 2, msgY, L.fs, TEXT_DARK, "center");
+  putLabel("标题 扫雷", pad, ty + titleH / 2);
+  putLabel("提示 玩法", pad, msgY);
 }
 
-function drawTitleButtons(W, titleH) {
-  var b = { w: 18, h: 16 };
-  var x = W - 8 - b.w * 3 - 8;
-  var y = Math.floor((titleH - b.h) / 2) + 2;
-  for (var i = 0; i < 3; i++) {
-    var r = { x: x + i * (b.w + 4), y: y, w: b.w, h: b.h };
-    bevelRaise(r.x, r.y, r.w, r.h);
-    if (i === 0 && clicked(r)) { MS.winX = 0; MS.winY = 0; wlog("窗口复位"); }
-    if (i === 1 && clicked(r)) { MS.winX = 0; MS.winY = 0; bwe.mine.reset(); }
-    if (i === 2 && clicked(r)) { bwe.mine.reset(); }
-    if (i === 0) { box(r.x + 4, r.y + 11, 10, 2, BLACK); }
-    else if (i === 1) { frame(r.x + 4, r.y + 4, 10, 9, null, BLACK); }
-    else {
-      box(r.x + 5, r.y + 4, 8, 1, BLACK); box(r.x + 5, r.y + 7, 8, 1, BLACK);
-      box(r.x + 5, r.y + 10, 8, 1, BLACK);
-      box(r.x + 5, r.y + 4, 1, 7, BLACK); box(r.x + 12, r.y + 4, 1, 7, BLACK);
-    }
+/** 当前局面的一句话说明（横竖屏共用，杜绝「竖屏没有状态提示」）。 */
+function statusLine(S) {
+  if (S.over) {
+    return S.won ? cfg("labelWinStatus", "恭喜！全部安全格已翻开")
+      : cfg("labelLoseStatus", "踩到雷了，按笑脸或「新游戏」重开");
   }
+  if (MS.modeIdx === 1) {
+    return S.started
+      ? "复雷加殊 · 数字 = 周围雷之和的模长 · 点数字可连锁翻开"
+      : "先点一格（首击必安全）· 长按/右键插旗 · 点数字可连锁翻开";
+  }
+  return S.started
+    ? "进行中 · 点格翻开 / 长按或右键插旗 · 点数字可连锁翻开"
+    : "先点一格（首击必安全）· 长按/右键插旗 · 点数字要旗数对齐";
+}
+
+function resetView() {
+  MS.fitKey = "";
+  fitCamera(layout(), true);
+  wlog("复位视角");
 }
 
 /** 红色 LED 计数器（黑底凹陷 + 红字）。 */
 function drawCounter(x, y, w, h, value) {
   bevelSunken(x, y, w, h);
   box(x + 5, y + 5, w - 10, h - 10, LED_BG);
-  var s = pad3(value);
-  text(s, x + w / 2, y + h / 2, 26, LED_RED, "center");
+  var fs = Math.max(18, Math.min(30, Math.round(h * 0.62)));
+  text(pad3(value), x + w / 2, y + h / 2, fs, LED_RED, "center");
 }
 
-/** 笑脸：凹陷格 + 像素笑脸（笑脸表情随状态变化）。 */
+/** 笑脸：凹陷格 + 像素笑脸（表情随状态变化，尺寸随 face 自适应）。 */
 function drawFace(r, S) {
   var cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-  var eye = 3, mw = 12;
-  // 眼睛
-  box(cx - 8, cy - 6, eye, eye, BLACK);
-  box(cx + 5, cy - 6, eye, eye, BLACK);
+  var u = r.w / 34;                       // 基准是 34px 笑脸，按尺寸等比放大
+  var eye = Math.max(2, Math.round(3 * u));
+  var mw = Math.max(8, Math.round(12 * u));
+  var lw = Math.max(2, Math.round(u));
+  var sw = Math.max(2, Math.round(3 * u));
+  box(cx - 8 * u, cy - 6 * u, eye, eye, BLACK);
+  box(cx + 5 * u, cy - 6 * u, eye, eye, BLACK);
   if (S.over && !S.won) {
     // 倒霉脸：嘴角向下
-    box(cx - mw / 2, cy + 7, mw, 2, BLACK);
-    box(cx - mw / 2, cy + 5, 3, 2, BLACK);
-    box(cx + mw / 2 - 3, cy + 5, 3, 2, BLACK);
+    box(cx - mw / 2, cy + 7 * u, mw, lw, BLACK);
+    box(cx - mw / 2, cy + 5 * u, sw, lw, BLACK);
+    box(cx + mw / 2 - sw, cy + 5 * u, sw, lw, BLACK);
   } else if (S.over && S.won) {
     // 赢：大笑 + 墨镜
-    box(cx - 9, cy - 7, 18, 6, BLACK);
-    box(cx - 6, cy + 4, 12, 3, BLACK);
+    box(cx - 9 * u, cy - 7 * u, Math.round(18 * u), Math.max(3, Math.round(6 * u)), BLACK);
+    box(cx - mw / 2, cy + 4 * u, mw, Math.max(2, Math.round(3 * u)), BLACK);
   } else {
-    box(cx - mw / 2, cy + 5, mw, 2, BLACK);
-    box(cx - mw / 2, cy + 3, 3, 2, BLACK);
-    box(cx + mw / 2 - 3, cy + 3, 3, 2, BLACK);
+    box(cx - mw / 2, cy + 5 * u, mw, lw, BLACK);
+    box(cx - mw / 2, cy + 3 * u, sw, lw, BLACK);
+    box(cx + mw / 2 - sw, cy + 3 * u, sw, lw, BLACK);
   }
-}
-
-/** 底带：行 / 列 / 雷数 三个步进器 + 新游戏按钮。 */
-function drawConfigBar(W, botY, botH) {
-  var items = [
-    { id: "rows", cap: "Rows", label: "行 Rows", value: MS.rows, min: 5, max: 30, step: 1 },
-    { id: "cols", cap: "Cols", label: "列 Cols", value: MS.cols, min: 5, max: 30, step: 1 },
-    { id: "mines", cap: "MineCount", label: "雷 Mines", value: MS.mines, min: 1, max: Math.max(1, MS.rows * MS.cols - 9), step: 1 },
-  ];
-  var gx = 14;
-  var gw = Math.min(206, Math.floor((W - 200) / 3));
-  var gy = botY + Math.floor((botH - 58) / 2);
-
-  for (var i = 0; i < items.length; i++) {
-    var it = items[i];
-    var x = gx + i * (gw + 10);
-    // 组外框
-    bevelRaise(x, gy, gw, 52);
-    // 标签（文字层）：组框上半部居中
-    text(cfg("label" + it.cap, it.label), x + 10, gy + 15, 13, cfg("textDark", "#303030"), "left");
-    // 凹陷数值框：组框下半部
-    var fx = x + 10, fy = gy + 26, fw = gw - 48, fh = 20;
-    bevelSunken(fx, fy, fw, fh);
-    syncInputField(it.id, fx, fy, fw, fh, it.value, it.min, it.max, W);
-    var shown = curFieldText(it.id, String(it.value));
-    // 输入超范围 → 红框提示（否则玩家填 1 被悄悄钳成 5，完全不知道发生了什么）
-    var bad = inputHint(it.id);
-    // 编辑态画白底，让「现在能打字」一眼可见
-    if (bwe.textinput.editing === it.id) {
-      box(fx, fy, fw, fh, bad ? "#ffe0e0" : "#ffffff");
-    }
-    text(shown, fx + fw / 2, fy + fh / 2, 16, bad ? "#c00000" : BLACK, "center");
-    if (bad) {
-      text(bad, fx + fw / 2, fy - 8, 11, "#c00000", "center");
-    }
-    // 编辑时画一条闪烁光标
-    if (bwe.textinput.editing === it.id) {
-      var tw = bwe.draw.measureText(shown, 16).w;
-      box(fx + fw / 2 + tw / 2 + 2, fy + 3, 2, fh - 6, "#1a66ff");
-    }
-    // +/- 两个凸起按钮
-    var bw2 = 20, bh2 = 9;
-    var up = { x: fx + fw + 7, y: fy, w: bw2, h: bh2 };
-    var dn = { x: fx + fw + 7, y: fy + bh2 + 2, w: bw2, h: bh2 };
-    var upHover = hit(up), dnHover = hit(dn);
-    bevelRaise(up.x, up.y, up.w, up.h);
-    bevelRaise(dn.x, dn.y, dn.w, dn.h);
-    if (upHover && mouseDown()) { box(up.x + 2, up.y + 2, up.w - 4, up.h - 4, "#a8a8a8"); }
-    if (dnHover && mouseDown()) { box(dn.x + 2, dn.y + 2, dn.w - 4, dn.h - 4, "#a8a8a8"); }
-    drawArrow(up, true);
-    drawArrow(dn, false);
-    if (clicked(up)) { changeValue(it.id, it.step, it.max, it.min); }
-    if (clicked(dn)) { changeValue(it.id, -it.step, it.max, it.min); }
-  }
-
-  // 新游戏按钮
-  var nbW = 118, nbH = 34;
-  var nb = { x: W - nbW - 16, y: gy + 9, w: nbW, h: nbH };
-  bevelRaise(nb.x, nb.y, nb.w, nb.h);
-  if (hit(nb) && mouseDown()) { box(nb.x + 2, nb.y + 2, nb.w - 4, nb.h - 4, "#a8a8a8"); }
-  text(cfg("labelNewGame", "新游戏"), nb.x + nb.w / 2, nb.y + nb.h / 2, 16, BLACK, "center");
-  if (clicked(nb)) {
-    bwe.mine.reset();
-    wlog("新游戏（" + MS.rows + "×" + MS.cols + " · " + MS.mines + "）");
-  }
-
-  // 模式切换按钮：普通 ⇄ 复雷加殊（放在「新游戏」左边）
-  var mbW = 116, mbH = 34;
-  var mb = { x: nb.x - 12 - mbW, y: gy + 9, w: mbW, h: mbH };
-  if (mb.x > gx + 3 * (gw + 10) + 4) {
-    bevelRaise(mb.x, mb.y, mb.w, mb.h);
-    // 复雷模式用浅蓝底提示当前不是普通扫雷
-    if (MS.modeIdx === 1) { box(mb.x + 2, mb.y + 2, mb.w - 4, mb.h - 4, "#cfe0ff"); }
-    if (hit(mb) && mouseDown()) { box(mb.x + 2, mb.y + 2, mb.w - 4, mb.h - 4, "#a8a8a8"); }
-    text(MS.modeIdx === 1 ? "模式：复雷" : "模式：普通",
-      mb.x + mb.w / 2, mb.y + mb.h / 2, 15, BLACK, "center");
-    if (clicked(mb)) { toggleMode(); }
-  }
-
-  // 底部提示
-  var rangeTip = MS.modeIdx === 1
-    ? "复雷加殊：点数字连锁翻开需①旗数正确 ②虚实比例正确（不需标雷的属性）"
-    : cfg("labelRange", "行 5–30 · 列 5–30 · 雷 1–(行×列−9)");
-  text(rangeTip, 16, botY + botH - 12, 11, "#404040", "left");
 }
 
 /**
- * 在按钮里画一个三角形箭头（▲ / ▼）。
+ * 底带：行 / 列 / 雷数 三组步进器 + 新游戏 + 模式 + 帮助 + 读数/范围提示。
  *
- * <p>旧实现是<b>写死的 1px 像素线段</p>，只能适配 22×9 的小按钮；竖屏把箭头放大到
- * 26×11 之后，那个小箭头缩在角落里，看着像按钮没画内容。这里改成按按钮宽高
- * <b>自适应</b>：箭头半宽 = 按钮宽的 0.26、半高 = 按钮高的 0.34，并保证至少 3px 可见。
+ * <p><b>为什么必须按「列」分区而不是按「行」叠</b>（玩家反馈「竖屏按钮太挤」的根因）：
+ * 旧布局里输入框右边距只留 66px，▲▼ 箭头放在 x=W-66，而右下的「模式 / 重局」按钮
+ * 放在 x=W-60、y=gy+4 / gy+30 —— 两者的 x 与 y 范围都重叠，箭头被压在按钮下面、
+ * 点击还会互相抢（点箭头可能触发重局），而且箭头只有 22×9，手指根本点不准。
+ *
+ * <p>现在的分区（横竖屏**同一套行结构**，只是宽度不同）：
+ * <pre>
+ *   标签 │ − │ 数值框 │ + │（右侧独立一列：新游戏 / 模式 / 帮助）
+ * </pre>
+ * 步进键改成左右并排、整行高的 − / +（旧版上下叠的 22×9 小箭头在手机上只有 2mm，
+ * 点不准）；数值框点一下直接弹软键盘键入。所有可点区域 ≥34 逻辑像素见 layout()。
  */
-function drawArrow(r, up) {
-  var cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-  // 半宽/半高（画三角用），随按钮尺寸缩放。
-  // 竖屏箭头按钮是 26x11 —— 系数取 0.42/0.62 才能让三角填满视觉重心；
-  // 旧值 0.34/0.45 画出来只有 4 行高（占按钮 36%），放大看像个小黑点。
-  var hw = Math.max(3, Math.floor(r.w * 0.42));
-  var hh = Math.max(3, Math.floor(r.h * 0.62));
-  // 逐行扫描：从顶点往底边，宽度逐行加 2（步进 = 1px 每侧），画成实心三角
-  for (var i = 0; i < hh; i++) {
-    var w = 2 + i * 2;                 // 该行宽度
-    if (w > hw * 2) { w = hw * 2; }
-    var y = up ? (cy - hh + 1 + i) : (cy + hh - 1 - i);
-    box(cx - w / 2, y, w, 1, BLACK);
+function drawConfigBar(W, L, S) {
+  var portrait = L.portrait;
+  var botY = L.H - L.botH;
+  var rowH = L.rowH;
+  var gy = botY + 8;
+  var pad = portrait ? 8 : 14;
+
+  // ---- 水平分区（先算好，后面所有元素都按它排，杜绝重叠）----
+  var btnW = L.btnW;
+  var btnX = W - pad - btnW;
+  var stepW = L.stepW;
+  // 标签宽度**实测**：竖屏用短名（行/列/雷），横屏用配置全名（行 Rows）。
+  // 之前按 40px 估，横屏「行 Rows」实际 ~46px，被 − 按钮切掉一半。
+  var lfs = portrait ? L.fs : Math.max(11, L.fs - 3);
+  // 竖屏只画空格前的短名，横屏画全名 —— 量的必须是**真正画出来的那串**
+  var caps = [cfg("labelRows", "行 Rows"), cfg("labelCols", "列 Cols"), cfg("labelMineCount", "雷 Mines")];
+  if (portrait) {
+    for (var ci = 0; ci < caps.length; ci++) { caps[ci] = caps[ci].replace(/\s+.*$/, ""); }
+  }
+  var labelMax = 0;
+  for (var cj = 0; cj < caps.length; cj++) {
+    var tw2 = textW(caps[cj], lfs);
+    if (tw2 > labelMax) { labelMax = tw2; }
+  }
+  var labelW = Math.round(Math.max(30, labelMax + 8));
+  var minusX = pad + labelW;
+  var fieldX = minusX + stepW + 6;
+  var fieldW = Math.max(60, btnX - 8 - stepW - 6 - fieldX);
+  var fieldH = L.fieldH;
+  var plusX = fieldX + fieldW + 6;
+
+  var items = [
+    { id: "rows", cap: "Rows", label: "行 Rows", value: MS.rows, min: ROW_MIN, max: ROW_MAX },
+    { id: "cols", cap: "Cols", label: "列 Cols", value: MS.cols, min: COL_MIN, max: COL_MAX },
+    { id: "mines", cap: "MineCount", label: "雷 Mines", value: MS.mines, min: 1, max: Math.max(1, MS.rows * MS.cols - 9) },
+  ];
+
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var y = gy + i * rowH;
+    var rowCy = y + rowH / 2;
+    var boxY = y + (rowH - fieldH) / 2;
+    // 标签：竖屏只取空格前的短名（宽度有限），横屏用配置全名；两边读同一份配置
+    var cap = cfg("label" + it.cap, it.label);
+    text(portrait ? cap.replace(/\s+.*$/, "") : cap, pad + 2, rowCy, lfs, HINT_GRAY, "left");
+    // 凹陷数值框
+    bevelSunken(fieldX, boxY, fieldW, fieldH);
+    syncInputField(it.id, fieldX, boxY, fieldW, fieldH, it.value, it.min, it.max, W);
+    var shown = curFieldText(it.id, String(it.value));
+    var bad = inputHint(it.id);
+    if (bwe.textinput.editing === it.id) {
+      box(fieldX, boxY, fieldW, fieldH, bad ? "#ffe0e0" : "#ffffff");
+    }
+    text(shown, fieldX + fieldW / 2, boxY + fieldH / 2, L.fs + 1, bad ? "#c00000" : BLACK, "center");
+    if (bad) { text(bad, fieldX + fieldW / 2, boxY - 8, Math.max(10, L.fs - 4), "#c00000", "center"); }
+    if (bwe.textinput.editing === it.id) {
+      var tw = textW(shown, L.fs + 1);
+      box(fieldX + fieldW / 2 + tw / 2 + 3, boxY + 4, 2, fieldH - 8, "#1a66ff");
+    }
+    // − / +：整行高，分列数值框左右
+    var minusR = { x: minusX, y: y, w: stepW, h: rowH };
+    var plusR = { x: plusX, y: y, w: stepW, h: rowH };
+    stepperBtn(minusR, false);
+    stepperBtn(plusR, true);
+    pushBtn(it.id + "-", minusR);
+    pushBtn(it.id + "+", plusR);
+    if (clicked(minusR)) { changeValue(it.id, -1, it.max, it.min); }
+    if (clicked(plusR)) { changeValue(it.id, 1, it.max, it.min); }
+  }
+
+  // ---- 右侧按钮列（独占一列，与输入区不重叠；三颗按钮正好铺满三行高度）----
+  var bGap = 6;
+  var bH = Math.max(34, Math.floor((rowH * 3 - bGap * 2) / 3));
+  var bfs = Math.max(13, L.fs);
+  var nb = { x: btnX, y: gy, w: btnW, h: bH };
+  if (button(nb, cfg("labelNewGame", "新游戏"), bfs, null, "newGame")) {
+    bwe.mine.reset();
+    wlog("新游戏（" + MS.rows + "×" + MS.cols + " · " + MS.mines + "）");
+  }
+  var mb = { x: btnX, y: gy + bH + bGap, w: btnW, h: bH };
+  if (button(mb, MS.modeIdx === 1 ? cfg("labelModeComplex", "模式：复雷") : cfg("labelModeNormal", "模式：普通"),
+    bfs, MS.modeIdx === 1 ? "#cfe0ff" : null, "mode")) {
+    toggleMode();
+  }
+  var hb = { x: btnX, y: gy + (bH + bGap) * 2, w: btnW, h: bH };
+  if (button(hb, cfg("labelHelp", "帮助"), bfs, MS.help ? "#cfe0ff" : null, "help")) {
+    MS.help = true;
+    MS.fitKey = "";
+    wlog("帮助 开");
+  }
+
+  // ---- 读数 + 范围提示（横竖屏同一行内容）----
+  var tipY = gy + rowH * 3 + 10 + Math.round(tipFs(L) * 0.66);
+  var readout = "雷 " + S.mines + " · 旗 " + S.flags + " · " + S.rows + "×" + S.cols
+    + " · 格 " + (MS.cell || 32) + "px";
+  var rangeTip = MS.modeIdx === 1
+    ? cfg("labelRangeComplex", "复雷加殊：点数字连锁翻开需①旗数正确 ②虚实比例正确")
+    : cfg("labelRange", "行 5–64 · 列 5–64 · 雷 1–(行×列−9) · 点数值可直接输入");
+  text(readout, pad + 2, tipY, tipFs(L), TEXT_DARK, "left");
+  text(rangeTip, W - pad - 2, tipY, tipFs(L), "#404040", "right");
+}
+
+/**
+ * 帮助正文（唯一来源）：按当前宽度换行，返回要画的每一行。
+ *
+ * ⚠ layout() 用它算面板高度、drawHelpPanel() 用它画文字 ——
+ * 两处必须同一个函数，否则「高度按一套算、文字按另一套画」就会裁掉最后几行。
+ */
+function helpLines(W, portrait, fs) {
+  var pad = portrait ? 10 : 16;
+  var maxW = W - pad * 2 - 20;
+  var raw = [
+    { t: cfg("helpTitle", "扫雷玩法"), c: TITLE_BLUE1, b: true },
+    { t: cfg("help1", "翻开：点一下未翻开的格子；数字表示周围 8 格里有几颗雷。"), c: "#202020" },
+    { t: cfg("help2", "插旗：手机上长按格子（电脑右键）标雷，剩余雷数跟着减。"), c: "#202020" },
+    { t: cfg("help3", "连锁：点已翻开的数字格，旗数与数字对齐时把周围一次翻开。"), c: "#202020" },
+    { t: cfg("help4", "首击必安全：第一下永远不是雷；翻开全部安全格即通关。"), c: "#202020" },
+    { t: cfg("help5", "复雷加殊：雷有虚实（+1/−1/+i/−i），数字是周围雷之和的模长，连锁翻开还要求旗的虚实比例也对。"), c: "#403010" },
+    { t: cfg("help6", "手机：双指缩放画面、双指拖动平移；点数值框可直接键入行列雷数。"), c: "#202020" },
+    { t: cfg("help7", "大棋盘（如 64×64）：格子保持可读大小，一屏放不下，靠平移浏览整盘。"), c: "#202020" },
+    { t: cfg("help8", "平移：手机双指拖动；电脑用方向键或 WASD。「复位视角」回到中间。"), c: "#202020" },
+  ];
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var seg = wrapText(raw[i].t, raw[i].b ? fs + 2 : fs, maxW);
+    for (var j = 0; j < seg.length; j++) {
+      out.push({ s: seg[j], c: raw[i].c, b: raw[i].b });
+    }
+  }
+  return out;
+}
+
+/**
+ * 帮助面板的完整排版：行内容、行距、关闭按钮尺寸、面板总高度。
+ * 高度里已经把「关闭按钮那一行」算进去，所以文字永远不会压在按钮上。
+ */
+var HELP_CACHE = { key: "", val: null };
+
+function helpLayout(W, H, portrait, fs) {
+  var key = W + "|" + H + "|" + (portrait ? 1 : 0) + "|" + fs + "|" + HUDKEY();
+  if (HELP_CACHE.key === key && HELP_CACHE.val) { return HELP_CACHE.val; }
+  var lay = helpLayoutRaw(W, H, portrait, fs);
+  HELP_CACHE.key = key; HELP_CACHE.val = lay;
+  return lay;
+}
+
+/** 帮助文案指纹：编辑器里改过任何一条，缓存就要失效。 */
+function HUDKEY() {
+  return cfg("helpTitle", "") + "|" + cfg("help1", "") + "|" + cfg("help2", "") + "|" +
+    cfg("help3", "") + "|" + cfg("help4", "") + "|" + cfg("help5", "") + "|" + cfg("help6", "") + "|" + cfg("help7", "") + "|" + cfg("help8", "");
+}
+
+function helpLayoutRaw(W, H, portrait, fs) {
+  var lh = Math.round(fs * 1.55);
+  var chh = Math.max(32, Math.round(fs * 2.2));
+  var lines = helpLines(W, portrait, fs);
+  var firstCy = 10 + Math.round(fs * 0.6);      // 第一行中心（相对面板顶）
+  var panelH = firstCy + lines.length * lh + 6 + chh + 10;
+  // 内容再多也不吃掉整个屏幕：最多占一半，且不超过 460
+  var cap = Math.round(Math.max(140, Math.min(H * 0.5, 460)));
+  return {
+    lh: lh, chh: chh, lines: lines, firstCy: firstCy,
+    panelH: Math.round(Math.min(panelH, cap)),
+  };
+}
+
+/**
+ * 帮助面板：占整条底带（底带此时已按内容加高）。
+ *
+ * ⚠ 为什么放在底带而不是浮在屏幕中间：引擎的点击派发顺序是「脚本 → 棋盘」，
+ * 脚本**无法**拦下落在棋盘矩形内的点击。所以任何盖在棋盘上的浮层，
+ * 点它的关闭按钮都会顺带翻开一格（可能直接踩雷）。把帮助留在底带、
+ * 同时让棋盘重取景到剩下的可用区，就能保证帮助区永远在棋盘之外。
+ */
+function drawHelpPanel(W, L) {
+  var fs = Math.max(12, L.fs);
+  var HP = helpLayout(W, L.H, L.portrait, fs);
+  var botY = L.H - L.botH;
+  var pad = L.portrait ? 10 : 16;
+  var x = pad, y = botY + 8;
+  var w = W - pad * 2, h = L.botH - 16 - L.safeBot;
+  bevelSunken(x, y, w, h);
+  box(x + 3, y + 3, w - 6, h - 6, "#f4f1e8");
+
+  var cy = y + HP.firstCy;
+  var limit = y + h - HP.chh - 12;      // 文字一律停在关闭按钮之上
+  for (var i = 0; i < HP.lines.length; i++) {
+    if (cy > limit) { break; }
+    text(HP.lines[i].s, x + 10, cy, HP.lines[i].b ? fs + 2 : fs, HP.lines[i].c, "left");
+    cy += HP.lh;
+  }
+  var cw = Math.round(Math.max(64, 78 * L.s));
+  var closeR = { x: x + w - cw - 6, y: y + h - HP.chh - 6, w: cw, h: HP.chh };
+  if (button(closeR, cfg("labelClose", "关闭"), Math.max(13, fs), null, "close")) {
+    MS.help = false;
+    MS.fitKey = "";
+    wlog("帮助 关");
   }
 }
 
-/** 改行/列/雷数并重建棋盘（列改时会修正雷数上限）。 */
+/** 单个字符的估算宽度（CJK ≈ 1em，ASCII ≈ 0.55em）—— 只用于断行，不用于绘制。 */
+function estCharW(ch, fs) {
+  return ch.charCodeAt(0) > 0x2000 ? fs : fs * 0.55;
+}
+
+/**
+ * 按像素宽度把一段文案切成多行（中文按字断行）。
+ *
+ * ⚠ 不要逐字调 bwe.draw.measureText：帮助面板每帧都要排版，逐字度量会把
+ * 字体度量次数放大到几百次/帧。这里先用估算宽度切行，再对**成品行**量一次，
+ * 真的超宽才缩紧重切 —— 度量次数与文本长度无关。
+ */
+function wrapText(s, fs, maxW) {
+  var out = [];
+  if (textW(s, fs) <= maxW) { out.push(s); return out; }
+  var budget = maxW;
+  for (var guard = 0; guard < 4; guard++) {
+    out = [];
+    var cur = "", curW = 0;
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charAt(i);
+      var cw = estCharW(ch, fs);
+      if (cur.length && curW + cw > budget) {
+        out.push(cur);
+        cur = ch; curW = cw;
+      } else {
+        cur += ch; curW += cw;
+      }
+    }
+    if (cur.length) { out.push(cur); }
+    // 估算偏小时（英文多）实测会超宽 → 收紧预算重切一次
+    var over = false;
+    for (var j = 0; j < out.length; j++) {
+      if (textW(out[j], fs) > maxW + 1) { over = true; break; }
+    }
+    if (!over) { break; }
+    budget = budget * 0.88;
+  }
+  return out;
+}
+
+/**
+ * 步进键：凸起边框 + 居中的 − / + 字形（按按钮尺寸自适应）。
+ *
+ * <p>旧版是逐行扫描画的小三角箭头，只有 22×9；手机上折成不到 2mm，
+ * 而且上下叠放时两键之间只有 2px 缝，手指分不出按了哪个。
+ * 现在整行高、左右各一，字形按按钮短边定尺寸。
+ */
+function stepperBtn(r, up) {
+  bevelRaise(r.x, r.y, r.w, r.h);
+  if (hit(r) && mouseDown()) { box(r.x + 2, r.y + 2, r.w - 4, r.h - 4, "#a8a8a8"); }
+  var cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  var arm = Math.max(10, Math.min(18, Math.round(Math.min(r.w, r.h) * 0.5)));
+  var th = Math.max(2, Math.round(arm * 0.16));
+  // 横杠（两者都有）
+  box(cx - arm / 2, cy - th / 2, arm, th, BLACK);
+  if (up) {
+    // 竖杠 → 加号
+    box(cx - th / 2, cy - arm / 2, th, arm, BLACK);
+  }
+}
+
 // ---------------------------------------------------------------- 可编辑输入框
 //
 // 玩家反馈：手机上改「40 雷」要点 30 多次 +/-。改成点一下数值框就能直接键入。
@@ -717,9 +1060,8 @@ function drawArrow(r, up) {
 
 /** 把脚本的布局同步给引擎（归一化 0~1，引擎按逻辑视口换算）。 */
 function syncInputField(id, x, y, w, h, value, min, max, viewW) {
-  // ⚠ 不要要求调用方传视口高度：drawConfigBar / drawConfigBarPortrait 的签名里
-  // 根本没有 H（只有 W/botY/botH），直接引用 H 会抛 "H is not defined"。
-  // 这里自己从 bwe.camera.size 取，调用方只需给宽度做归一化基准。
+  // ⚠ 不要要求调用方传视口高度：drawConfigBar 的签名里没有 H，
+  // 直接引用会抛 "H is not defined"。这里自己从 bwe.camera.size 取。
   var ss = screenSize();
   var viewH = ss.h > 0 ? ss.h : 1;
   var baseW = viewW > 0 ? viewW : (ss.w > 0 ? ss.w : 1);
@@ -767,8 +1109,8 @@ function applyInputField(id, text) {
 
 /** 行/列变化后把雷数钳到合法范围。 */
 function clampConfig() {
-  MS.rows = Math.max(5, Math.min(30, MS.rows));
-  MS.cols = Math.max(5, Math.min(30, MS.cols));
+  MS.rows = Math.max(ROW_MIN, Math.min(ROW_MAX, MS.rows));
+  MS.cols = Math.max(COL_MIN, Math.min(COL_MAX, MS.cols));
   var cap = Math.max(1, MS.rows * MS.cols - 9);
   MS.mines = Math.max(1, Math.min(cap, MS.mines));
 }
@@ -786,139 +1128,20 @@ function changeValue(id, delta, max, min) {
   wlog("配置 " + MS.rows + "×" + MS.cols + " · " + MS.mines + " 雷");
 }
 
-/** 胜负横幅：放在棋盘下方，绝不压在格子上。 */
-function drawOverlay(W, H, br, S) {
+/** 胜负横幅：宽度自适应屏宽，位置保证不越屏、不压底带。 */
+function drawOverlay(W, H, br, L, S) {
   if (!S.over) { return; }
-  var bw = 380, bh = 46;
+  var bw = Math.min(380, W - 24);
+  var bh = Math.max(44, Math.round(L.fs * 3.4));
   var x = Math.floor((W - bw) / 2);
-  var y = br.h > 0 ? br.y + br.h + 12 : H - 120;
-  if (y + bh > H) { y = Math.floor(H / 2); }
+  var y = br.h > 0 ? br.y + br.h + 10 : Math.floor((L.bandY0 + L.bandY1) / 2);
+  // 落在底带里就会被底带按钮抢点击，也可能超出屏幕 → 钳回可用区
+  var lowest = L.bandY1 - bh - 6;
+  if (y > lowest || y < L.bandY0) { y = Math.max(L.bandY0 + 6, lowest); }
   bevelRaise(x, y, bw, bh);
   box(x + 2, y + 2, bw - 4, bh - 4, S.won ? "#d8f0d0" : "#f4d8d8");
-  var msg = S.won ? cfg("labelWin", "✓ 通关！") : cfg("labelLose", "✗ 踩雷了");
-  text(msg, x + bw / 2, y + 28, 18, S.won ? "#106010" : "#a00000", "center");
-  text(cfg("labelRestart", "点笑脸 / 新游戏 再来一局"), x + bw / 2, y + 42, 12, "#303030", "center");
-}
-
-// ---------------------------------------------------------------- 竖屏 HUD
-
-/** 竖屏顶带：窄标题 + 两个 LED + 笑脸。 */
-function drawInfoBarPortrait(W, topH, S) {
-  var titleH = 22;
-  box(2, 2, W - 4, titleH, TITLE_BLUE1);
-  box(2, 2, W - 4, 8, "#2a4b9b");
-  text(MS.modeIdx === 1 ? "扫雷 · 复雷加殊" : cfg("bgTitle", "扫雷"), 8, 2 + titleH / 2, 14, cfg("silverLight", "#ffffff"), "left");
-  drawTitleButtonsTiny(W, titleH);
-
-  var cy = titleH + 8;
-  var cw = 84, ch = 34;
-  drawCounter(8, cy, cw, ch, S.mines - S.flags);
-  drawCounter(W - 8 - cw, cy, cw, ch, Math.min(999, S.elapsed));
-
-  var faceW = 30, faceH = 30;
-  var face = { x: Math.floor((W - faceW) / 2), y: cy + 2, w: faceW, h: faceH };
-  if (mouseDown() && hit(face)) { bevelSunken(face.x, face.y, face.w, face.h); }
-  else { bevelRaise(face.x, face.y, face.w, face.h); }
-  drawFace(face, S);
-  if (clicked(face)) { bwe.mine.reset(); }
-}
-
-function drawTitleButtonsTiny(W, titleH) {
-  var bw2 = 14, bh2 = 12;
-  var x = W - 6 - bw2 * 3 - 6;
-  var y = Math.floor((titleH - bh2) / 2) + 2;
-  for (var i = 0; i < 3; i++) {
-    var r = { x: x + i * (bw2 + 3), y: y, w: bw2, h: bh2 };
-    bevelRaise(r.x, r.y, r.w, r.h);
-    if (i === 2) {
-      box(r.x + 4, r.y + 3, 6, 1, BLACK); box(r.x + 4, r.y + 6, 6, 1, BLACK);
-      box(r.x + 4, r.y + 3, 1, 4, BLACK); box(r.x + 9, r.y + 3, 1, 4, BLACK);
-    }
-  }
-}
-
-/** 竖屏底带：三行步进器（每行一个「标签 + 值 + 上下」）。 */
-/**
- * 竖屏底部配置条：三行「标签 + 输入框 + ▲▼ + 右侧两个按钮」。
- *
- * <p><b>为什么必须按「列」分区而不是按「行」叠</b>（玩家反馈「竖屏按钮太挤」的根因）：
- * 旧布局里输入框右边距只留 66px，▲▼ 箭头放在 {@code x = W-66}，而右下的
- * 「模式 / 重局」按钮放在 {@code x = W-60}、{@code y = gy+4} / {@code gy+30} ——
- * <b>两者的 x 范围重叠、y 也重叠</b>：
- * <pre>
- *   行0 输入框 ──────────────▲▼(W-66..W-44)  [模式](W-60..W-8)
- *   行1 输入框 ──────────────▲▼(W-66..W-44)  [重局](W-60..W-8)
- * </pre>
- * 箭头被压在按钮下面、点击还会互相抢（点箭头可能触发重局），而且箭头本身只有
- * 22×9 —— 在 480dpi 屏上每格约 1.6mm，手指根本点不准。
- *
- * <p>现在的分区：<b>左边是输入区（标签+框+箭头），右边独占一列放按钮</b>，
- * 水平方向互不相交；箭头放大到 26×11 且两键留 2px 缝；按钮加高到 24、字号 14。
- */
-function drawConfigBarPortrait(W, botY, botH) {
-  var rowH = 30;
-  var gy = botY + 8;
-  // ---- 水平分区（先算好，后面所有元素都按它排，杜绝重叠）----
-  var btnW = 64;                       // 右侧按钮列宽
-  var btnX = W - 8 - btnW;             // 648 @ W=720
-  var arrowW = 26, arrowH = 11;        // 箭头放大：旧 22x9 太难点
-  var arrowX = btnX - 8 - arrowW;      // 614
-  var fieldX = 40;                     // 标签占 10..34
-  var fieldW = arrowX - 6 - fieldX;    // 568
-  var fieldH = 22;
-
-  var items = [
-    { id: "rows", label: "行", min: 5, max: 30 },
-    { id: "cols", label: "列", min: 5, max: 30 },
-    { id: "mines", label: "雷", min: 1, max: Math.max(1, MS.rows * MS.cols - 9) },
-  ];
-  for (var i = 0; i < items.length; i++) {
-    var it = items[i];
-    var y = gy + i * rowH;
-    text(it.label, 12, y + rowH / 2, 15, "#202020", "left");
-    // 输入框（凹陷）
-    var fy = y + (rowH - fieldH) / 2;
-    bevelSunken(fieldX, fy, fieldW, fieldH);
-    syncInputField(it.id, fieldX, fy, fieldW, fieldH, MS[it.id], it.min, it.max, W);
-    var shown = curFieldText(it.id, String(MS[it.id]));
-    var bad = inputHint(it.id);
-    if (bwe.textinput.editing === it.id) {
-      box(fieldX, fy, fieldW, fieldH, bad ? "#ffe0e0" : "#ffffff");
-    }
-    text(shown, fieldX + fieldW / 2, fy + fieldH / 2, 16, bad ? "#c00000" : BLACK, "center");
-    if (bad) {
-      text(bad, fieldX, fy - 7, 11, "#c00000", "left");
-    }
-    if (bwe.textinput.editing === it.id) {
-      var tw = bwe.draw.measureText(shown, 16).w;
-      box(fieldX + fieldW / 2 + tw / 2 + 3, fy + 3, 2, fieldH - 6, "#1a66ff");
-    }
-    // ▲▼：各自 26x11，中间留 2px 缝（旧版 9+9 相接，界线在手指下看不清）
-    var gap = 2;
-    var upY = y + (rowH - (arrowH * 2 + gap)) / 2;
-    var up = { x: arrowX, y: upY, w: arrowW, h: arrowH };
-    var dn = { x: arrowX, y: upY + arrowH + gap, w: arrowW, h: arrowH };
-    bevelRaise(up.x, up.y, up.w, up.h);
-    bevelRaise(dn.x, dn.y, dn.w, dn.h);
-    drawArrow(up, true);
-    drawArrow(dn, false);
-    if (clicked(up)) { changeValue(it.id, 1, it.max, it.min); }
-    if (clicked(dn)) { changeValue(it.id, -1, it.max, it.min); }
-  }
-
-  // ---- 右侧按钮列（独占，与输入区不重叠）----
-  // 与三行输入框垂直对齐：模式按钮对齐第 1 行中线、重局按钮对齐第 2 行中线，
-  // 而不是把两个按钮整体居中 —— 后者在放大图里看着「飘在行间」。
-  var btnH = 24;
-  var rowCy0 = gy + rowH / 2;                    // 第 0 行中线
-  var mb = { x: btnX, y: rowCy0 - btnH / 2, w: btnW, h: btnH };
-  bevelRaise(mb.x, mb.y, mb.w, mb.h);
-  if (MS.modeIdx === 1) { box(mb.x + 2, mb.y + 2, mb.w - 4, mb.h - 4, "#cfe0ff"); }
-  text(MS.modeIdx === 1 ? "复雷" : "普通", mb.x + mb.w / 2, mb.y + mb.h / 2, 14, BLACK, "center");
-  if (clicked(mb)) { toggleMode(); }
-
-  var nb = { x: btnX, y: rowCy0 + rowH - btnH / 2, w: btnW, h: btnH };
-  bevelRaise(nb.x, nb.y, nb.w, nb.h);
-  text(cfg("labelRestart", "重局"), nb.x + nb.w / 2, nb.y + nb.h / 2, 14, BLACK, "center");
-  if (clicked(nb)) { bwe.mine.reset(); }
+  text(S.won ? cfg("labelWin", "✓ 通关！") : cfg("labelLose", "✗ 踩雷了"),
+    x + bw / 2, y + Math.round(bh * 0.36), L.fs + 3, S.won ? "#106010" : "#a00000", "center");
+  text(cfg("labelRestartHint", "点笑脸 / 新游戏 再来一局"),
+    x + bw / 2, y + Math.round(bh * 0.72), Math.max(11, L.fs - 3), "#303030", "center");
 }

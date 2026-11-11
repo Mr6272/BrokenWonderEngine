@@ -546,6 +546,7 @@ declare namespace bwe {
     /** 已过视口反变换的世界坐标 */
     worldX: number;
     worldY: number;
+    /** 按住状态：按住期间每帧为 true，松开即 false（窗口失焦自动松开）。 */
     left: boolean;
     middle: boolean;
     right: boolean;
@@ -618,6 +619,12 @@ declare namespace bwe {
     cancel(): void;
     /** 回车或点框外确认时回调。 */
     onSubmit(fn: (id: string, text: string) => void): void;
+    /** 校验某字段当前值；合法返回空串，否则返回给玩家看的中文提示。 */
+    validate(id: string): string;
+    /** 刷新所有字段的校验提示（返回是否有字段非法）。 */
+    refreshHints(): boolean;
+    /** 某字段的提示文本（空 = 合法）。 */
+    hint(id: string): string;
     /** 是否有框正在编辑。 */
     readonly editing: string | false;
   }
@@ -649,6 +656,15 @@ declare namespace bwe {
     released(key: KeyName): boolean;
     /** 方向轴：WASD + 方向键，已归一化，长度 0~1 */
     axis(): Vec2;
+    /**
+     * 声明一块「界面区」（屏幕逻辑像素矩形），落在其中的点击被界面吃掉，
+     * 不再传给可视化模块（扫雷棋盘等）。用于大棋盘伸到 HUD 底下的场景 ——
+     * 否则点「新游戏」会顺带翻开底下的格子。同 id 重复调用即覆盖；w/h ≤0 等于撤销。
+     * @returns 是否登记成功
+     */
+    block(id: string, x: number, y: number, w: number, h: number): boolean;
+    /** 撤销某块界面区。 */
+    unblock(id: string): boolean;
     /** 鼠标状态（只读快照） */
     readonly mouse: MouseState;
     /** 显示 / 隐藏鼠标光标 */

@@ -385,6 +385,14 @@ export interface Project {
   scripts: Record<string, ScriptEntry>;
   variables: Record<string, string>;
   masterVolume: number;
+  /**
+   * 打包方向："portrait" | "landscape" | 省略（按场景宽高比推断）。
+   *
+   * <p>必须是显式字段，不能靠地图形状猜：扫雷上线成 64×64 后地图是**正方形**，
+   * `decideOrientation` 的宽高比推断（sw >= sh ? landscape : portrait）会把竖屏工程
+   * 判成横屏，打出来的 APK 直接躺倒。方向是产品决定，跟地图尺寸无关。
+   */
+  orientation?: "portrait" | "landscape";
 }
 
 // ---------------- id 生成 ----------------
@@ -818,6 +826,10 @@ export function normalizeProject(raw: unknown): Project {
     variables: p.variables ?? {},
     masterVolume: typeof p.masterVolume === "number" ? p.masterVolume : 0.8
   };
+  // 方向：只有工程显式声明时才写，没声明保持「不写这个字段」（让打包端走宽高比推断）
+  if (p.orientation === "portrait" || p.orientation === "landscape") {
+    out.orientation = p.orientation;
+  }
 
   const scenes = Array.isArray(p.scenes) && p.scenes.length ? p.scenes : [createScene("场景 1")];
   for (const s of scenes) {

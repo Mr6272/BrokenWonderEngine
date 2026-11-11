@@ -28,6 +28,12 @@ final class ScriptAudio {
     private final Map<Long, Clip> clips = new LinkedHashMap<Long, Clip>();
     private final Map<Long, String> clipNames = new LinkedHashMap<Long, String>();
     private final Set<String> warned = new HashSet<String>();
+    /** 一次性（非循环）clip，按播放先后排序：播完回收、超上限掐最老的。 */
+    private final java.util.LinkedHashSet<Long> oneShots = new java.util.LinkedHashSet<Long>();
+    private final Map<String, Pcm> pcmCache = new java.util.HashMap<String, Pcm>();
+    private static final int MAX_ONE_SHOTS = 24;
+    /** 只缓存短音效（≤ 2MB ≈ 22kHz 单声道 16 位 45 秒），BGM 这种大文件照常流式读。 */
+    private static final int PCM_CACHE_MAX_BYTES = 2 * 1024 * 1024;
     private long nextId = 1;
     private float volume = 1f;
     private long musicId = -1;
@@ -58,7 +64,11 @@ final class ScriptAudio {
             return -1;
         }
         try {
-            AudioInputStream in = AudioSystem.getAudioInputStream(f);
+            reapFinished();
+            if (!loop) {
+                capOneShots();
+            }
+            AudioInputStream in = openPcm(f);
             if (Math.abs(pitch - 1f) > 0.001f) {
                 in = detune(in, pitch);
             }
@@ -71,6 +81,7 @@ final class ScriptAudio {
             if (loop) {
                 clip.loop(Clip.LOOP_CONTINUOUSLY);
             } else {
+                oneShots.add(Long.valueOf(id));
                 clip.start();
             }
             return id;
@@ -82,6 +93,84 @@ final class ScriptAudio {
 
     long play(String name, float vol, boolean loop) {
         return play(name, vol, loop, 1f);
+    }
+
+    /**
+     * 回收播完的一次性 clip。
+     *
+     * <p>原来播完的 clip 从不 close：每发子弹一个 Clip，射击游戏几秒就把混音器的
+     * 线路占满，之后所有 play() 都在 getClip/open 处失败 —— 枪声全哑。循环音（BGM）不回收。
+     */
+    private void reapFinished() {
+        if (oneShots.isEmpty()) {
+            return;
+        }
+        for (Long id : new ArrayList<Long>(oneShots)) {
+            Clip c = clips.get(id);
+            if (c == null) {
+                oneShots.remove(id);
+                continue;
+            }
+            boolean done;
+            try {
+                done = !c.isRunning() && c.getFramePosition() >= c.getFrameLength();
+            } catch (Throwable t) {
+                done = true;
+            }
+            if (done) {
+                stop(id.longValue());
+            }
+        }
+    }
+
+    /** 同时发声的一次性音效上限：超出时掐掉最老的一个（连射时听感上就是「新枪声顶掉旧尾音」）。 */
+    private void capOneShots() {
+        while (oneShots.size() >= MAX_ONE_SHOTS) {
+            Long oldest = oneShots.iterator().next();
+            stop(oldest.longValue());
+        }
+    }
+
+    /**
+     * 解码后的 PCM 按文件缓存：连射时同一枪声每秒播十几次，每次重新读盘 + 解析 WAV 头没必要。
+     * 缓存的是字节和格式，每次 play 包一个新的流（Clip 各自独立）。
+     */
+    private AudioInputStream openPcm(File f) throws Exception {
+        String key = f.getAbsolutePath();
+        Pcm p = pcmCache.get(key);
+        if (p == null) {
+            AudioInputStream in = AudioSystem.getAudioInputStream(f);
+            try {
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                }
+                p = new Pcm(in.getFormat(), bos.toByteArray());
+            } finally {
+                try {
+                    in.close();
+                } catch (Throwable ignored) {
+                }
+            }
+            if (p.data.length <= PCM_CACHE_MAX_BYTES) {
+                pcmCache.put(key, p);
+            }
+        }
+        int frameSize = Math.max(1, p.format.getFrameSize());
+        return new AudioInputStream(new java.io.ByteArrayInputStream(p.data), p.format,
+                Math.max(1, p.data.length / frameSize));
+    }
+
+    private static final class Pcm {
+        final javax.sound.sampled.AudioFormat format;
+        final byte[] data;
+
+        Pcm(javax.sound.sampled.AudioFormat format, byte[] data) {
+            this.format = format;
+            this.data = data;
+        }
     }
 
     /**
@@ -133,12 +222,15 @@ final class ScriptAudio {
             stop(musicId);
         }
         musicId = play(name, vol, loop);
+        // 不循环的 BGM 也不能被「一次性音效上限」掐掉。
+        oneShots.remove(Long.valueOf(musicId));
         return musicId;
     }
 
     void stop(long id) {
         Clip clip = clips.remove(Long.valueOf(id));
         clipNames.remove(Long.valueOf(id));
+        oneShots.remove(Long.valueOf(id));
         if (id == musicId) {
             musicId = -1;
         }

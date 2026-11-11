@@ -75,6 +75,39 @@ public final class TopDownRuntime implements GLEventListener {
     int mouseX = 0;
     int mouseY = 0;
     /**
+     * 脚本声明的「界面屏蔽区」：id → 屏幕逻辑像素矩形 {x, y, w, h}。
+     *
+     * <p><b>为什么需要</b>：点击派发顺序是「摇杆 → 输入框 → 脚本 → 可视化模块（扫雷棋盘）」，
+     * 脚本拿到点击后<b>无法阻止</b>它继续传给棋盘。小棋盘时代无所谓 —— 棋盘完全落在上下两条
+     * HUD 带之间，两者像素范围不相交。但 64×64（4096 格）在任何手机上都不可能「整盘可见又可读」
+     * （720 逻辑像素宽 ÷ 64 格 = 每格 11px），要可读就必须放大并允许平移，于是棋盘必然伸到
+     * HUD 底下，结果就是<b>点「新游戏」会顺带把底下的格子翻开（很可能直接踩雷）</b>。
+     *
+     * <p>用<b>持久 keyed 矩形</b>而不是「每帧清空再登记」：清空与登记之间存在窗口，UI 线程
+     * 正好在那一刻派发点击就会漏防（表现为偶发误翻，最难查的那类 bug）。
+     * 脚本每帧用同一个 id 覆盖同一块区域，值恒定，不存在空窗。
+     *
+     * <p>线程：AWT EDT / Android UI 线程读，GL 线程（脚本）写；ConcurrentHashMap，
+     * 且数组整体替换（不原地改元素）。
+     */
+    final java.util.concurrent.ConcurrentHashMap<String, float[]> hudBlocks =
+            new java.util.concurrent.ConcurrentHashMap<String, float[]>();
+
+    /** 点落在任一屏蔽区内 → 这次点击归界面，不再传给棋盘。 */
+    boolean inHudBlock(float sx, float sy) {
+        if (hudBlocks.isEmpty()) {
+            return false;
+        }
+        for (float[] r : hudBlocks.values()) {
+            if (r != null && r.length >= 4
+                    && sx >= r[0] && sx < r[0] + r[2]
+                    && sy >= r[1] && sy < r[1] + r[3]) {
+                return true;
+            }
+        }
+        return false;
+    }
+    /**
      * 滚轮累积量（向上为正）。AWT 事件在 EDT 线程写、脚本在 GL 线程读，
      * 所以用 volatile；每帧读完由 {@link #takeWheel()} 清空（契约是「本帧增量」）。
      */
@@ -705,7 +738,18 @@ public final class TopDownRuntime implements GLEventListener {
         canvas.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
+                if (scripts != null) {
+                    scripts.mouseButton(mouseButtonIndex(e), true);
+                }
                 handleClick(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                // 有了抬起事件，bwe.input.down("Mouse0") 才是真正的「按住」（连射武器要靠它）。
+                if (scripts != null) {
+                    scripts.mouseButton(mouseButtonIndex(e), false);
+                }
             }
         });
         canvas.addMouseMotionListener(new MouseMotionAdapter() {
@@ -866,6 +910,17 @@ public final class TopDownRuntime implements GLEventListener {
         clickAt(e.getX(), e.getY(), e.getButton() == MouseEvent.BUTTON3);
     }
 
+    /** AWT 按钮 → 脚本鼠标下标（0 左 / 1 中 / 2 右）。 */
+    private static int mouseButtonIndex(MouseEvent e) {
+        if (e.getButton() == MouseEvent.BUTTON3) {
+            return 2;
+        }
+        if (e.getButton() == MouseEvent.BUTTON2) {
+            return 1;
+        }
+        return 0;
+    }
+
     /**
      * 平台无关的点击入口：<b>屏幕坐标 + 是否右键</b>。
      *
@@ -916,6 +971,11 @@ public final class TopDownRuntime implements GLEventListener {
         // 脚本先拿点击（目前统一派发，不阻断可视化模块的行为）。
         if (scripts != null) {
             scripts.pointerDown(wx, wy, right, sx, sy);
+        }
+        // 脚本声明的界面区域吃掉这次点击：按钮优先，绝不让它顺带翻开底下的格子。
+        // 位置必须在「脚本之后、棋盘之前」—— 脚本自己要用同一个点击命中按钮。
+        if (inHudBlock(sx, sy)) {
+            return;
         }
         if (minesweeper != null && minesweeper.click(wx, wy, right)) {
             updateTitle();
@@ -1412,6 +1472,9 @@ public final class TopDownRuntime implements GLEventListener {
         if (!focused) {
             for (int i = 0; i < keys.length; i++) {
                 keys[i] = false;
+            }
+            if (scripts != null) {
+                scripts.releaseMouseButtons();
             }
             if (ScriptActions.LAST != null) {
                 ScriptActions.LAST.onFocusLost();
