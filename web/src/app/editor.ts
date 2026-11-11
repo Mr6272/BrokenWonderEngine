@@ -2060,7 +2060,13 @@ export class Editor {
 
   private loadExampleProject(build: () => Project, fileName: string, tip: string): void {
     const doNew = () => {
-      store.setProject(build(), fileName);
+      // ⚠ 必须走 normalizeProject，不能直接把 build() 递给 store.setProject。
+      // store.setProject 是纯 setter，不做字段兜底；缺字段的示例工程（web/examples 下
+      // 10 个里有 6 个缺 prefabs）会让面板读 undefined.length 直接抛 TypeError。
+      // 这条路径以前绕过了 this.setProject() 里的归一化，是个真实的崩溃入口。
+      const normalized = normalizeProject(build());
+      this.ensureTemplates(normalized);
+      store.setProject(normalized, fileName);
       this.hint(tip);
       this.refreshPanels();
       this.canvas.zoomToFit();

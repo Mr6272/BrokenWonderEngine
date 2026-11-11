@@ -368,6 +368,10 @@ npm run verify:roundtrip
 npm run verify:uiscene
 npm run verify:openworld
 
+# 内置示例的字段完整性（接口层）+ 载入后各面板不崩（真 Electron 端到端）
+npm run verify:example-fields
+npm run verify:example-panels
+
 # 一次跑完
 npm run verify:all
 ```
@@ -381,12 +385,23 @@ npm run verify:all
 | `npm run verify:roundtrip` | 19/19 通过 |
 | `npm run verify:uiscene` | 47/47 通过 |
 | `npm run verify:openworld` | 51/51 通过 |
+| `npm run verify:example-fields` | 34/34 通过 |
+| `npm run verify:example-panels` | 32/32 通过 |
 | `npm run check:scripts` | 全部脚本无类型错误 |
 | `npm run verify:apidocs` | 0 条「编造/未实现」；162 处「缺文档」 |
 
+最后两条是为一类具体 bug 加的：`web/examples/` 里有 6 个工程缺 `prefabs` 字段（历史版本早于这个字段），
+而「载入内置示例」走的是 `cloneProject()`，一度绕过了 `normalizeProject()` 的字段兜底，
+结果点开预制体面板只剩十几个字并抛 `TypeError: ... undefined (reading 'length')`。
+`verify:example-fields` 在接口层断言字段齐全，`verify:example-panels` 在真实 Electron 里
+经命令面板逐个载入 7 个示例、点开预制体面板、并核对**工程名真的变了**（防止 7 次循环测的其实是同一个工程）。
+
 `verify-apidocs` 检查的是**文档里出现的成员在 Java 里真的有实现吗**。
-现在的结论是「0 条编造」，说明文档没有吹牛；但那 162 处「代码有、文档没写」是真实欠账，
-`--strict` 会在 CI 里把它变成失败（默认不加 `--strict` 时它不返回非零，别被退出码骗了）。
+现在的结论是「0 条编造」，说明文档没有吹牛；但那 162 处「代码有、文档没写」是真实欠账。
+
+这个脚本有两种跑法，别混：`verify:apidocs` 带 `--strict`，会把「缺文档」也算失败（退出码 1），
+适合 CI；`verify:apidocs:soft` 只对「编造/未实现」报错，`verify:all` 用的是后者。
+（最早 `verify:all` 的第一步就是 `--strict` 版本，于是它在那 162 处欠账清掉之前**从来没跑通过** —— 后面几项压根没执行。）
 
 两处已经知道和实际实现不符的地方，留在明面上：
 
@@ -418,8 +433,6 @@ AI 有 13 个工具，其中 4 个是写类，全部围绕**结构化工程模�
 
 ## 已知边界
 
-这是自己用的引擎，边界写清楚比藏起来有用：
-
 - 渲染是 **OpenGL 固定管线**（`glBegin/glEnd` + 显示列表）。已做纹理按路径共享 + 同纹理合批
   （实测 `glBegin` 从 162→7 次/帧有贴图，3575→20 次/帧纯色瓦片，**输出像素逐位一致**），
   但还没迁到 VBO / 图集批处理。
@@ -427,12 +440,6 @@ AI 有 13 个工具，其中 4 个是写类，全部围绕**结构化工程模�
 - 协程是回调式接口（`Coroutine.update()`），不是语言级 yield。
 - 全局状态较多（`GameSekai.GameObjects` 等 static 字段），单窗口 Demo 够用，多场景/多窗口需要收敛为实例。
 - 文档欠账 162 处「代码有、文档没写」（见上）。
-- **内置示例工程缺 `prefabs` 字段会让预制体面板崩。** `web/examples/` 下 10 个工程里有 6 个没有这个字段
-  （`俯视角JS示例`、`孤胆枪手`、`吸血鬼幸存者`、`涌现沙盘`、`扫雷示例`、`换装示例`）。
-  `model.ts` 里「旧工程补 `prefabs: []`」的兜底只覆盖「从磁盘读文件」那条路径，而菜单里「载入内置示例」
-  走的是 `buildExample()` → `cloneProject()`，绕过了它，于是 `renderPrefabPanel` 里
-  `store.project.prefabs.length` 直接抛 `Uncaught TypeError: Cannot read properties of undefined (reading 'length')`，
-  侧栏只剩几个字。目前只能靠「不载示例、先建一个空工程」绕开。这是已知缺陷，还没修。
 
 ## 文档
 

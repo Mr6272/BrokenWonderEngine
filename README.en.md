@@ -369,6 +369,10 @@ npm run verify:roundtrip
 npm run verify:uiscene
 npm run verify:openworld
 
+# built-in samples: field completeness (interface level) + panels do not crash (real Electron end to end)
+npm run verify:example-fields
+npm run verify:example-panels
+
 # everything at once
 npm run verify:all
 ```
@@ -379,15 +383,29 @@ Measured results (2026-11-11, local JDK 25 / Node 24.16):
 |---|---|
 | `tools/bwe.ps1 test` | 7/7 suites pass, all 396 assertions green |
 | `npm run typecheck` | 0 errors |
-| `node web/tools/verify-editor-roundtrip.mjs` | 19/19 pass |
-| `node web/tools/verify-ui-scene.mjs` | 47/47 pass |
-| `node web/tools/verify-openworld.mjs` | 51/51 pass |
-| `node web/tools/check-scripts.mjs` | no type errors in any script |
-| `node web/tools/verify-apidocs.mjs` | 0 "fabricated / unimplemented"; 162 "missing docs" |
+| `npm run verify:roundtrip` | 19/19 pass |
+| `npm run verify:uiscene` | 47/47 pass |
+| `npm run verify:openworld` | 51/51 pass |
+| `npm run verify:example-fields` | 34/34 pass |
+| `npm run verify:example-panels` | 32/32 pass |
+| `npm run check:scripts` | no type errors in any script |
+| `npm run verify:apidocs` | 0 "fabricated / unimplemented"; 162 "missing docs" |
+
+The last two exist for one specific bug: 6 of the projects under `web/examples/` predate the `prefabs` field,
+and "load built-in sample" went through `cloneProject()`, which bypassed the field fallback in `normalizeProject()`.
+The prefab panel then rendered a few stray characters and threw `TypeError: ... undefined (reading 'length')`.
+`verify:example-fields` asserts the fields at the interface level; `verify:example-panels` loads all 7 samples
+through the command palette in a real Electron window, opens the prefab panel, and checks that **the project name
+actually changed** (so that 7 loop iterations are not silently testing the same project).
 
 `verify-apidocs` checks whether the members named in the docs actually exist in Java.
-The current verdict is 0 fabricated, which says the docs are not overclaiming. Those 162 "code exists, docs do not say so" entries are real debt,
-and `--strict` turns them into a CI failure (without `--strict` it does not return non-zero, so do not let the exit code fool you).
+The current verdict is 0 fabricated, which says the docs are not overclaiming. Those 162 "code exists, docs do not say so" entries are real debt.
+
+The script has two modes, do not mix them up: `verify:apidocs` passes `--strict`, which also fails on
+"missing docs" (exit code 1) and is what CI should use; `verify:apidocs:soft` only fails on
+"fabricated / unimplemented", and that is what `verify:all` uses.
+(The original `verify:all` started with the `--strict` variant, so it had **never passed** while those
+162 entries were outstanding, and none of the later steps ever ran.)
 
 Two places where we already know the docs and the actual implementation disagree, kept in plain sight:
 
@@ -428,12 +446,6 @@ This is an engine built for personal use. Writing the limits down is more useful
 - Coroutines are a callback interface (`Coroutine.update()`), not a language-level yield.
 - There is a fair amount of global state (`GameSekai.GameObjects` and other static fields). Enough for single-window demos; multi-scene and multi-window work needs it collapsed into instances.
 - A documentation debt of 162 entries where the code exists and the docs do not mention it (see above).
-- **A built-in sample project missing the `prefabs` field crashes the prefab panel.** 6 of the 10 projects under `web/examples/` do not have this field
-  (`俯视角JS示例`, `孤胆枪手`, `吸血鬼幸存者`, `涌现沙盘`, `扫雷示例`, `换装示例`).
-  The "old projects get `prefabs: []`" fallback in `model.ts` only covers the "read from disk" path, while the menu's "load built-in sample"
-  goes through `buildExample()` → `cloneProject()` and bypasses it, so `store.project.prefabs.length` in `renderPrefabPanel`
-  throws `Uncaught TypeError: Cannot read properties of undefined (reading 'length')` and the sidebar is left with a few stray characters.
-  The only way around it right now is to not load a sample and create an empty project first. This is a known defect and is not fixed yet.
 
 ## Documentation
 

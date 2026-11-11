@@ -11,7 +11,7 @@
  */
 
 import type { AssetEntry, Project } from "../core/model.ts";
-import { createProject, createScene, createObject, uid } from "../core/model.ts";
+import { createProject, createScene, createObject, uid, normalizeProject } from "../core/model.ts";
 import { makeInstance, moduleDef } from "./modules.ts";
 // 两个脚本向示例体量大（100KB+），直接引用 web/examples 下的 .bwproj 本体（esbuild 用 json loader 打进包），
 // 保证「菜单里点开的就是磁盘上那份文件」，不会出现代码生成版与 .bwproj 两套数据。
@@ -441,9 +441,19 @@ export function createDressupProject(): Project {
 
 export type ExampleId = "minesweeper" | "dressup" | "topdown-js" | "emergence" | "vampire" | "lighting" | "alien-shooter";
 
-/** 深拷贝：示例工程每次载入都要是一份新对象，避免用户在编辑器里的改动污染模块缓存。 */
+/**
+ * 深拷贝 + 归一化：示例工程每次载入都要是一份新对象，避免用户在编辑器里的改动污染模块缓存。
+ *
+ * ⚠ 必须走 normalizeProject，不能只做 JSON 深拷贝。
+ * `web/examples/*.bwproj` 里有一半工程是历史版本，缺 `prefabs`（10 个里 6 个没有）、
+ * 缺 `packs` 等后加的字段。JSON 深拷贝会把这些字段原样留成 undefined，
+ * 面板一读 `store.project.prefabs.length` 就抛
+ * `TypeError: Cannot read properties of undefined (reading 'length')`，
+ * 预制体侧栏整块渲染不出来。normalizeProject 是「加载工程」的字段兜底入口，
+ * 深拷贝之后必须再过一遍，否则等于绕过了它。
+ */
 function cloneProject(p: unknown): Project {
-  return JSON.parse(JSON.stringify(p)) as Project;
+  return normalizeProject(JSON.parse(JSON.stringify(p)));
 }
 
 export function buildExample(id: ExampleId): { project: Project; fileName: string } {
