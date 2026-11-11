@@ -10,6 +10,8 @@
 > 一个自制的 2D 俯视角游戏引擎：Java + JOGL 负责跑游戏，TypeScript 负责做编辑器。
 > 你在浏览器/桌面编辑器里摆场景、拼模块、写 JS，点一下打出 Windows EXE / Android APK。
 
+>特色：超小包体（扫雷demo仅5mb）+双端打包+Agent嵌入+2D专长
+
 ![BWE Studio 编辑器总览](docs/readme/raw/editor/hero.png)
 
 ---
