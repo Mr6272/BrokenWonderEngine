@@ -1,3 +1,4 @@
+# QQ交流群：1135631287
 # BrokenWonderEngine · BWE
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
