@@ -80,3 +80,7 @@ web/.build/
 # AI 修复轮的临时验证目录（harness 的基线快照与证据日志，不入库）
 /.tmp_ai/
 /.tmp_ai_lead_smoke.mjs
+
+# README 截图生成的中间产物（boot.json / 渲染日志 / 像素统计 / 一次性脚本）
+# 最终 PNG 与取证报告在 docs/readme/raw/，那部分要入库
+/.tmp_readme_shot/

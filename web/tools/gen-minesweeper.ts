@@ -1,10 +1,15 @@
 /**
  * 扫雷 Minesweeper · BWE Studio 工程生成器。
  *
- * 素材（源自 D:/小红书扫雷单子，由 gen-minesweeper-assets.mjs 切好放本地）：
- *   - ms-tile / ms-flag / ms-mine：像素素材（分割自「旗帜/点开前格子/雷」整图）
- *   - ms-bg.jpg：背景图
- *   - ms-flag.wav（插旗）、ms-hit.wav（踩雷）、ms-bgm.wav（BGM 微风与少年）
+ * 素材（全部由 `tools/gen-minesweeper-assets-code.mjs` 用代码合成，无任何外部来源）：
+ *   - ms-tile / ms-flag / ms-mine：32×32 像素素材，画在内存里再编码成 PNG
+ *   - ms-bg.jpg：竖向渐变背景（内容是 PNG，扩展名沿用工程里的引用）
+ *   - ms-flag.wav（插旗，双音上扬）、ms-hit.wav（踩雷，低频冲击）、
+ *     ms-bgm.wav（Am-F-C-G 循环，正弦合成）
+ *
+ * 历史说明：这批素材原先是从仓库外一份委托单子里切出来的（含第三方 BGM），
+ * 版权不在本仓库，不能随 MIT 发布。现已全部换成程序生成的版本，
+ * 切图脚本 `gen-minesweeper-assets.mjs` 一并删除。
  *
  * 文字**不**嵌进像素图：HUD / 计时 / 剩余雷数 / 按钮提示走 `bwe.draw.text`
  * 独立图层；行列在游戏内可调 —— 脚本通过 `bwe.mine.set({rows, cols, mines})`

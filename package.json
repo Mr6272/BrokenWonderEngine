@@ -3,6 +3,8 @@
   "version": "0.3.0",
   "private": true,
   "description": "BWE Studio —— 完全俯视角 RPG 可视化编辑器（Web 版 + Windows 桌面版）",
+  "license": "MIT",
+  "author": "Mr6272",
   "type": "module",
   "scripts": {
     "build": "esbuild web/src/main.ts --bundle --outfile=web/dist/studio.js --format=esm --loader:.bwproj=json --log-level=warning",

@@ -1,2 +1,18 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Windows 批处理必须是 CRLF：cmd.exe 对纯 LF 的 .cmd 解析会出问题
+# （特别是 goto/label 与行尾续行符）。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Shell 脚本必须是 LF：CRLF 会让 bash 报
+# "/usr/bin/env: 'bash\r': No such file or directory"。
+*.sh text eol=lf
+
+# 图片与音频按二进制处理，不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.wav binary
+*.jar binary
