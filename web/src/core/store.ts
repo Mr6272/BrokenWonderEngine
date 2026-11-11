@@ -99,6 +99,34 @@ export class Store {
     this.emitProject();
   }
 
+  /**
+   * AI 整批改造工程后的**原地替换**。
+   *
+   * 为什么不用 setProject：那会把 fileName / projectPath 清空、dirty 归零 ——
+   * 用户刚被 AI 改过一版工程，标题栏却显示"未保存"、文件关联还断了。
+   * 也不能整个对象不动：applyProjectOps 是事务性的，它返回的是**深拷贝后的新工程**，
+   * 旧对象已经被扔掉。所以必须换引用，但只换引用。
+   *
+   * ⚠ 只有换引用是不够的：`this._scene` 与 `this.selection` 还指着**旧工程里的对象**。
+   * 不重绑的后果很具体 —— 「AI 说改好了，画布却是空的」，而且不会报错：
+   * 画布拿到的是一个已经脱离工程的孤儿 scene，画出来就是空白。
+   * 所以下面按 id 重新找回场景与选中项，找不到就干净地放下。
+   */
+  replaceProjectData(next: Project): void {
+    const keepSceneId = this._scene?.id ?? "";
+    const keepSelIds = this.selection.map((o) => o.id);
+    this.project = next;
+    this._scene =
+      next.scenes.find((sc) => sc.id === keepSceneId) ?? next.scenes[0] ?? null;
+    this.selection = keepSelIds
+      .map((id) => this._scene?.objects.find((o) => o.id === id))
+      .filter((o): o is SceneObject => Boolean(o));
+    this.dirty = true;
+    this.emitScene();
+    this.emitSelection();
+    this.emitProject();
+  }
+
   /** 当前工程的机器可读身份（知识库分片 + AI 请求 context 用）。 */
   projectIdentity(): { name: string; file?: string } {
     const name = String(this.project?.name ?? "").trim() || "未命名工程";

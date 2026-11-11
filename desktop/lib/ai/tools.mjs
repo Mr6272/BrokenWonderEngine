@@ -225,6 +225,87 @@ export function toolDefinitions() {
           }
         }
       }
+    },
+    {
+      type: "function",
+      function: {
+        name: "ProjectDigest",
+        description:
+          "读取当前工程的**可操作**结构摘要：每个场景（含 UI 场景）的尺寸与对象清单"
+          + "（对象名、kind、坐标、挂的模块），以及已有的预制体、脚本名、变量名、可用素材 id。"
+          + "改工程之前必须先读它：里面的 id 和名字就是 ApplyProjectOps 唯一认的坐标。"
+          + "SceneDigest 只给计数，要动关卡请用这个。",
+        parameters: {
+          type: "object",
+          properties: {
+            scene: { type: "string", description: "只看某个场景（场景名或 id），省略则全部" },
+            maxObjects: { type: "integer", description: "每个场景最多列几个对象，默认 40" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "ApplyProjectOps",
+        description:
+          "用一批**结构化操作**整块改造工程：建场景、加/改/删对象、挂模块、定义预制体、写 UI。"
+          + "这是唯一能真的改动关卡与 UI 的工具 —— 只写脚本不建世界是不够的。"
+          + "整批事务：任何一条非法（未知 kind、未知模块 defId、参数越界、引用不存在）都会"
+          + "导致**整批被拒且原工程不变**，并返回逐条拒绝原因。所以宁可分小批，不要赌。"
+          + "可用 kind：ACTOR / PROP / TILE / ZONE / SPAWN / PORTAL / LIGHT。"
+          + "UI 不是独立树：它就是一个 ui:true 的场景，里面放普通对象。",
+        parameters: {
+          type: "object",
+          properties: {
+            ops: {
+              type: "array",
+              description: "操作数组，按顺序在同一份工程副本上生效。",
+              items: {
+                type: "object",
+                properties: {
+                  op: {
+                    type: "string",
+                    enum: [
+                      "createScene",
+                      "addObjects",
+                      "updateObjects",
+                      "deleteObjects",
+                      "attachModules",
+                      "definePrefabs"
+                    ],
+                    description: "操作类型"
+                  },
+                  scene: {
+                    type: "object",
+                    description: "createScene 用：{ name, ui?, widthTiles?, heightTiles?, designW?, designH? }"
+                  },
+                  sceneId: { type: "string", description: "目标场景 id（与 sceneName 二选一）" },
+                  sceneName: { type: "string", description: "目标场景名（与 sceneId 二选一；同批次新建的场景可直接用名字）" },
+                  objects: {
+                    type: "array",
+                    description:
+                      "addObjects/updateObjects/deleteObjects 用。新增对象："
+                      + "{ name, kind, x, y, z?, halfW?, halfH?, rotation?, scaleX?, scaleY?, visible?, assetId?, modules? }；"
+                      + "修改对象：{ id 或 name，其余字段同上，只覆盖给出的字段 }；"
+                      + "删除对象：{ id 或 name }。"
+                  },
+                  prefabs: {
+                    type: "array",
+                    description: "definePrefabs 用：[{ name, kind, halfW?, halfH?, assetId?, modules? }]"
+                  }
+                },
+                required: ["op"]
+              }
+            },
+            dryRun: {
+              type: "boolean",
+              description: "true 时只校验不落盘，用来试探一批操作是否合法。默认 false。"
+            }
+          },
+          required: ["ops"]
+        }
+      }
     }
   ];
 }
@@ -241,7 +322,9 @@ export const TOOL_NAMES = [
   "PatchScript",
   "DeleteScript",
   "SearchKnowledge",
-  "ReadKnowledge"
+  "ReadKnowledge",
+  "ProjectDigest",
+  "ApplyProjectOps"
 ];
 
 /**
@@ -263,6 +346,16 @@ export const KNOWLEDGE_TOOLS = ["SearchKnowledge", "ReadKnowledge"];
  * 历史缺陷的形态正是「工具描述承诺了某个能力，而某条配置下根本没有接线」。
  */
 export const SCRIPT_TOOLS = ["ListScripts", "ReadScript", "WriteScript", "PatchScript", "DeleteScript"];
+
+/**
+ * 工程级改动工具：改的是关卡/UI/预制体本身，不是脚本正文。
+ *
+ * 同样必须在渲染侧执行，理由和 SCRIPT_TOOLS 一模一样：工程的真身在
+ * `store.project`。但它比脚本写更值得小心 —— 脚本写坏顶多不跑，
+ * 工程写坏是把用户的关卡改花。所以它不接收自由文本，只接收**结构化 ops**，
+ * 并且整批事务：一条非法，全批回滚，原工程逐字节不变。
+ */
+export const PROJECT_TOOLS = ["ProjectDigest", "ApplyProjectOps"];
 
 const MAX_READ_LINES = 400;
 const DEFAULT_READ_LINES = 400;
@@ -495,7 +588,12 @@ export function createToolRunner(opts) {
     }
     const out = await opts.scriptRunner(name, args);
     const text = String(out?.text ?? "");
-    if (out?.error) return { error: String(out.error), text: `工具 ${name} 失败：${out.error}`, meta: { tool: name } };
+    if (out?.error) {
+      // 错误时**不能**把 out.text 丢掉。工程改造被拒时，那段正文里装的是逐条拒绝原因
+      // （第几条、哪条 op、为什么、该怎么改）。只回一个错误码，模型就只能瞎猜着重试。
+      const detail = text && text !== String(out.error) ? `\n${text}` : "";
+      return { error: String(out.error), text: `工具 ${name} 失败：${out.error}${detail}`, meta: { tool: name } };
+    }
     return { text, meta: { tool: name, ...(out?.meta ?? {}) } };
   }
 
@@ -539,6 +637,7 @@ export function createToolRunner(opts) {
         if (name === "SceneDigest") return await sceneDigestTool(args);
         if (name === "SearchApi") return await searchApiTool(args);
         if (SCRIPT_TOOLS.includes(name)) return await scriptTool(name, args);
+        if (PROJECT_TOOLS.includes(name)) return await scriptTool(name, args);
         if (KNOWLEDGE_TOOLS.includes(name)) return await knowledgeTool(name, args);
         throw new Error(`未知工具「${name}」（可用：${TOOL_NAMES.join(" / ")}）`);
       } catch (e) {

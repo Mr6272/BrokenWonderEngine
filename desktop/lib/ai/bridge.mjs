@@ -1602,7 +1602,9 @@ export function createAiBridge(opts) {
         "PatchScript",
         "DeleteScript",
         "SearchKnowledge",
-        "ReadKnowledge"
+        "ReadKnowledge",
+        "ProjectDigest",
+        "ApplyProjectOps"
       ]) {
         if (!defs.includes(must)) warnings.push(`工具定义缺 ${must}（模型无法调用它）`);
       }
@@ -1613,6 +1615,17 @@ export function createAiBridge(opts) {
        * 模型照着调、拿到「未接线」、再重试、轮次耗尽，最后一句正文都没有 ——
        * 用户看到的是「AI 说改好了但什么都没改」。启动期就把这条断裂暴露出来。
        */
+      /**
+       * 工程类工具与脚本类共用同一个 scriptRunner（工程的真身也只在渲染侧）。
+       * 风险却比脚本高一档：脚本写坏顶多不跑，工程写坏是把用户的关卡改花。
+       * 单独点名，免得「AI 说搭好了关卡」和「其实一条对象都没进去」混为一谈。
+       */
+      if (typeof opts.scriptRunner !== "function") {
+        warnings.push(
+          "工程类工具（ProjectDigest/ApplyProjectOps）同样没有渲染侧执行器 → "
+          + "模型读了工程摘要也改不动关卡/UI/预制体。"
+        );
+      }
       if (typeof opts.scriptRunner !== "function") {
         warnings.push(
           "脚本写类工具（WriteScript/PatchScript/DeleteScript…）没有渲染侧执行器（scriptRunner）→ "
