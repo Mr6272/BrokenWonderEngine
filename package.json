@@ -44,7 +44,9 @@
     "verify:script-ops": "esbuild web/tools/ui-checks/verify-script-ops.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/script-ops.mjs --log-level=warning && node .tmp_ui/script-ops.mjs",
     "verify:ai-dock": "node desktop/tools/verify-ai-dock-layout.mjs",
     "verify:knowledge": "node desktop/tools/verify-knowledge.mjs",
-    "gen:lightexample": "node web/tools/gen-lighting-example.mjs"
+    "verify:project-ops": "esbuild web/tools/ui-checks/verify-project-ops.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/project-ops.mjs --log-level=warning && node .tmp_ui/project-ops.mjs",
+    "verify:project-tools": "esbuild web/tools/ui-checks/verify-project-tools.ts --bundle --platform=node --format=esm --outfile=.tmp_ui/project-tools.mjs --log-level=warning && node .tmp_ui/project-tools.mjs",
+    "verify:project": "npm run verify:project-ops && npm run verify:project-tools"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

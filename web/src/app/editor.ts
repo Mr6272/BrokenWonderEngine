@@ -60,6 +60,7 @@ import {
   writeScript,
   type ScriptOpResult
 } from "../core/scriptOps.ts";
+import { runProjectTool } from "../core/projectOps.ts";
 
 /** 编辑区标签的声明。canvas 标签不可关闭；其余可以。 */
 interface EditorTab {
@@ -259,6 +260,7 @@ export class Editor {
           "project.example.emergence",
           "project.example.vampire",
           "project.example.lighting",
+          "project.example.alienShooter",
           "-",
           "project.package",
           "project.settings",
@@ -1460,6 +1462,7 @@ export class Editor {
       { id: "project.example.emergence", title: "涌现沙盘示例（.bwproj）", group: "工程", icon: "module", run: () => this.newBuiltinExample("emergence") },
       { id: "project.example.vampire", title: "吸血鬼幸存者（.bwproj）", group: "工程", icon: "module", run: () => this.newBuiltinExample("vampire") },
       { id: "project.example.lighting", title: "2D 光照示例（.bwproj）", group: "工程", icon: "module", hint: "点光/聚光/遮挡/一键烘焙，打开即可预览", run: () => this.newBuiltinExample("lighting") },
+      { id: "project.example.alienShooter", title: "孤胆枪手（.bwproj）", group: "工程", icon: "module", hint: "还原 Alien Shooter 第一关「潜入」：WASD + 鼠标瞄准、按住左键连射、打爆油桶炸开裂墙", run: () => this.newBuiltinExample("alien-shooter") },
 
       // ---------------- 剧本 ----------------
       { id: "script.open", title: "打开剧本编辑器", group: "剧本", icon: "script", run: () => this.openTab("script") },
@@ -1592,6 +1595,21 @@ export class Editor {
     this.refreshPanels();
   }
 
+/**
+   * AI 整批改造工程后的落地。与 applyAiScript 同构，差别只有一处：
+   * projectOps 返回的是**新工程副本**（事务性要求），所以要走 replaceProjectData
+   * 换引用并重绑场景与选中项，而不是原地改字段。
+   */
+  private applyAiProject(next: Project): void {
+    store.replaceProjectData(next);
+    // 和 applyAiScript 一样必须**同步** commit：AI 改工程是一次离散动作，
+    // 用 320ms 防抖会让用户看到结果后立刻 Ctrl+Z 时撤销到更早的状态。
+    this.commit("AI 改工程");
+    this.refreshPanels();
+    // 场景结构变了，侧边栏若正停在世界视图上必须重建（否则列表里还是旧关卡）
+    if (this.currentSidebarView === "explorer") this.explorerTab.refresh();
+  }
+
   /**
    * AI 的脚本写类工具在**渲染侧的落地入口**（桌面版主进程经 IPC 转发到这里）。
    *
@@ -1635,6 +1653,18 @@ export class Editor {
           + "```" + (s.lang === "js" ? "js" : "yarn") + "\n" + s.source + "\n```",
         meta: { kind: "script-read", name: s.name, lines: s.lines }
       };
+    }
+
+    // ---- 工程级（关卡/UI/预制体）：AI 唯一能真的造世界的通道 ----
+    // 判定逻辑全在 projectOps.runProjectTool 里（纯函数、被测试真的执行）；
+    // 这里只负责把"已应用"的那个新工程落到编辑器的真实状态上。
+    if (name === "ProjectDigest" || name === "ApplyProjectOps") {
+      const out = runProjectTool(name, args as Record<string, unknown>, project);
+      if (out.kind === "digest") return { text: out.text, meta: out.meta };
+      if (out.kind === "rejected") return { error: out.error, text: out.text, meta: out.meta };
+      // 换了引用但没换内容（空批次）就不要动 store，免得白白标脏、弹一次撤销点
+      if (out.meta.changed !== false) this.applyAiProject(out.project);
+      return { text: out.text, meta: out.meta };
     }
 
     // ---- 写类：全部经 scriptOps 判定，命中改动才落地 ----
@@ -2022,7 +2052,8 @@ export class Editor {
       "topdown-js": "俯视角 JS 示例已载入：脚本在「剧本」标签里切到 JS 看 player/chaser/npc/hud/system；点「试跑」直接开窗口。",
       emergence: "涌现沙盘已载入：脚本在「剧本」标签（world/player/guard/civilian/bottle/hud）。点火看火势蔓延、烧穿木栅开路，守卫会被噪音引来——规则都在 bwe.material / bwe.field / bwe.ai 里组合。",
       vampire: "吸血鬼幸存者已载入：点「预览」直接开打。WASD 走位、武器自动开火、1/2/3 选强化、R 重开；六个脚本（player/enemy/bullet/gem/director/hud）都在「剧本」标签里。",
-      lighting: "2D 光照示例已载入：点「预览」看夜晚的灯与影。按 R 切夜色档位（白天/黄昏/深夜/极暗）、按 B 手动重建动态贴图。画布上 5 盏灯各有用途——① 点光、② 聚光、③ 闪烁火把（不进烘焙）、④ 积木模块光、⑤ 墙前灯（演示遮挡阴影）。想试「一键烘焙」：右栏「光照」页 → 点烘焙按钮 → 再预览对比。"
+      lighting: "2D 光照示例已载入：点「预览」看夜晚的灯与影。按 R 切夜色档位（白天/黄昏/深夜/极暗）、按 B 手动重建动态贴图。画布上 5 盏灯各有用途——① 点光、② 聚光、③ 闪烁火把（不进烘焙）、④ 积木模块光、⑤ 墙前灯（演示遮挡阴影）。想试「一键烘焙」：右栏「光照」页 → 点烘焙按钮 → 再预览对比。",
+      "alien-shooter": "孤胆枪手已载入：点「试跑」开窗口玩（预览里鼠标按住开火同样可用）。WASD 按屏幕方向走、鼠标瞄准、按住左键连射、右键朝光标走；1~4 / Q E 切枪，R 重开。目标：清掉巢穴，打爆仓库西墙边的气瓶把裂墙炸开，钻进地下入口。8 个脚本（player/enemy/combat/fx/director/pickup/grenade/hud）都在「剧本」标签里；像素画与音效由 web/tools/gen-alien-shooter.mjs 程序生成。"
     };
     this.loadExampleProject(() => built.project, built.fileName, tips[id]);
   }
