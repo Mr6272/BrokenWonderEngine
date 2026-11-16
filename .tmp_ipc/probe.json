@@ -1,0 +1,319 @@
+{
+  "startedAt": "2026-11-12T11:39:53.269Z",
+  "userData": "D:\\githubdesktop\\BrokenWonderEngine\\.tmp_ipc\\ud",
+  "cryptoAvailable": true,
+  "channels": {
+    "bwe:ai-models": {
+      "ok": true,
+      "models": [],
+      "active": ""
+    },
+    "bwe:ai-sessions-list": {
+      "ok": true,
+      "sessions": [
+        {
+          "id": "c_mwdh766e_ezrgqy",
+          "title": "新对话",
+          "createdAt": 1794483593222,
+          "updatedAt": 1794483593222,
+          "messageCount": 0
+        }
+      ],
+      "active": "c_mwdh766e_ezrgqy"
+    },
+    "bwe:ai-session-new": {
+      "ok": true,
+      "id": "c_mwdh767p_9q8148",
+      "sessions": [
+        {
+          "id": "c_mwdh766e_ezrgqy",
+          "title": "新对话",
+          "createdAt": 1794483593222,
+          "updatedAt": 1794483593222,
+          "messageCount": 0
+        },
+        {
+          "id": "c_mwdh767p_9q8148",
+          "title": "新对话",
+          "createdAt": 1794483593269,
+          "updatedAt": 1794483593269,
+          "messageCount": 0
+        }
+      ],
+      "active": "c_mwdh767p_9q8148",
+      "aborted": 0
+    },
+    "bwe:ai-session-switch": {
+      "ok": true,
+      "sessions": [
+        {
+          "id": "c_mwdh766e_ezrgqy",
+          "title": "新对话",
+          "createdAt": 1794483593222,
+          "updatedAt": 1794483593222,
+          "messageCount": 0
+        },
+        {
+          "id": "c_mwdh767p_9q8148",
+          "title": "新对话",
+          "createdAt": 1794483593269,
+          "updatedAt": 1794483593269,
+          "messageCount": 0
+        }
+      ],
+      "active": "c_mwdh766e_ezrgqy",
+      "messages": [],
+      "aborted": 0
+    },
+    "bwe:ai-sessions-list:after": {
+      "ok": true,
+      "sessions": [
+        {
+          "id": "c_mwdh766e_ezrgqy",
+          "title": "新对话",
+          "createdAt": 1794483593222,
+          "updatedAt": 1794483593222,
+          "messageCount": 0
+        },
+        {
+          "id": "c_mwdh767p_9q8148",
+          "title": "新对话",
+          "createdAt": 1794483593269,
+          "updatedAt": 1794483593269,
+          "messageCount": 0
+        }
+      ],
+      "active": "c_mwdh766e_ezrgqy"
+    },
+    "bwe:ai-status": {
+      "provider": "mock",
+      "intendedProvider": "mock",
+      "ready": true,
+      "mode": "desktop",
+      "message": "Flash（旧配置）（mock）已就绪 · 模型 mock-flash",
+      "models": {
+        "flash": "mock-flash",
+        "pro": "mock-pro"
+      },
+      "activeModelId": "",
+      "activeModel": null,
+      "modelList": [],
+      "usage": {
+        "cacheHitRate": 0,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "outputTokens": 0
+      },
+      "storage": {
+        "dir": "D:\\githubdesktop\\BrokenWonderEngine\\.tmp_ipc\\ud\\sessions\\1272162f0993\\conversations\\c_mwdh766e_ezrgqy",
+        "promptVersion": "bwe-prompt-v2",
+        "messages": 0
+      },
+      "activeSession": "c_mwdh766e_ezrgqy",
+      "sessionCount": 2,
+      "insecure": false,
+      "keyUndecryptable": false,
+      "keyUndecryptableEntries": [],
+      "keyUndecryptableCount": 0,
+      "keyPlaintextFallback": false
+    },
+    "bwe:key-state-consistency": {
+      "consistent": true,
+      "count": 0,
+      "entriesLength": 0,
+      "perModelCount": 0,
+      "mismatches": []
+    },
+    "bwe:ai-sessions-list:after-chat": {
+      "ok": true,
+      "sessions": [
+        {
+          "id": "c_mwdh766e_ezrgqy",
+          "title": "帮我重构玩家移动逻辑",
+          "createdAt": 1794483593222,
+          "updatedAt": 1794483594387,
+          "messageCount": 2
+        },
+        {
+          "id": "c_mwdh767p_9q8148",
+          "title": "新对话",
+          "createdAt": 1794483593269,
+          "updatedAt": 1794483593269,
+          "messageCount": 0
+        }
+      ],
+      "active": "c_mwdh766e_ezrgqy"
+    },
+    "bwe:script-complete": {
+      "ok": true,
+      "entries": [
+        {
+          "name": "clear",
+          "kind": "function",
+          "detail": "(method) bwe.World.clear(): void",
+          "docs": "销毁所有实体（包含场景原生对象）",
+          "insertText": "clear"
+        },
+        {
+          "name": "clearTag",
+          "kind": "function",
+          "detail": "(method) bwe.World.clearTag(tag: string): void",
+          "docs": "只销毁带该标签的实体",
+          "insertText": "clearTag"
+        },
+        {
+          "name": "clone",
+          "kind": "function",
+          "detail": "(method) bwe.World.clone(e: bwe.Entity, opts?: Partial<bwe.SpawnOpts> & {\n    name?: string;\n}): bwe.Entity | null",
+          "docs": "复制一个实体（tags/模块/props/子精灵一并带上）；opts 覆盖副本字段",
+          "insertText": "clone"
+        },
+        {
+          "name": "count",
+          "kind": "function",
+          "detail": "(method) bwe.World.count(q?: bwe.EntityQuery): number",
+          "docs": "数量：无参 = 存活实体总数，有参 = 匹配数",
+          "insertText": "count"
+        },
+        {
+          "name": "destroy",
+          "kind": "function",
+          "detail": "(method) bwe.World.destroy(e: bwe.Entity): void",
+          "docs": "销毁实体",
+          "insertText": "destroy"
+        },
+        {
+          "name": "destroyAll",
+          "kind": "function",
+          "detail": "(method) bwe.World.destroyAll(filter?: bwe.EntityQuery): number",
+          "docs": "批量销毁；filter 省略 = 全部。返回实际销毁数量",
+          "insertText": "destroyAll"
+        },
+        {
+          "name": "each",
+          "kind": "function",
+          "detail": "(method) bwe.World.each(q: bwe.EntityQuery | null | undefined, fn: (e: bwe.Entity) => void): void",
+          "docs": "遍历（内部先拍快照，回调里 spawn/destroy 安全）",
+          "insertText": "each"
+        },
+        {
+          "name": "emit",
+          "kind": "function",
+          "detail": "(method) bwe.World.emit(name: string, payload?: any): void",
+          "docs": "全局事件总线：派发",
+          "insertText": "emit"
+        },
+        {
+          "name": "entities",
+          "kind": "function",
+          "detail": "(method) bwe.World.entities(): bwe.Entity[]",
+          "docs": "当前所有实体（只读数组，不要原地改）",
+          "insertText": "entities"
+        },
+        {
+          "name": "find",
+          "kind": "function",
+          "detail": "(method) bwe.World.find(q: bwe.EntityQuery): bwe.Entity | null",
+          "docs": "找一个实体，找不到返回 null",
+          "insertText": "find"
+        },
+        {
+          "name": "findAll",
+          "kind": "function",
+          "detail": "(method) bwe.World.findAll(q: bwe.EntityQuery): bwe.Entity[]",
+          "docs": "找所有匹配的实体（可能为空数组）",
+          "insertText": "findAll"
+        },
+        {
+          "name": "layers",
+          "kind": "function",
+          "detail": "(method) bwe.World.layers(): {\n    id: string;\n    name: string;\n    visible: boolean;\n    locked: boolean;\n    order: number;\n}[]",
+          "docs": "图层信息（Phase 2，Phase 1 返回空数组）",
+          "insertText": "layers"
+        },
+        {
+          "name": "mapSize",
+          "kind": "function",
+          "detail": "(method) bwe.World.mapSize(): bwe.Size",
+          "docs": "地图尺寸（像素）",
+          "insertText": "mapSize"
+        },
+        {
+          "name": "off",
+          "kind": "function",
+          "detail": "(method) bwe.World.off(name: string, fn?: (payload?: any) => void): void",
+          "docs": "全局事件总线：取消",
+          "insertText": "off"
+        },
+        {
+          "name": "on",
+          "kind": "function",
+          "detail": "(method) bwe.World.on(name: string, fn: (payload?: any) => void): void",
+          "docs": "全局事件总线：注册。载荷是你 emit 时自己定的对象，所以是 any（不要依赖引擎猜测形状）。",
+          "insertText": "on"
+        },
+        {
+          "name": "paused",
+          "kind": "property",
+          "detail": "(property) bwe.World.paused: boolean",
+          "docs": "暂停整个运行时（true = 停）",
+          "insertText": "paused"
+        },
+        {
+          "name": "scene",
+          "kind": "property",
+          "detail": "(property) bwe.World.scene: bwe.SceneInfo",
+          "docs": "当前场景信息",
+          "insertText": "scene"
+        },
+        {
+          "name": "spawn",
+          "kind": "function",
+          "detail": "(method) bwe.World.spawn(opts: bwe.SpawnOpts): bwe.Entity",
+          "docs": "运行时生成一个实体",
+          "insertText": "spawn"
+        },
+        {
+          "name": "spawnAt",
+          "kind": "function",
+          "detail": "(method) bwe.World.spawnAt(opts: Omit<bwe.SpawnOpts, \"x\" | \"y\"> & {\n    x?: number;\n    y?: number;\n}, x: number, y: number): bwe.Entity",
+          "docs": "便捷式：spawn(opts) 并强制覆盖 x/y",
+          "insertText": "spawnAt"
+        },
+        {
+          "name": "spawnMany",
+          "kind": "function",
+          "detail": "(method) bwe.World.spawnMany(list: bwe.SpawnOpts[]): bwe.Entity[]",
+          "docs": "批量生成（每个元素一份 opts）",
+          "insertText": "spawnMany"
+        },
+        {
+          "name": "tileSize",
+          "kind": "function",
+          "detail": "(method) bwe.World.tileSize(): number",
+          "docs": "每格像素",
+          "insertText": "tileSize"
+        },
+        {
+          "name": "timeScale",
+          "kind": "property",
+          "detail": "(property) bwe.World.timeScale: number",
+          "docs": "时间缩放（1 = 正常）",
+          "insertText": "timeScale"
+        }
+      ],
+      "isMemberAccess": true
+    },
+    "bwe:script-quickinfo": {
+      "ok": true,
+      "info": {
+        "display": "(method) bwe.World.find(q: bwe.EntityQuery): bwe.Entity | null",
+        "docs": "找一个实体，找不到返回 null",
+        "kind": "function"
+      }
+    }
+  },
+  "plaintextKeyLeaks": [
+    "检查失败：ENOENT: no such file or directory, open 'D:\\githubdesktop\\BrokenWonderEngine\\.tmp_ipc\\ud\\settings.json'"
+  ]
+}

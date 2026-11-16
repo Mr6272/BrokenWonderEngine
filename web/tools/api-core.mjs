@@ -210,6 +210,62 @@ export function createApiCore(options = {}) {
     return { ok: true, info: lang.quickInfo(source, offset) };
   }
 
+  /**
+   * 跨脚本参数校验（references / definition 共用）。
+   *
+   * 这里只做「形状」校验，真正的符号解析在 script-language.mjs 里。分开的原因：
+   * 校验失败的请求不该去建/污染语言服务的缓存（那是最贵的一步）。
+   *
+   * @returns {{ok:true, files, active, offset}|{ok:false, error:string}}
+   */
+  function parseScriptProjectArgs(body) {
+    const files = body?.files;
+    if (!files || typeof files !== "object" || Array.isArray(files)) {
+      return { ok: false, error: "files 必须是「脚本名 → 源码」的对象" };
+    }
+    const names = Object.keys(files);
+    if (names.length === 0) return { ok: false, error: "files 不能为空" };
+    for (const name of names) {
+      // 源码不是字符串就等于没给（否则 String() 会把对象变成 "[object Object]" 塞进解析器）
+      if (typeof files[name] !== "string") return { ok: false, error: `files["${name}"] 必须是字符串` };
+    }
+    const active = String(body?.active ?? "");
+    if (!Object.prototype.hasOwnProperty.call(files, active)) {
+      return { ok: false, error: `active「${active}」不在 files 里` };
+    }
+    const offset = Number(body?.offset ?? 0);
+    if (!Number.isFinite(offset) || offset < 0) {
+      return { ok: false, error: "offset 必须是非负数" };
+    }
+    return { ok: true, files, active, offset };
+  }
+
+  /**
+   * 跨脚本查找引用：`{ files, active, offset }` → `{ ok, refs }`。
+   *
+   * refs 里每条的 line/col 从 1 开始；name 是脚本名（命中声明文件时是 "__bwe_dts__"）。
+   * 空数组是正常结果（光标不在任何符号上），不是失败。
+   */
+  async function scriptReferences(body) {
+    const args = parseScriptProjectArgs(body);
+    if (!args.ok) return { ok: false, refs: [], error: args.error };
+    const lang = await scriptLanguage();
+    return lang.references(args.files, args.active, args.offset);
+  }
+
+  /**
+   * 跳转定义：`{ files, active, offset }` → `{ ok, defs }`。
+   *
+   * 与 scriptReferences 共用同一个语言服务实例（同一个项目级 program），
+   * 所以「查完引用马上按 F12」不需要再付一次建 program 的代价。
+   */
+  async function scriptDefinition(body) {
+    const args = parseScriptProjectArgs(body);
+    if (!args.ok) return { ok: false, defs: [], error: args.error };
+    const lang = await scriptLanguage();
+    return lang.definition(args.files, args.active, args.offset);
+  }
+
   // ---------------- /api/quick-run ----------------
 
 
@@ -668,6 +724,30 @@ export function createApiCore(options = {}) {
       }
     }
 
+    // ---------- /api/script-references：跨脚本查找引用 ----------
+    if (path === "/api/script-references" && method === "POST") {
+      // 参数校验放在这里先做一次，好让 400 与 200 在 HTTP 层就能区分开
+      // （业务函数内部也会再判一次 —— 它同时被桌面版 IPC 直接调用）。
+      const args = parseScriptProjectArgs(body);
+      if (!args.ok) return json(400, { ok: false, refs: [], error: args.error });
+      try {
+        return json(200, await scriptReferences(body));
+      } catch (e) {
+        return json(500, { ok: false, refs: [], error: e?.message || String(e) });
+      }
+    }
+
+    // ---------- /api/script-definition：跳转定义 ----------
+    if (path === "/api/script-definition" && method === "POST") {
+      const args = parseScriptProjectArgs(body);
+      if (!args.ok) return json(400, { ok: false, defs: [], error: args.error });
+      try {
+        return json(200, await scriptDefinition(body));
+      } catch (e) {
+        return json(500, { ok: false, defs: [], error: e?.message || String(e) });
+      }
+    }
+
     // ---------- /api/quick-run ----------
     if (path === "/api/quick-run" && method === "POST") {
       if (!body?.project || !Array.isArray(body.project.scenes) || body.project.scenes.length === 0) {
@@ -881,11 +961,13 @@ export function createApiCore(options = {}) {
     handle,
     stopQuickRun,
     killQuickRunSync,
-    // 桌面版直接调这两个（不经 HTTP，但**与 /api/script-complete、/api/script-quickinfo
+    // 桌面版直接调这几个（不经 HTTP，但**与 /api/script-complete、/api/script-quickinfo
     // 共用同一套语言服务**，保证两边结果一致）。
     completeScript,
     quickInfoScript,
     checkJsSource,
+    scriptReferences,
+    scriptDefinition,
     paths: { webRoot, projectRoot, quickRunRoot, quickRunLog, scriptMirrorDir },
     get port() {
       return port;

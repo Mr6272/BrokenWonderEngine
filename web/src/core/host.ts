@@ -436,6 +436,13 @@ export interface BweHost {
   /** 手动添加 / 覆盖一条模型（Trae 里没有的模型，比如官方 API 或自建反代）。 */
   aiAddModel?(input: AiModelInput): Promise<AiModelsState>;
   /**
+   * 删掉一条模型（配错了 / 想清掉用不上的供应商）。
+   *
+   * 主进程保证：不许删到清单为空；删的是当前 active 时，active 自动落到剩下的第一条
+   * （否则 settings 指向不存在的 id，下一轮对话直接失败）。
+   */
+  aiRemoveModel?(id: string): Promise<AiModelsState>;
+  /**
    * 真实探测一条模型的连通性（用户点「测试连接」时才调）。
    * `ok` 是**三态**：true 明确可用 / false 明确不可用 / null 判不出来（看 detail）。
    */
@@ -809,6 +816,31 @@ export async function aiAddModel(input: AiModelInput): Promise<AiModelsState> {
       }
     ]
   };
+}
+
+/**
+ * 删掉一条模型。
+ *
+ * 网页版没有模型管理，这里**只从 mock 清单里移除**，让界面行为一致
+ * （点了「删除」下拉里那条就消失），而不是点了没反应。
+ * 桌面的两条硬约束（不许删空、active 跟着落）由主进程保证，渲染侧不复制规则。
+ */
+export async function aiRemoveModel(id: string): Promise<AiModelsState> {
+  const h = host();
+  if (h?.aiRemoveModel) {
+    try {
+      const r = await h.aiRemoveModel(String(id ?? ""));
+      if (r && Array.isArray(r.models)) return r;
+    } catch {
+      /* 落到 mock 清单 */
+    }
+  }
+  const base = mockModels();
+  const target = String(id ?? "");
+  const models = base.models.filter((m) => m.id !== target);
+  // 删空了或删的是当前项 → active 跟着落到第一条（与主进程同语义）
+  const active = models.some((m) => m.id === base.active) ? base.active : (models[0]?.id ?? "");
+  return { active, models };
 }
 
 /**

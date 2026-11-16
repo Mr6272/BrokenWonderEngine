@@ -1,0 +1,44 @@
+{
+  "version": 2,
+  "ai": {
+    "provider": "mock",
+    "baseUrl": "",
+    "apiKey": "",
+    "modelFlash": "",
+    "modelPro": "",
+    "autoRoute": true,
+    "manualModel": "",
+    "activeModelId": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+    "models": [
+      {
+        "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+        "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+        "provider": "siliconflow",
+        "baseUrl": "https://api.siliconflow.cn/v1",
+        "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+        "apiKey": "",
+        "apiKeyRef": "",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "notes": "从 Trae 导入；API Key 需手动填写",
+        "source": "trae-import",
+        "needsKey": true,
+        "keyUndecryptable": false,
+        "encryptedApiKeyBak": "",
+        "encryptedApiKey": ""
+      }
+    ],
+    "contextWindow": 128000,
+    "maxTokens": 16384
+  },
+  "editor": {
+    "theme": "cream",
+    "uiScale": 1,
+    "autoSave": true
+  },
+  "insecure": false,
+  "keyUndecryptable": false,
+  "keyUndecryptableEntries": [],
+  "keyPlaintextFallback": false,
+  "encryptedApiKey": ""
+}

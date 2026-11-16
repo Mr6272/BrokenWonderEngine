@@ -33,6 +33,7 @@ import {
   aiModels,
   aiSetModel,
   aiAddModel,
+  aiRemoveModel,
   aiImportTrae,
   onAiEvent,
   type AiEvent,
@@ -44,11 +45,12 @@ import {
   type AiModelsState,
   type TokenUsage
 } from "../core/host.ts";
-import { error, info, modal, ok, warn } from "../ui/toast.ts";
-import { renderSessionSwitcher } from "./aiSessions.ts";
+import { error, info, modal, ok, warn, confirmDialog } from "../ui/toast.ts";
+import { renderSessionSwitcher, renderSessionSidebar, type SessionSidebar } from "./aiSessions.ts";
 import { presentError, type ErrorPresentation } from "./aiErrorView.ts";
 import { answerNotices, type AnswerNotice } from "./aiAnswerNotice.ts";
 import { keyBrokenViewOf } from "./keyBrokenView.ts";
+import { zoneFor, summarizeAgent, type AiStreamBlock, type AiStreamKind, type AgentSummary } from "./aiZones.ts";
 
 // ============================================================================
 // 工程摘要（契约 §4.5）—— 唯一允许进入 prompt 的工程信息
@@ -288,6 +290,14 @@ interface PanelHooks {
   appendDelta(text: string): void;
   appendToolBlock(tool: ToolCallBlock): void;
   updateMeter(): void;
+  /**
+   * 一轮结束后刷新会话列表（左栏历史的「N 条 · 刚才」要靠它跟上）。
+   *
+   * 为什么必须在一轮结束时刷：会话的 `updatedAt/messageCount` 是**这一轮聊完**才变的，
+   * 不刷的话左栏会一直写着「还没聊过」—— 用户刚聊完，列表却在否认，看着像没存下来。
+   * dock 布局没有常驻列表，所以是可选的（浮层每次打开都会重读）。
+   */
+  refreshSessions?(): void;
   /** 外壳/命令面板触发一次动作（相当于点了某个按钮） */
   runAction(intent: AiChatRequest["intent"]): void;
   /** 重画「正在思考」提示（phase 变化时调用） */
@@ -296,6 +306,8 @@ interface PanelHooks {
   appendSystemNote(text: string, retryLast?: () => void): void;
   /** 重发上一条用户消息（「重试」按钮） */
   retryLastUserMessage(): void;
+  /** 验收出口：灌 n 条假工具调用 + 一问一答（`__BWE__.debugAiStream` 用） */
+  injectDemoTools(n: number): void;
 }
 let hooks: PanelHooks | null = null;
 
@@ -510,6 +522,8 @@ function handleAiEvent(ev: AiEvent): void {
       hooks?.renderThread();
       hooks?.renderThinking?.();
       hooks?.updateMeter();
+      // 这一轮聊完了：左栏的条数/相对时间已经过时（详见 PanelHooks.refreshSessions）
+      hooks?.refreshSessions?.();
       return;
     }
     case "error": {
@@ -532,6 +546,8 @@ function handleAiEvent(ev: AiEvent): void {
       // 沉默不好，但啰嗦地重复也不好 —— 一处说清就够。
       hooks?.renderThinking?.();
       hooks?.updateMeter();
+      // 失败的一轮同样落了盘（用户消息已在会话里），列表信息要跟上
+      hooks?.refreshSessions?.();
       return;
     }
   }
@@ -566,27 +582,70 @@ export function upsertToolBlock(list: ToolCallBlock[], blk: ToolCallBlock): void
   list.push(blk);
 }
 
+/** 面板布局：`page` = AI 界面（左历史 + 右主区）；`dock` = 右侧窄栏 / 底部面板（旧形态）。 */
+export type AiPanelLayout = "page" | "dock";
+
 /**
  * 渲染 AI 面板。
  * @param host 挂载点
  * @param onRepaint 外壳注入的重画请求（diff 应用后刷新剧本面板）
+ * @param opts.layout 布局形态，**缺省 "dock"**（旧行为）。page 由 AI 界面入口显式传入。
  */
-export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
+export function renderAiPanel(
+  host: HTMLElement,
+  onRepaint?: () => void,
+  opts?: { layout?: AiPanelLayout }
+): void {
   requestRepaint = onRepaint ?? (() => {});
+  // ⚠ 缺省必须等于旧行为。右侧 AI 栏与底部面板的回退分支都**不传**这个参数，
+  //   一旦默认值变成 page，它们会在 460px 窄栏里塞一列历史栏（静默走样、不报错）。
+  const layout: AiPanelLayout = opts?.layout === "page" ? "page" : "dock";
   ensureEventSubscription();
 
   host.replaceChildren();
   const wrap = el("div", { class: "ai-panel" });
+  // 契约锚点：验收脚本靠它确认「挂的是 AI 面板」而不是别的面板
+  wrap.dataset.aiZone = "1";
+  // page / dock 都写出来（不只在 page 时写）：样式表靠它分叉，
+  // 缺一个值就退回"靠祖先类名猜"，那种选择器一改就全挂。
+  wrap.dataset.aiLayout = layout;
+  // 面板重挂 = DOM 从零开始，此前的演示注入块已经随旧 DOM 一起没了，
+  // 计数必须跟着归零，否则面板会以为"有内容"而不显示欢迎区。
+  demoCount = 0;
+
+  // ---- 布局骨架 ----
+  //
+  // page：`.ai-panel > .ai-page > (.ai-history + .ai-main)`，历史常驻左栏；
+  // dock：`.ai-panel > (.ai-head / .ai-streams / .ai-compose)`，历史仍是顶部浮层。
+  //
+  // 为什么先只定"主区挂哪儿"、而不把下面几百行的构建代码分叉两遍：
+  // 两种形态的**内容**完全一样（head / 提示条 / streams / compose），
+  // 差别只在父节点。用一个 mainEl 变量承接，两条路径共用同一份构建与同一份
+  // 事件绑定 —— 复制一遍等于以后每次改面板都要记得改两处。
+  //
+  // ⚠ pageEl 上的 mainEl 延迟到内容建完再挂（见文件下方 host.appendChild(wrap) 之前）：
+  //   历史栏是先 append 进 pageEl 的，先挂 mainEl 会让历史跑到右边去。
+  let pageEl: HTMLElement | null = null;
+  let mainEl: HTMLElement = wrap;
+  if (layout === "page") {
+    pageEl = el("div", { class: "ai-page" });
+    mainEl = el("div", { class: "ai-main" });
+    wrap.appendChild(pageEl);
+  }
 
   // ---- 顶部状态条：模式徽标 + mock 提示 ----
   const headBar = el("div", { class: "row tight ai-head" });
   headBar.style.padding = "8px 12px 0";
-  wrap.appendChild(headBar);
+  mainEl.appendChild(headBar);
+  // 句柄登记（见模块级注释）：面板每次重挂都会走到这里，
+  // 所以「重挂后旧引用失效」这件事由这一行覆盖掉，调用点不用各自去找 DOM。
+  headBarEl = headBar;
 
   const mockHint = el("div", { class: "hint ai-mock-hint" });
   mockHint.style.padding = "6px 12px 0";
   mockHint.style.display = "none";
-  wrap.appendChild(mockHint);
+  mainEl.appendChild(mockHint);
+  mockHintEl = mockHint;
 
   // 明文存储告知条（**只在 insecure:true 时出现，可关闭**）。
   //
@@ -600,7 +659,7 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
   const insecureHint = el("div", { class: "ai-insecure-hint" });
   insecureHint.dataset.aiInsecure = "1";
   insecureHint.style.display = "none";
-  wrap.appendChild(insecureHint);
+  mainEl.appendChild(insecureHint);
 
   // Key 失效批量提示条（**阻断级**：key 解不开 = 功能完全不可用）。
   //
@@ -613,16 +672,96 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
   const keyBrokenHint = el("div", { class: "ai-keybroken-hint" });
   keyBrokenHint.dataset.aiKeybroken = "1";
   keyBrokenHint.style.display = "none";
-  wrap.appendChild(keyBrokenHint);
+  mainEl.appendChild(keyBrokenHint);
 
   // 「测试连接」结果区宿主：常驻但默认空，探测后才有内容。
   // 必须在 thread 之前创建并赋值，否则 renderProbeArea 拿不到它（早前漏了赋值，
   // 结果区一条都不显示 —— 又一次"看起来实现了、实际不工作"）。
   probeHostEl = el("div", { class: "ai-probe-host" });
-  wrap.appendChild(probeHostEl);
+  mainEl.appendChild(probeHostEl);
 
+  // ---- 左栏：会话历史（page 布局常驻；dock 布局仍是顶部条上的浮层） ----
+  //
+  // 为什么历史栏由 aiSessions.ts 自己建、而不是这里拼 DOM：
+  // 会话行的类名与 data 锚点是对外契约（verify-sessions 按它们定位），
+  // 构造点只该有一个。这里只负责"给它一块地"和"告诉它切换后要刷新什么"。
+  //
+  // ⚠ 位置必须在 mainEl 之前 append 进 pageEl：历史在左、主区在右。
+  //   mainEl 的内容建完才挂进 pageEl（见下方），所以这里先挂的是历史。
+  //
+  // 句柄留着：一轮结束时调它的 `refresh()` 做**局部**重画（只重列列表与计数，
+  // 不重挂整个面板 —— 重挂会让输入框内容、滚动位置全丢）。
+  let sessionSidebar: SessionSidebar | null = null;
+  if (pageEl) {
+    sessionSidebar = renderSessionSidebar(pageEl, {
+      // ⚠ 主进程返回的 messages 已过滤 system 前缀块 —— 直接渲染，不再二次过滤
+      renderMessages: (messages) => replaceThreadFromMessages(messages as ChatTurn[]),
+      clearMessages: () => replaceThreadFromMessages([]),
+      // 切/新建会话后顶部模型条不必重画内容，但**状态可能变**（新会话的用量/路由都变了）。
+      // 走 refreshHeadNow 而不是直接调 refreshStatus：并发两次刷新会画出两份 chip，
+      // 而这个会话栏的回调与「切模型」完全可能同时发生。
+      refreshBar: () => {
+        void refreshHeadNow();
+      }
+    });
+  }
+
+  // ---- 唯一内容宿主：行为与对话**同轨**（v3） ----
+  //
+  // 为什么取消「上行为区 / 下聊天区」两分布局（用户原话：「agent 行为我觉得没必要
+  // 单独搞到上面一个大的 block 挡住这么多空间，直接有什么行为显示到聊天框里就行」）：
+  //   两区是**两个抢高度的兄弟**，行为区一封顶（46%）就把对话挤成两行；
+  //   而用户要读的是一条时间线：我说了什么 → 它调了哪些工具 → 它怎么回答。
+  //   所以工具块 / 思考 / 系统提示 / 错误 / diff 全部回落 `.ai-thread`，按发生顺序穿插。
+  //
+  // 分区**规则**没丢，只是换了用途：`aiZones.zoneFor()` 仍是「这条属于它做的、
+  // 还是我说的」的单点判定，现在拿它给块打标记（`data-ai-kind` + `.ai-act`），
+  // 而不是选宿主。规则与呈现分开，`verify-ai-zones` 的 20 项断言因此一行都不用改。
+  //
+  // ⚠ `.ai-thread` 这个类名**必须保留**：desktop/tools/verify-sessions.mjs 的探针按它取元素，
+  //   改名不会报错，只会让那条验收从此量到 0 个消息（静默失效）。
+  const streams = el("div", { class: "ai-streams" });
+  streams.dataset.aiStreams = "1";
+
+  /**
+   * 空闲态的欢迎区：只在 `turns` 为空时挂进 DOM（由 `syncPanelState` 同步）。
+   *
+   * 为什么元素在挂载时建好、之后只做插入/移除：建议行要绑点击（把句子填进输入框），
+   * 每次进空闲态重建一遍等于每次重绑一遍监听 —— 建一次更省事，也不会漏解绑。
+   */
+  let heroEl: HTMLElement | null = null;
+
+  const chat = el("div", { class: "ai-chat" });
+  chat.dataset.aiChat = "1";
+
+  // 行为摘要小条（一行高，**不是一个区**）。
+  //
+  // 为什么保留它：它是用户判断「它到底动没动」的唯一常驻信号（N 步 / 失败 N / 状态点），
+  //   工具块滚出视野后仍要能一眼看到。但它只占一行，不参与分高。
+  // 为什么沿用 `.ai-agent-head` 这个类名：cream.css 里那套状态点配色
+  //   （idle/running/done/failed 四色 + data-busy 呼吸）已经按它写好；
+  //   换个名字等于让那些样式静默失效（不报错、只是不生效）。
+  const agentHead = el("div", { class: "ai-agent-head" });
+  agentHead.dataset.state = "idle";
+  // 类名沿用样式表里的 `.ai-agent-count`（数字列用 tabular-nums 对齐，跳动时不抖）
+  const agentSteps = el("span", { class: "hint ai-agent-count" }, "等待指令");
+  const agentBadge = el("span", { class: "ai-agent-badge" });
+  agentHead.appendChild(svg(I.puzzle, 13));
+  agentHead.appendChild(el("span", { class: "ai-agent-title" }, "行为"));
+  agentHead.appendChild(el("div", { class: "spacer" }));
+  agentHead.appendChild(agentSteps);
+  agentHead.appendChild(agentBadge);
+
+  // 用户 / 助手消息 + 工具块 / 思考 / 提示 / 错误 / diff 的唯一宿主。
+  // 自己滚动（`flex:1 1 auto` + `overflow-y:auto` 见样式表），块多了整体滚，
+  // 每块靠 `.ai-thread > * { flex: 0 0 auto }` 保住可读高度（「被挤成一条缝」的根因修复）。
   const thread = el("div", { class: "ai-thread" });
-  wrap.appendChild(thread);
+  thread.dataset.aiThread = "1";
+
+  chat.appendChild(agentHead);
+  chat.appendChild(thread);
+  streams.appendChild(chat);
+  mainEl.appendChild(streams);
 
   // ---- 输入区 ----
   const compose = el("div", { class: "ai-compose" });
@@ -688,8 +827,17 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
   const meter = el("div", { class: "ai-meter" });
   compose.appendChild(meter);
 
-  wrap.appendChild(compose);
+  mainEl.appendChild(compose);
+
+  // page：主区内容建完才挂进两列容器 —— 历史栏已经在 pageEl 里了，
+  // 这时候 append 才能保证"左历史、右主区"的先后（DOM 顺序即视觉顺序）。
+  if (pageEl) pageEl.appendChild(mainEl);
+
   host.appendChild(wrap);
+
+  // 欢迎区在这里建（不是在上面建）：建议行点击要往输入框里填字，`ta` 必须已经存在。
+  // 建好后交给 syncPanelState 决定挂不挂（空闲才挂）。
+  heroEl = heroView();
 
   ta.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
@@ -777,6 +925,8 @@ export function renderAiPanel(host: HTMLElement, onRepaint?: () => void): void {
     }
     renderThread();
     updateMeter();
+    // 被中断的这轮也已经写进会话文件，左栏的「N 条」要跟上
+    hooks?.refreshSessions?.();
   }
 
 // ============================================================================
@@ -1105,26 +1255,73 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     // 会话切换器（用户明确要的「新会话和会话历史」）。
     // 挂在模型下拉同一排：两者都是"当前对话的上下文"类切换，放一起符合直觉。
     // 网页版没有会话能力时 renderSessionSwitcher 返回 null，入口自动消失。
-    renderSessionSwitcher(
-      bar,
-      {
-        renderMessages: (messages) => {
-          // ⚠ 主进程返回的 messages 已过滤 system 前缀块 —— 直接渲染，不再二次过滤
-          replaceThreadFromMessages(messages as ChatTurn[]);
+    //
+    // ⚠ page 布局下**不渲染**（契约 §9）：历史已经是左栏常驻列表，
+    //   再挂一个「历史」浮层按钮等于同一件事两个入口 —— 用户在左栏点了会话，
+    //   又从顶部弹一层列表，会以为这是两份不同的历史。
+    if (layout === "dock") {
+      renderSessionSwitcher(
+        bar,
+        {
+          renderMessages: (messages) => {
+            // ⚠ 主进程返回的 messages 已过滤 system 前缀块 —— 直接渲染，不再二次过滤
+            replaceThreadFromMessages(messages as ChatTurn[]);
+          },
+          clearMessages: () => {
+            replaceThreadFromMessages([]);
+          },
+          refreshBar: () => {
+            void refreshStatus(bar, hintBox);
+          }
         },
-        clearMessages: () => {
-          replaceThreadFromMessages([]);
-        },
-        refreshBar: () => {
-          void refreshStatus(bar, hintBox);
+        () => {
+          /* 浮层已自行收起 */
         }
-      },
-      () => {
-        /* 浮层已自行收起 */
-      }
-    );
+      );
+    }
 
     updateMeter();
+  }
+
+  /** 顶部状态条刷新是否在飞（见 `refreshHeadNow` 的串行化理由） */
+  let headRefreshBusy = false;
+  /** 刷新期间又来了请求 → 结束后补跑一次（丢事件会让 chip 停在旧模型上） */
+  let headRefreshAgain = false;
+
+  /**
+   * 立刻重画顶部状态条（模型 chip / 下拉 / 计数 / 提示条）。
+   *
+   * 为什么要有这个函数（而不是在四处各写一遍）：v3 之前有 **4 个调用点**各自写着
+   * `meterEl?.closest(".ai-panel")?.querySelector(".ai-head")`，而 `meterEl` 从未被赋值
+   * —— 四处一起静默失效，「保存 key / 切模型 / 添加模型 / 探测完成」之后顶部都不刷新，
+   * 必须切窗口或切标签（重挂面板）才更新。重复的同一段查找就是这次 bug 的成因，
+   * 收成一处之后，下次新增「改完模型的入口」只要调它。
+   *
+   * 三个约束：
+   *   1. **句柄失效就什么都不做**：面板可能已经重挂/收起，往离树的 DOM 里写等于白写。
+   *   2. **串行化**：`refreshStatus` 内部有 `await aiStatus()` / `await loadModels()`，
+   *      两次并发会在 `replaceChildren` 之后交错插入，画出两份 chip。
+   *      在飞时只置脏标记，落地后补跑一次（合并语义：期间的所有变更一次刷完）。
+   *   3. 调用点 `void` 掉即可；需要「调完即可见」时（截图/排查）可以 await 它。
+   */
+  async function refreshHeadNow(): Promise<void> {
+    const bar = headBarEl;
+    const hint = mockHintEl;
+    if (!bar || !hint || !bar.isConnected) return;
+    if (headRefreshBusy) {
+      headRefreshAgain = true;
+      return;
+    }
+    headRefreshBusy = true;
+    try {
+      await refreshStatus(bar, hint);
+    } finally {
+      headRefreshBusy = false;
+    }
+    if (headRefreshAgain) {
+      headRefreshAgain = false;
+      await refreshHeadNow();
+    }
   }
 
 
@@ -1169,8 +1366,7 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     }
     renderProbeArea(entry);
     // 顶部 chip 也要跟着刷新（探测结果可能让"已配置"变成"连不上"的提示）
-    const head = meterEl?.closest(".ai-panel")?.querySelector(".ai-head");
-    if (head && mockHintEl) void refreshStatus(head as HTMLElement, mockHintEl);
+    void refreshHeadNow();
   }
 
   /** 结果区：loading / 四类结果，画在面板顶部临时区域。 */
@@ -1235,15 +1431,23 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
    * 三个缓慢呼吸的点安静得多，且能表达"在等外部响应"而不是"程序在忙"。
    */
   function renderThinking(): void {
-    const host = probeHostEl;
-    if (!host) return;
+    // 思考提示是**一条时间线事件**（v3）：它说明"它正在干活"，所以进 `.ai-thread`
+    // 排在当前消息之后、回答之前 —— 而不是像 v2 那样挂在上面一个独立区里
+    // （那个区一封顶就把对话挤成两行，正是用户抱怨的"大 block 挡空间"）。
+    const host = thread;
     const st = currentThinking();
     // 先把旧的思考提示摘掉，再决定要不要画新的（避免重复堆叠）
     const old = host.querySelector(".ai-thinking");
     old?.remove();
-    if (!st) return;
+    if (!st) {
+      // 思考结束 = 轨道里少了一个块，摘要条状态要跟着回落（否则一直停在「执行中」）
+      refreshAgentHead();
+      return;
+    }
 
     const box = el("div", { class: "ai-thinking" });
+    markBlock("thinking", box);
+    // 锚点保留（验收/排查按它找思考块；v3 换了宿主，锚点不变最省事）
     box.dataset.aiThinking = "1";
     box.dataset.phase = st.phase;
 
@@ -1273,7 +1477,11 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       box.appendChild(details);
     }
 
-    host.appendChild(box);
+    // 插到「还没说完的回答」之前（见 appendActNode）：思考是回答的前置，
+    // 排在它下面会读成「答完又来一句我在想」。
+    appendActNode(box);
+    // 有了思考块，头部立刻进「执行中」—— 这一瞬间用户就是在问"它到底动没动"
+    refreshAgentHead();
   }
 
   /** 取消当前请求（思考中「发送」变「停止」时点它）。 */
@@ -1413,6 +1621,48 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     addBtn.dataset.aiAddModel = "1";
     box.appendChild(addBtn);
 
+    // ---- 编辑 / 删除当前模型（v3） ----
+    //
+    // 为什么挂在「当前项」上而不是下拉里每条 hover：
+    //   原生 `<select>` 的 option 不能放按钮（浏览器不渲染 option 内的元素），
+    //   要做「每条 hover 出按钮」就得把 select 换成自绘列表 —— 那会一并推翻
+    //   `[data-ai-model-select]` 这个验收锚点与键盘可达性。
+    //   改完之后用户要处理的一定是**当前这条**（配错的 baseUrl、想换的 key），
+    //   所以「下拉选到它 → 点编辑」两跳即可到达，且完全不动现有下拉。
+    //
+    // 措辞纪律：按钮 disabled 时 **必须说明为什么**（title + 文案里带「先选」），
+    //   否则用户点不动只会以为界面坏了 —— 没有模型时它俩就是不可用的。
+    const editable = active;
+    const editBtn = button("编辑", () => {
+      const cur = activeEntry();
+      if (cur) openAddModelDialog(cur);
+    }, {
+      size: "sm",
+      variant: "ghost",
+      iconPath: I.wand,
+      title: editable
+        ? `修改「${editable.label}」的供应商 / 地址 / 模型名 / key（Key 留空表示不改）`
+        : "先添加或选一个模型，才有可编辑的条目"
+    });
+    editBtn.dataset.aiEditModel = "1";
+    editBtn.disabled = !editable;
+    box.appendChild(editBtn);
+
+    const delBtn = button("删除", () => {
+      const cur = activeEntry();
+      if (cur) void removeModelViaHost(cur);
+    }, {
+      size: "sm",
+      variant: "ghost",
+      iconPath: I.trash,
+      title: editable
+        ? `从清单里删掉「${editable.label}」（会先确认；至少保留一条模型）`
+        : "先添加或选一个模型，才有可删除的条目"
+    });
+    delBtn.dataset.aiDelModel = "1";
+    delBtn.disabled = !editable;
+    box.appendChild(delBtn);
+
     // 模型计数：原生 select 折叠时只显示当前项，用户看不到"还有几个可选"。
     // 这行小字同时解决了产品上的信息缺失与验收截图的自证需求。
     const needsKey = countNeedsKey(models);
@@ -1462,10 +1712,14 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       error(`切换模型失败：${(e as Error).message}`);
     }
     renderThread();
+    // renderThread 会整树重建，DOM-only 的思考块会被一起清掉；
+    // 若此刻正在跑一轮（用户是在流式过程中换的模型），必须把它补回来，
+    // 否则界面会突然"没有反应"，而请求其实还在跑。
+    renderThinking();
     updateMeter();
-    // 顶部条重画（下拉里的选中项、needsKey 标记都可能变）
-    const head = meterEl?.closest(".ai-panel")?.querySelector(".ai-head");
-    if (head && mockHintEl) void refreshStatus(head as HTMLElement, mockHintEl);
+    // 顶部条重画（下拉里的选中项、needsKey 标记都可能变）——
+    // 这句以前是死代码（`meterEl` 恒 null），用户看到的就是「切完模型顶部不变」。
+    await refreshHeadNow();
   }
 
   /** needsKey 条目的填 key 小输入框。 */
@@ -1615,8 +1869,8 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
             modelsState = null;
             void (async () => {
               await loadModels();
-              const head = meterEl?.closest(".ai-panel")?.querySelector(".ai-head");
-              if (head && mockHintEl) void refreshStatus(head as HTMLElement, mockHintEl);
+              // 导入完顶部状态条要立刻跟上（导入前这里是死代码，用户必须切标签才看到）
+              void refreshHeadNow();
               ok(`已导入 ${providers.length} 个模型，其中 ${needsKeyCount} 个需要手动填写 API Key`);
               warn("Trae 的 API Key 是设备绑定的、无法导出，导入的模型需要你手动填 key 才能用");
             })();
@@ -1638,29 +1892,41 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
   }
 
 
-  // ---------------- 手动添加模型（用户明确要求「自己填 key」的完整入口） ----------------
+  // ---------------- 手动添加 / 编辑模型（用户明确要求「自己填 key」的完整入口） ----------------
 
   /**
-   * 打开「添加模型」对话框。
+   * 打开「添加模型」/「编辑模型」对话框。
    *
    * 为什么需要它（而不是只靠下拉里选 needsKey 项弹 key 输入框）：
    *   下拉那条路径只能给**已有的**条目补 key。用户要的第二种情况是
    *   「Trae 里根本没有的模型」—— 比如 DeepSeek 官方、自己的反代、本地 Ollama。
    *   这些必须能手动录入 provider / baseUrl / model / key。
    *
+   * v3 起同一个表单兼职「编辑」：传 `editing` 就预填现有值。
+   * 为什么不另做一个编辑表单：两边字段完全一样，复制一份之后必然出现
+   *   「添加支持 contextWindow、编辑忘了带」这类不对称 —— 而编辑预填的正是
+   *   用户配错后要改的那几个字段（provider / baseUrl / model / label / contextWindow）。
+   *
+   * **API Key 不预填**（也读不到：主进程从不回传明文），留空 = 不改。
+   * 这与主进程 `addModel` 的三态语义一致（空串不清 key），所以「改地址但不换 key」
+   * 提交后 key 仍在 —— 这一点必须让用户看到，否则他会以为要重填一次。
+   *
    * 判重由主进程负责（同 provider+baseUrl+model = 同一条，就地更新并保留原 id），
    * 所以这里不需要在前端做去重判断 —— 重复提交会变成"更新"，不会产生第二条。
    */
-  function openAddModelDialog(): void {
+  function openAddModelDialog(editing?: AiModelEntry): void {
     // provider 预设：常见几家的 baseUrl 自动填，减少用户手打出错
     const PRESET_URL: Record<string, string> = {
       deepseek: "https://api.deepseek.com",
       siliconflow: "https://api.siliconflow.cn/v1",
       "openai-compatible": "http://127.0.0.1:11434/v1"
     };
+    // 编辑时用现有值打底；新增时用 deepseek 预设打底（最常见的一条路）
+    const isEdit = Boolean(editing);
+    const prefillUrl = editing?.baseUrl || PRESET_URL["deepseek"] || "";
 
     modal({
-      title: "添加模型",
+      title: isEdit ? `编辑模型 — ${editing!.label}` : "添加模型",
       wide: true,
       body: () => {
         const col = el("div", { class: "col" });
@@ -1669,8 +1935,11 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
           el(
             "div",
             { class: "hint" },
-            "填一个 Trae 里没有的模型（DeepSeek 官方 / 自建反代 / 本地 Ollama 等）。\n"
-            + "同一个「供应商 + 地址 + 模型名」会被视为同一条：重复提交是更新，不会多出一条。"
+            isEdit
+              ? "改动会写回这条模型（判重键是「供应商 + 地址 + 模型名」：命中同一条就地更新，不会多出一条）。\n"
+                + "API Key 不预填也读不出来：**留空表示保持原来的 key 不变**，只有填了新值才覆盖。"
+              : "填一个 Trae 里没有的模型（DeepSeek 官方 / 自建反代 / 本地 Ollama 等）。\n"
+                + "同一个「供应商 + 地址 + 模型名」会被视为同一条：重复提交是更新，不会多出一条。"
           )
         );
 
@@ -1678,10 +1947,16 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
 
         // 供应商
         form.appendChild(el("div", { class: "group-label" }, "供应商 Provider"));
+        // 编辑态可能是一条**不在预设列表里**的 provider（Trae 导入的自定义项）：
+        // 硬塞进固定四项会让它显示成第一项，用户一保存就被改写成别的供应商。
+        // 所以当前值若不在列表里，先补进选项，其余保持原顺序。
         const provSel = el("select", { class: "select", "data-ai-add-provider": "1" });
-        for (const p of ["deepseek", "siliconflow", "openai-compatible", "mock"]) {
-          provSel.appendChild(el("option", { value: p }, p));
+        const provChoices = ["deepseek", "siliconflow", "openai-compatible", "mock"];
+        if (editing?.provider && !provChoices.includes(editing.provider)) {
+          provChoices.unshift(editing.provider);
         }
+        for (const p of provChoices) provSel.appendChild(el("option", { value: p }, p));
+        if (editing?.provider) provSel.value = editing.provider;
         form.appendChild(provSel);
 
         // 服务地址
@@ -1692,7 +1967,7 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
           placeholder: "https://api.deepseek.com",
           "data-ai-add-baseurl": "1"
         });
-        urlInput.value = PRESET_URL["deepseek"] ?? "";
+        urlInput.value = prefillUrl;
         form.appendChild(urlInput);
 
         // 模型名（必填）
@@ -1703,6 +1978,7 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
           placeholder: "例如 deepseek-chat / moonshotai/Kimi-K2-Thinking",
           "data-ai-add-model-name": "1"
         });
+        modelInput.value = editing?.model ?? "";
         form.appendChild(modelInput);
 
         // 显示名
@@ -1713,21 +1989,32 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
           placeholder: "例如 DeepSeek 聊天",
           "data-ai-add-label": "1"
         });
+        labelInput.value = editing?.label ?? "";
         form.appendChild(labelInput);
 
         // Key
-        form.appendChild(el("div", { class: "group-label" }, "API Key（可留空，之后再填）"));
+        form.appendChild(
+          el("div", { class: "group-label" }, isEdit ? "API Key（留空 = 不改）" : "API Key（可留空，之后再填）")
+        );
         const keyInput = el("input", {
           class: "input",
           type: "password",
-          placeholder: "粘贴 API Key（不会明文显示；留空表示稍后填写）",
+          placeholder: isEdit
+            ? "留空表示保持现有 key 不变；粘贴新值才覆盖"
+            : "粘贴 API Key（不会明文显示；留空表示稍后填写）",
           autocomplete: "off",
           spellcheck: "false",
           "data-ai-add-key": "1"
         });
         form.appendChild(keyInput);
         form.appendChild(
-          el("div", { class: "hint" }, "留空也能先创建，之后在下拉里选中它会提示「需要填 API Key」。")
+          el(
+            "div",
+            { class: "hint" },
+            isEdit
+              ? "看不清现有 key 是**故意的**：它只以密文存在于设置里，界面从不回显明文。"
+              : "留空也能先创建，之后在下拉里选中它会提示「需要填 API Key」。"
+          )
         );
 
         // 上下文窗口（选填）
@@ -1738,12 +2025,15 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
           placeholder: "例如 65536",
           "data-ai-add-context": "1"
         });
+        if (editing?.contextWindow) ctxInput.value = String(editing.contextWindow);
         form.appendChild(ctxInput);
 
         col.appendChild(form);
 
-        // 切供应商时自动填地址（用户改过就不再覆盖）
-        let urlTouched = false;
+        // 切供应商时自动填地址（用户改过就不再覆盖）。
+        // ⚠ 编辑态**一开始就算「改过」**：预填的是这条自己保存的地址，
+        //   切一下供应商就把它冲掉，等于「我只是想看看」就把配置丢了。
+        let urlTouched = isEdit;
         urlInput.addEventListener("input", () => {
           urlTouched = true;
         });
@@ -1757,7 +2047,7 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       },
       actions: [
         {
-          label: "添加并切换",
+          label: isEdit ? "保存修改" : "添加并切换",
           variant: "primary",
           onClick: (close) => {
             const read = (sel: string): string =>
@@ -1782,14 +2072,20 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
             }
 
             close();
-            void addModelViaHost({
-              provider,
-              baseUrl,
-              model,
-              label,
-              apiKey,
-              contextWindow: ctxRaw ? Number(ctxRaw) : undefined
-            });
+            void addModelViaHost(
+              {
+                provider,
+                baseUrl,
+                model,
+                label,
+                apiKey,
+                contextWindow: ctxRaw ? Number(ctxRaw) : undefined
+              },
+              // 编辑态要把**原条目 id** 交代清楚，理由见 addModelViaHost 的注释：
+              // 改了 provider/地址/模型名就等于换了判重键，主进程会建一条新 id，
+              // 旧 id 会留在清单里变成第二条 —— 那正是用户说的「配错了想改」的场景。
+              editing ? { replaceId: editing.id } : undefined
+            );
           }
         },
         { label: "取消", variant: "ghost", onClick: (close) => close() }
@@ -1802,19 +2098,58 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
    *
    * 判重 / provider 降级 / 缺字段校验全在主进程（modelCatalog.mjs，有单测），
    * 渲染侧不复制任何业务规则 —— 两边各写一套一定会漂移。
+   *
+   * @param opts.replaceId 编辑模式：用户改的是**哪一条**。
+   *
+   *   ⚠ 为什么必须带：主进程的判重键是 `provider+baseUrl+model`，而「编辑」
+   *   改的恰恰往往是这三者之一 —— 改完就是一条**新的 id**，旧条目会原样留着。
+   *   用户看到的是「我改了一条，怎么多出来一条」，而他本意是修好那条。
+   *   所以这里在「新增成功 + 判重没命中（created）」时把旧 id 删掉。
+   *
+   *   为什么放在渲染侧而不是主进程：主进程 `add-model` 的语义是"加入/更新一条"，
+   *   给它加一个"顺便删掉另一条"的入参会污染一个已经被单测锁住的契约
+   *   （跨进程契约本轮不由我改）。删除走的是**已有的** `bwe:ai-remove-model`，
+   *   没有新造通道；两步操作的最大风险是「第一步成功、第二步失败」——
+   *   那时清单里确实会多一条旧条目，但它是完整可用的一条，不是数据损坏，
+   *   而且会被下面的 warn 明确说出来，用户可以再点一次删除。
    */
-  async function addModelViaHost(input: AiModelInput): Promise<void> {
+  async function addModelViaHost(input: AiModelInput, opts?: { replaceId?: string }): Promise<void> {
     try {
       const r = await aiAddModel(input);
+      // 直接用返回体做新清单：网页版（mock）没有持久层，`aiModels()` 每次都从
+      // 内置模板重新造清单 —— 先清空再重拉会把刚添加的那条**冲掉**（下拉里看不到）。
       modelsState = r;
       const refreshed = await loadModels();
-      const head = meterEl?.closest(".ai-panel")?.querySelector(".ai-head");
-      if (head && mockHintEl) void refreshStatus(head as HTMLElement, mockHintEl);
       const entry = refreshed ? refreshed.models.find((m) => m.id === refreshed.active) : null;
       currentModelLabel = entry?.label ?? input.label ?? input.model;
 
       const scoped = r as AiModelsState & { created?: boolean; updated?: boolean; warning?: string };
-      if (scoped.created === false && scoped.updated === true) {
+      const reused = scoped.created === false && scoped.updated === true;
+
+      // 编辑 + 判重没命中 = 真的换了身份 → 收敛掉旧条目。
+      // 判重命中（reused）说明主进程就地更新了同一条，旧 id 根本不存在了。
+      let removedOld = false;
+      if (opts?.replaceId && !reused && refreshed && refreshed.models.some((m) => m.id === opts.replaceId)) {
+        try {
+          const after = await aiRemoveModel(opts.replaceId);
+          if (Array.isArray(after.models)) {
+            modelsState = after;
+            removedOld = after.models.length < refreshed.models.length;
+          }
+        } catch {
+          /* 删不掉就留着，下面会明确告知（数据没坏，只是多一条） */
+        }
+      }
+
+      if (opts?.replaceId) {
+        ok(
+          removedOld
+            ? `已保存修改（原条目已合并为「${currentModelLabel}」）`
+            : reused
+              ? `已更新模型「${currentModelLabel}」`
+              : `已保存为「${currentModelLabel}」，旧条目仍在清单里（可手动删除）`
+        );
+      } else if (reused) {
         ok(`已更新已有模型「${currentModelLabel}」`);
       } else {
         ok(`已添加并切换到「${currentModelLabel}」`);
@@ -1825,22 +2160,246 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       // 加完就不可用的情况（例如没填 key 就添加）也要立刻说清楚。
       // 判定走单点：直接读 r.ready 会让面板又维护一份"什么算可用"的定义。
       if (entry && !canUseNow(entry)) warn(r.message || "模型已添加，但当前还不能发请求");
-      appendOutput("AI", `手动添加模型：${input.provider} / ${input.model}`);
+      appendOutput("AI", `${opts?.replaceId ? "编辑模型" : "手动添加模型"}：${input.provider} / ${input.model}`);
       renderThread();
       updateMeter();
+      // 顶部条刷新必须落在最后：chip 上的模型名/状态、下拉选中项、计数全靠它重画。
+      // 早先这里是死代码（句柄从未赋值），用户必须切窗口才看到新模型 —— 见 refreshHeadNow。
+      await refreshHeadNow();
     } catch (e) {
       warn(`添加模型失败：${(e as Error).message}`);
     }
   }
 
+  /**
+   * 删掉一条模型（走**现有**的 `bwe:ai-remove-model`，不新造通道）。
+   *
+   * 为什么不做成「只在前端隐藏」：主进程已经有这条通道、有单测，也保证了两条硬约束
+   * （不许删到清单为空 / 删当前项时 active 自动落到剩下的第一条）。前端另做一套
+   * "只隐藏"等于让界面和 settings 说的不是同一件事 —— 用户下次启动又看到它回来了。
+   *
+   * 二次确认是必须的：这是**破坏性**操作，而它就在模型下拉旁边，
+   * 误点一次就等于把一条配好的模型（含 key 引用）删掉。
+   */
+  async function removeModelViaHost(entry: AiModelEntry): Promise<void> {
+    const yes = await confirmDialog(
+      `删除模型「${entry.label}」？`,
+      `这条会从模型清单里移除（含它的地址与已保存的 key 引用）。\n`
+      + `如果它是当前使用的模型，会自动切到剩下第一条；最后一条不允许删除。`,
+      "删除",
+      true
+    );
+    if (!yes) return;
+    try {
+      const next = await aiRemoveModel(entry.id);
+      modelsState = next;
+      // 删除后的清单与 active 一律以返回值为准（主进程保证 active 落在存在的 id 上）
+      const left = next.models.find((m) => m.id === next.active) ?? null;
+      currentModelLabel = left?.label ?? "";
+      const gone = !next.models.some((m) => m.id === entry.id);
+      if (gone) ok(`已删除「${entry.label}」`);
+      else warn(next.message || `没有删掉「${entry.label}」（至少保留一条模型）`);
+      if (left && !canUseNow(left)) warn(next.message || `已切到「${left.label}」，但它当前不可用`);
+      appendOutput("AI", `删除模型：${entry.provider} / ${entry.model}`);
+      renderThread();
+      updateMeter();
+      await refreshHeadNow();
+    } catch (e) {
+      error(`删除模型失败：${(e as Error).message}`);
+    }
+  }
+
+  // ---------------- 单轨宿主 / 空闲态 / 行为摘要条（契约 §2 §3，v3 修订） ----------------
+
+  /**
+   * 把「这条内容属于哪一类」写到节点上（`data-ai-kind` + `.ai-act` 标记）。
+   *
+   * 为什么还走 `zoneFor()`：它问的是同一个问题（「这是它做的，还是我说的」），
+   * 单点判定必须只有一份 —— 调用点各自写 `kind === "tool" ? ...` 就是第二份规则。
+   * v3 起它不再**选宿主**（只有一个宿主），而是决定**视觉分档**：
+   *   · user / assistant → 不加标记（.ai-msg 自带气泡样式）
+   *   · 其余（它做的事）→ `.ai-act` + `data-ai-kind`，样式表据此画成
+   *     「日志行」而不是「气泡」，一条时间线里两种密度才分得清。
+   * `agent` 这一档正好就是「它做的」，所以判断仍由 `zoneFor()` 给出，别在这里重写。
+   */
+  function markBlock(kind: AiStreamKind, node: HTMLElement): void {
+    node.dataset.aiKind = kind;
+    if (zoneFor(kind) === "thread") return;
+    node.classList.add("ai-act");
+  }
+
+  /**
+   * 正在流式输出的助手气泡（末尾那个带 `.ai-cursor` 的 `.ai-msg.assistant`）。
+   *
+   * 为什么需要它：单轨之后**顺序就是语义**。流式期间助手气泡在 `send()` 里就建好了
+   * （那时正文还是空的），而工具块/思考块是在那之后才逐个到达的 —— 直接 append 会把
+   * 「它正在做的事」排到自己那句还没说完的话**下面**，读起来像是回答之后又干活。
+   * 所以行为类节点一律插到它前面，气泡永远留在末尾（直到回答说完）。
+   */
+  function liveBubble(): HTMLElement | null {
+    const last = thread.lastElementChild as HTMLElement | null;
+    if (!last) return null;
+    return last.classList.contains("ai-msg") && last.classList.contains("assistant") && last.querySelector(".ai-cursor")
+      ? last
+      : null;
+  }
+
+  /**
+   * 把「它做的事」放到轨道上正确的先后位置。
+   *
+   * 规则：有在流的助手气泡就插到它前面，否则追加到末尾。
+   * 这条规则只有一份，思考块与工具块都走它 —— 两处各写一遍就会出现
+   * 「思考在气泡下面、工具在气泡上面」这种自相矛盾的顺序。
+   */
+  function appendActNode(node: HTMLElement): void {
+    const bubble = liveBubble();
+    if (bubble) thread.insertBefore(node, bubble);
+    else thread.appendChild(node);
+  }
+
+  /** 所有内容**只有一个宿主**（`.ai-thread`）：行为与对话同轨，按发生顺序追加。 */
+  function appendBlock(kind: AiStreamKind, node: HTMLElement): void {
+    markBlock(kind, node);
+    // ⚠ 这里一律追加到末尾，**不做插队**：整树重建时顺序由 `renderThread` 自己排
+    //   （它把工具块排在助手气泡之前），插队反而会打乱重建出来的先后。
+    //   需要「插到尚未说完的回答之前」的只有流式追加路径 —— 见 appendActNode。
+    thread.appendChild(node);
+  }
+
+  /**
+   * 整条轨道里「它做的事」→ 摘要输入。
+   *
+   * 为什么从 DOM 读、而不是从 `turns` 拼：轨道里有**不属于任何回合**的内容 ——
+   * 进行中的思考块、diff 预览、一次性系统提示。只从数据层拼必然漏掉它们，
+   * 漏掉的直接后果是摘要条写着「完成」，而下面明明还红着一条失败的工具块。
+   * 判据与契约 §3 一致：`.ai-tool.failed` = 失败，`.ai-tool.ok` = 成功，两者都没有 = 未回执。
+   *
+   * ⚠ 从 v3 起工具块与消息**同处 thread**，所以这里必须按 `data-ai-kind` 过滤，
+   *   不能像以前那样「扫宿主子节点全是行为块」。`user/assistant` 是「我说的话」，
+   *   不计步数（计入就会把「三步工具」说成「五步」）。
+   */
+  function agentBlocksFromDom(): AiStreamBlock[] {
+    const out: AiStreamBlock[] = [];
+    for (const node of Array.from(thread.children)) {
+      const e = node as HTMLElement;
+      const marked = e.dataset.aiKind as AiStreamKind | undefined;
+      if (marked === "user" || marked === "assistant") continue;
+      if (e.classList.contains("ai-tool")) {
+        const ok = e.classList.contains("failed") ? false : e.classList.contains("ok") ? true : undefined;
+        out.push({ kind: "tool", ok });
+      } else if (e.classList.contains("ai-thinking")) out.push({ kind: "thinking" });
+      else if (e.classList.contains("ai-msg")) out.push({ kind: "system" });
+      else if (e.classList.contains("ai-notice")) out.push({ kind: "notice" });
+      else if (e.classList.contains("ai-note")) out.push({ kind: "note" });
+      else if (e.classList.contains("ai-error")) out.push({ kind: "error" });
+      else if (e.classList.contains("ai-diff")) out.push({ kind: "diff" });
+    }
+    return out;
+  }
+
+  const AGENT_STATE_CN: Record<AgentSummary["state"], string> = {
+    idle: "等待指令",
+    running: "执行中",
+    done: "完成",
+    failed: "有失败"
+  };
+
+  /** 重画 Agent 头（步数 / 失败数 / 状态徽标）。新块出现与每回合结束都要刷。 */
+  function refreshAgentHead(): void {
+    // 没有对话时喂空列表：此时 DOM 里只可能躺着「首屏说明」这类 system 块，
+    // 按块算会得出「完成 / 无工具调用」—— 而用户看到的是一片空白 + 欢迎区，
+    // 头部说"完成"是自相矛盾的。空闲与否由 turns/demoCount 判定（与 .is-idle 同源）。
+    const idlePanel = turns.length === 0 && demoCount === 0;
+    const summary = summarizeAgent(idlePanel ? [] : agentBlocksFromDom(), { busy: !!currentRequest });
+    agentHead.dataset.state = summary.state;
+    // 空闲态只说「等待指令」：这时候「0 步 / 完成」都是废话，还会让人以为它跑过了
+    if (summary.state === "idle") {
+      agentSteps.textContent = "等待指令";
+      agentBadge.hidden = true;
+      agentBadge.textContent = "";
+      return;
+    }
+    const stepText = summary.steps ? `${summary.steps} 步` : "无工具调用";
+    agentSteps.textContent = summary.failed ? `${stepText} · 失败 ${summary.failed}` : stepText;
+    agentBadge.textContent = AGENT_STATE_CN[summary.state];
+    agentBadge.hidden = false;
+  }
+
+  /**
+   * 面板状态同步：`.is-idle` / `.ai-hero` / `[data-busy]` / Agent 头。
+   *
+   * 为什么收在一个函数里：这些状态由**同一批事实**（turns / currentRequest / 轨道内容）
+   * 决定，分散到每个事件分支里各改一处，必然出现「流式结束忘了摘 data-busy」这种漏改。
+   */
+  function syncPanelState(): void {
+    // 空闲 ⇔ 还没有任何对话；演示注入的块也算内容，否则下一次同步就把 hero 塞回来了
+    const idle = turns.length === 0 && demoCount === 0;
+    wrap.classList.toggle("is-idle", idle);
+    if (currentRequest) wrap.dataset.busy = "1";
+    else delete wrap.dataset.busy;
+
+    if (idle) {
+      if (heroEl && !heroEl.isConnected) streams.insertBefore(heroEl, streams.firstChild);
+    } else if (heroEl?.isConnected) {
+      heroEl.remove();
+    }
+    refreshAgentHead();
+  }
+
+  /** 空闲态的欢迎区：标题 + 一句说明 + 三条建议。 */
+  function heroView(): HTMLElement {
+    const box = el("div", { class: "ai-hero" });
+    box.dataset.aiHero = "1";
+    box.appendChild(el("div", { class: "ai-hero-title" }, "BWE AI"));
+    box.appendChild(
+      el(
+        "div",
+        { class: "ai-hero-sub" },
+        "读工程摘要与脚本诊断，**直接改工程内脚本**（改完可 Ctrl+Z 撤销）。"
+        + "引擎源码与工程文件本体它不碰。"
+      )
+    );
+    const rows = el("div", { class: "ai-hero-suggests" });
+    // 建议行点了只**填进输入框**，不直接发：用户通常要先补两个字（哪个对象、哪个脚本），
+    // 直接发出去等于替他决定了问题，还得再撤一遍。
+    const suggestions = [
+      "解释当前脚本错误，给出最小修法",
+      "审一遍当前场景，指出最值得改的 3 处",
+      "帮我加一个跟随玩家的相机脚本"
+    ];
+    for (const s of suggestions) {
+      // 用裸 button 而不是 button() 助手：`.btn` 那套高度/内边距会把建议行的胶囊样式压成
+      // 24px 的小按钮（样式表是按 `.ai-hero-suggest` 独立定义的，不带 .btn）。
+      const b = el("button", { type: "button", class: "ai-hero-suggest", title: "填进输入框（不直接发送）" }, s);
+      b.dataset.aiHeroSuggestion = "1";
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        ta.value = s;
+        ta.focus();
+      });
+      rows.appendChild(b);
+    }
+    box.appendChild(rows);
+    return box;
+  }
+
   // ---------------- 内部渲染 ----------------
 
-
+  /**
+   * 整树重建**唯一**宿主的注释见 `renderThread` 定义处；这里只说明 v3 的变化：
+   * 行为块与消息同处 `.ai-thread`，因此重建一次就够 —— 不再有第二个容器要清空，
+   * 也就不会出现「一处清了、另一处忘了清」导致的重影。
+   *
+   * 为什么仍然整树重建（而不是增量）：切会话 / 重试 / 错误回填都是"数据整体变了"，
+   * 增量要维护一堆对应关系，而这里只有几十个节点，重建代价可以忽略。
+   * 流式增量走 appendDelta（只改最后一个气泡的文字），不经过这里。
+   */
   function renderThread(): void {
     thread.replaceChildren();
 
     if (!turns.length) {
-      thread.appendChild(
+      appendBlock(
+        "system",
         el(
           "div",
           { class: "ai-msg system" },
@@ -1854,7 +2413,7 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       if (t.role === "user") {
         // 用户消息为空就不渲染（防御：上游 trim 过就不该出现空节点）
         if (!String(t.text ?? "").trim()) continue;
-        thread.appendChild(el("div", { class: "ai-msg user" }, t.text));
+        appendBlock("user", el("div", { class: "ai-msg user" }, t.text));
         continue;
       }
 
@@ -1870,29 +2429,44 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       const hasNote = Boolean(t.note);
       if (!hasText && !hasTools && !hasError && !hasNotices && !hasNote && !t.streaming) continue;
 
+      // 顺序 = 时间线（v3 单轨之后这一条才有意义）：
+      //   工具调用 → 回答正文 → 「为什么没交付」的提示 → 无产出说明 → 错误。
+      // 为什么工具块在气泡**之前**：它发生在回答之前，是回答的依据。
+      // v2 两宿主时这段顺序看不出对错（分在两个容器里），照抄旧顺序会得到
+      // 「先看到结论、才看到它查了什么」，用户会以为是两轮。
+      for (const tool of t.tools) {
+        const blk = toolBlock(tool);
+        // 重建时也写 key：start 与 end 之间若发生过一次重绘，appendToolBlock 才认得出旧块，
+        // 不会在轨道里多挂一条同名块（原来只在流式追加路径写 key）。
+        blk.dataset.aiToolKey = toolKeyOf({ callId: tool.callId, name: tool.name });
+        appendBlock("tool", blk);
+      }
       if (hasText || t.streaming) {
         const bubble = el("div", { class: "ai-msg assistant" });
         bubble.appendChild(el("span", { class: "ai-text" }, t.text));
         if (t.streaming) bubble.appendChild(el("span", { class: "ai-cursor" }));
-        thread.appendChild(bubble);
+        appendBlock("assistant", bubble);
       }
-      for (const tool of t.tools) thread.appendChild(toolBlock(tool));
       // **「为什么可能没交付」的提示条放在助手内容下方**（不是上方）：
       // 用户先读回答本身，再读「这段回答为什么不完整」的解释，
       // 顺序反过来会让人以为整轮都失败了。
-      if (hasNotices) for (const n of t.notices!) thread.appendChild(answerNoticeBlock(n));
+      if (hasNotices) for (const n of t.notices!) appendBlock("notice", answerNoticeBlock(n));
       // 一条泛化的系统说明（正文为空且没有结构化提示时才产生，见 done 分支）。
       // 带「重试」：这时用户的唯一出口就是重发上一句（正文为空，没有可读的东西）。
-      if (hasNote) thread.appendChild(noteBlock(t.note!, () => retryLastUserMessage()));
+      if (hasNote) appendBlock("note", noteBlock(t.note!, () => retryLastUserMessage()));
       // 错误用**独立的结构化气泡**（人话在上、技术详情折叠、request_id 可复制）
-      if (t.error) thread.appendChild(errorBubble(t.error, t.errorRaw, t.recoverable));
+      if (t.error) appendBlock("error", errorBubble(t.error, t.errorRaw, t.recoverable));
     }
 
-    // diff 预览追加在对话之后，跟随最新一次编辑
-    if (pendingEdit) thread.appendChild(diffCard(pendingEdit));
+    // diff 预览追加在轨道末尾（跟随最新一次编辑；它不归属于任何回合）
+    if (pendingEdit) appendBlock("diff", diffCard(pendingEdit));
 
     const last = liveAssistantTurn();
-    if (last && last.streaming) thread.scrollTop = thread.scrollHeight;
+    if (last && last.streaming) {
+      // 单轨只有一个滚动容器：滚到底就同时让最新消息与最新工具块可见
+      thread.scrollTop = thread.scrollHeight;
+    }
+    syncPanelState();
   }
 
   /** 流式增量：只改最后一个气泡的文字，不整树重建（否则每 40ms 闪一次）。 */
@@ -1943,20 +2517,29 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     //   这正是用户截图里"两个 SceneDigest 空块"的成因之一（另一个是 start 块本身没内容）。
     //   没有 callId 时（老契约）退回 name+序号，至少不会重复建块。
     const key = tool.callId ? `id:${tool.callId}` : `nm:${tool.name}`;
+    // ⚠ 查存范围是整条轨道（v3 起工具块与消息同处 `.ai-thread`）：
+    //   查 `thread` 而不是某个"行为区"，是因为**只有一个宿主**了 ——
+    //   若还按老代码查一个不存在的容器，会退化成"每次事件都新建一条"。
     const existing = thread.querySelector(`[data-ai-tool-key="${CSS.escape(key)}"]`) as HTMLElement | null;
     if (existing) {
       // 原地替换成最新状态（保留展开状态由新块自己决定：失败默认展开）
       const wasOpen = (existing.querySelector(".body") as HTMLElement | null)?.style.display !== "none";
       const fresh = toolBlock(tool);
       fresh.dataset.aiToolKey = key;
+      markBlock("tool", fresh);
       if (wasOpen) (fresh.querySelector(".body") as HTMLElement | null)!.style.display = "";
       existing.replaceWith(fresh);
     } else {
       const blk = toolBlock(tool);
       blk.dataset.aiToolKey = key;
-      thread.appendChild(blk);
+      // 走 appendActNode（不是直接 append）：流式期间末尾是那句还没说完的回答，
+      // 工具块必须排在它上面，否则「先看到结论、再看到它查了什么」。
+      markBlock("tool", blk);
+      appendActNode(blk);
     }
     thread.scrollTop = thread.scrollHeight;
+    // 新块出现 = 摘要条那句「N 步 / 失败 N」可能变了（契约 §3：新块出现后刷新）
+    refreshAgentHead();
   }
 
   /**
@@ -2125,10 +2708,58 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     return box;
   }
 
-  /** 把系统提示条追加到对话区末尾（一次性用途；要跨重绘留存请写 `turn.note`）。 */
+  /** 把系统提示条追加到轨道末尾（一次性用途；要跨重绘留存请写 `turn.note`）。 */
   function appendSystemNote(text: string, retryLast?: () => void): void {
-    thread.appendChild(noteBlock(text, retryLast));
+    const box = noteBlock(text, retryLast);
+    // 走 markBlock + appendActNode：它属于「它做的事」那一档，
+    // 且流式期间要排在还没说完的回答**之前**（见 appendActNode 的理由）。
+    markBlock("note", box);
+    appendActNode(box);
     thread.scrollTop = thread.scrollHeight;
+    refreshAgentHead();
+  }
+
+  /**
+   * 验收出口（`__BWE__.debugAiStream` 的面板侧实现）：灌 n 条假工具调用 + 一问一答。
+   *
+   * 为什么只拼 DOM 不发请求：这条出口唯一的用途是量「工具块一多会不会被压成一条缝」，
+   * 而这个形状只由「块的数量 + 布局」决定。走真模型既要 key、又得等半分钟，
+   * 还会污染真实对话，反而证明不了布局。
+   *
+   * ⚠ 面板已卸载（切到别的标签、AI 栏收起）时必须直接返回：
+   *   往一个已经离树的 DOM 里灌 12 个块，然后验收量到 0 —— 是最难查的一类假失败。
+   */
+  function injectDemoTools(n: number): void {
+    if (!wrap.isConnected) return;
+    const count = Math.max(0, Math.min(200, Math.floor(n)));
+    // 第一件事就登记「这一幕里有内容」：否则紧随其后的 syncPanelState 会按
+    // turns 还是空把 is-idle 加回去、把 hero 塞回来，工具块被 CSS 一起隐藏。
+    demoCount = Math.max(demoCount, 1);
+    // ⚠ 顺序在 v3 里**变成有意义的**了：行为和消息同处一条轨道，
+    //   所以必须照真实回合的先后铺 —— 先我问、再它调工具、最后它回答。
+    //   （v2 两宿主时谁先谁后看不出来，照抄旧顺序会得到「工具在提问上方」的错序。）
+    appendBlock("user", el("div", { class: "ai-msg user" }, "（演示）审一遍当前场景"));
+    for (let i = 1; i <= count; i++) {
+      appendToolBlock({
+        name: "SceneDigest",
+        detail: `演示调用 #${i}：32 行 / 1.2K 字符`,
+        callId: `demo-${i}`,
+        ms: 12,
+        ok: true
+      });
+    }
+    appendBlock(
+      "assistant",
+      el(
+        "div",
+        { class: "ai-msg assistant" },
+        el("span", { class: "ai-text" }, `（演示）已跑完 ${count} 个工具调用，每块都该保持可读高度。`)
+      )
+    );
+    // 单轨只有一个滚动容器：滚到底，验收要量的是「块都在、且都看得见」，
+    // 卷在顶部会量到 0 高度（这是最早那轮假失败的直接原因）。
+    thread.scrollTop = thread.scrollHeight;
+    syncPanelState();
   }
 
   /** 重发上一条用户消息（用于「重试」按钮）。 */
@@ -2262,6 +2893,9 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
       sendBtn.disabled = false;
     }
     stopBtn.style.display = "none";
+    // 忙碌态 / 头部状态也一并同步：`currentRequest` 的每次变化都会走到用量条重画，
+    // 把「谁决定面板状态」收在这条必经路径上，少一个分支就少一次漏改。
+    syncPanelState();
   }
 
   /**
@@ -2306,7 +2940,12 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
     renderThinking,
     appendSystemNote,
     retryLastUserMessage,
-    runAction: (intent) => void send(intent)
+    injectDemoTools,
+    runAction: (intent) => void send(intent),
+    // page 布局才有的常驻历史：一轮结束按需局部刷新（dock 下 sessionSidebar 恒为 null）
+    refreshSessions: () => {
+      void sessionSidebar?.refresh();
+    }
   };
 
   void refreshStatus(headBar, mockHint);
@@ -2316,9 +2955,12 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
   // 首次挂载且还没有任何对话时，主动播一条系统提示：
   // 用户（和验收截图）需要立刻看到"这个面板在工作、当前是哪种模式"，
   // 而不是一个空白区等别人输字。
+  // 它是 system 类内容，按唯一规则进 `.ai-thread`（带 `.ai-act` 标记，画成日志行；
+  // 不画成用户气泡 —— 那不是"我说的话"）。
   if (turns.length === 0 && !greeterShown) {
     greeterShown = true;
-    thread.appendChild(
+    appendBlock(
+      "system",
       el(
         "div",
         { class: "ai-msg system" },
@@ -2327,6 +2969,7 @@ function replaceThreadFromMessages(messages: ChatTurn[]): void {
         + "这里会变成真流式对话，底部条会显示真实缓存命中率与 token。"
       )
     );
+    refreshAgentHead();
   }
 
   // 命令面板可能在面板还没打开时点了「AI：解释当前错误」，这里补发
@@ -2531,6 +3174,16 @@ let pendingAction: AiChatRequest["intent"] | null = null;
 let greeterShown = false;
 
 /**
+ * 验收演示灌进去的假块计数。
+ *
+ * 唯一作用是让面板知道「这一幕已经有内容了」：空闲态由 `turns.length` 决定，
+ * 而 `debugAiStream` 按契约只改内存 DOM、不写 turns —— 不记这个计数，
+ * 下一次状态同步就会按"还没有对话"把 `.is-idle` 加回去，把整条轨道连同刚灌进去的
+ * 工具块一起隐藏（表现为「debugAiStream 之后量到 0 条」）。
+ */
+let demoCount = 0;
+
+/**
  * 模型清单（来自 host 门面，网页版退化成 mock 两条）。
  *
  * 为什么缓存在模块级而不是每次渲染都拉：面板会因为数据变化反复重渲染，
@@ -2543,12 +3196,24 @@ let keyDialogFor: AiModelEntry | null = null;
 let importPreview: { ok: boolean; providers: AiModelEntry[]; warnings: string[] } | null = null;
 /** 导入弹窗是否打开 */
 let modelDialogOpen = false;
-/** 当前模型的显示名（用量条用 label 而不是 id） */
+/** 当前模型标签 */
 let currentModelLabel = "";
-/** 顶部 mock 提示元素引用（模型切换后重画状态条要用） */
+/**
+ * 顶部状态条的两个 DOM 句柄（**必须由 `renderAiPanel` 在挂载时赋值**）。
+ *
+ * 这里曾经只有一个 `mockHintEl` 且**从未被赋值**，于是「保存 key / 切模型 / 添加模型 /
+ * 探测完成」四处刷新全成了死代码 —— 用户看到的现象是「配好 provider 后顶部模型条不变，
+ * 必须切窗口或切标签才更新」（切标签会重挂面板，重挂才会重新拉状态）。
+ * 所以句柄在这里集中声明、在挂载处集中赋值，刷新走 `refreshHeadNow()` 一处分发：
+ * 四处相同的查找代码正是这个 bug 的成因，收敛成一个函数才不会再有第五处漏掉。
+ *
+ * 为什么不复用「`meterEl.closest(".ai-panel")` 现查」的写法：面板重挂后旧句柄会失效，
+ * 而现查写法要求调用点自己记得先找到面板 —— 四个调用点、四份查找，漏一个就静默失效。
+ * 现在挂载时赋值、重挂时覆盖，`refreshHeadNow()` 只在句柄还在文档里时才动手。
+ */
 let mockHintEl: HTMLElement | null = null;
-/** 用量条 DOM（模块层回调要用） */
-let meterEl: HTMLElement | null = null;
+/** 顶部状态条（`.ai-head`）自家句柄：模型 chip / 下拉 / 计数都画在它里面 */
+let headBarEl: HTMLElement | null = null;
 /** 「测试连接」结果区宿主（挂载时赋值） */
 let probeHostEl: HTMLElement | null = null;
 
@@ -2578,6 +3243,8 @@ export async function resetAiConversation(): Promise<void> {
   lastCacheHit = 0;
   lastSavedUsd = 0;
   lastModel = "";
+  // 演示注入的假块也要一起清：重置对话之后回到空闲态才说得过去
+  demoCount = 0;
   await aiReset();
   hooks?.renderThread();
   hooks?.updateMeter();
@@ -2663,6 +3330,19 @@ export function demoModelsState(): AiModelsState {
 export function demoThinking(phase: "connecting" | "reasoning" | "answering" | "slow", chars = 0): void {
   freezeThinkingForDemo(phase, chars);
   hooks?.renderThinking?.();
+}
+
+/**
+ * 验收出口：往当前面板灌 n 条假工具调用 + 一问一答（`__BWE__.debugAiStream(n)` 的落点）。
+ *
+ * 为什么走面板内部实现（`hooks.injectDemoTools`）而不是在这里自己拼 DOM：
+ * 工具块的外观只有 `toolBlock()` 一份实现，而验收要量的正是**那份实现**在块多时的几何。
+ * 另拼一套看着像、但高度/内边距不同的块，测出来的结论对真实界面无效 —— 那是拿替身做验收。
+ *
+ * 面板没挂载（AI 栏收起 / 切到知识库标签）时安全返回：不抛错、不往离树的 DOM 里写。
+ */
+export function injectDemoToolCalls(n: number): void {
+  hooks?.injectDemoTools?.(n);
 }
 
 /**
@@ -2763,6 +3443,21 @@ export function demoServerError(raw?: string): void {
  * 普通环境复现不了；而这是**安全告知**，必须有图自证它会显示、且可关闭。
  */
 /**
+ * 重挂当前面板，**沿用当前布局**。
+ *
+ * 为什么 demo 出口不能直接 `renderAiPanel(host, ...)`：缺省布局是 dock，
+ * 于是在 AI 界面（page）里点一个 demo 触发器，历史栏会静默消失、面板变回单列 ——
+ * 演示脚本看到的几何就不再是用户看到的那一份。
+ */
+function rerenderPanelKeepLayout(): void {
+  const cur = document.querySelector(".ai-panel") as HTMLElement | null;
+  const host = cur?.parentElement as HTMLElement | null;
+  if (!host) return;
+  const layout: AiPanelLayout = cur?.dataset.aiLayout === "page" ? "page" : "dock";
+  renderAiPanel(host, requestRepaint, { layout });
+}
+
+/**
  * 验收出口：「明文降级」文案（key 曾经加密、因解不开才降级成明文）。
  *
  * 与 `demoInsecure` 的差别只在**措辞**：
@@ -2783,8 +3478,7 @@ export function demoPlaintextFallback(): void {
   statusLoaded = true;
   statusPinnedForDemo = true;
   sessionStorage.removeItem("bwe.ai.insecureDismissed");
-  const panelHost = document.querySelector(".ai-panel")?.parentElement as HTMLElement | null;
-  if (panelHost) renderAiPanel(panelHost, requestRepaint);
+  rerenderPanelKeepLayout();
   console.log("[demo] 已注入明文降级状态");
 }
 
@@ -2801,8 +3495,7 @@ export function demoInsecure(): void {
   statusPinnedForDemo = true;
   // 清掉"已关闭"标记，保证截图时能看到提示条
   sessionStorage.removeItem("bwe.ai.insecureDismissed");
-  const panelHost = document.querySelector(".ai-panel")?.parentElement as HTMLElement | null;
-  if (panelHost) renderAiPanel(panelHost, requestRepaint);
+  rerenderPanelKeepLayout();
   console.log("[demo] 已注入明文存储状态");
 }
 
@@ -2859,8 +3552,7 @@ export function demoKeyBroken(): void {
   // 顶部条要重画才能反映新状态（demo 是在面板已渲染后点触发的）。
   // 用已有的重画出口：`refreshStatus` 是闭包内的，靠 hooks 通知不到，
   // 所以直接重建整个面板（demo 场景下代价可以忽略）。
-  const panelHost = document.querySelector(".ai-panel")?.parentElement as HTMLElement | null;
-  if (panelHost) renderAiPanel(panelHost, requestRepaint);
+  rerenderPanelKeepLayout();
   console.log("[demo] 已注入 Key 失效模型");
 }
 

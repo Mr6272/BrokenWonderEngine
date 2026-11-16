@@ -1,0 +1,474 @@
+{
+  "startedAt": "2026-11-12T11:40:06.319Z",
+  "userData": "D:\\githubdesktop\\BrokenWonderEngine\\.tmp_ipc2\\ud",
+  "cryptoAvailable": true,
+  "channels": {
+    "bwe:ai-import-trae": {
+      "ok": true,
+      "providers": [
+        {
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "models": [
+            {
+              "id": "siliconflow::moonshotai/Kimi-K2-Thinking",
+              "label": "moonshotai/Kimi-K2-Thinking",
+              "model": "moonshotai/Kimi-K2-Thinking",
+              "contextWindow": 0,
+              "modelType": "chat_model",
+              "traeModelId": "7443714"
+            },
+            {
+              "id": "siliconflow::moonshotai/Kimi-K2-Thinking-Turbo",
+              "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+              "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+              "contextWindow": 0,
+              "modelType": "chat_model",
+              "traeModelId": "6307074"
+            }
+          ],
+          "hasKey": false,
+          "needsKey": true,
+          "reachable": true,
+          "note": "Trae 的 API Key 是设备绑定的，无法导出；请手动填写",
+          "reachableStatus": 401,
+          "reachableMethod": "GET",
+          "reachableDetail": "需要 API Key（HTTP 401）"
+        }
+      ],
+      "warnings": [],
+      "dbPath": "C:\\Users\\nihao\\AppData\\Roaming\\Trae CN\\User\\globalStorage\\state.vscdb",
+      "totalEntries": 46,
+      "uniqueModels": 2,
+      "importedEntries": [
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+          "label": "moonshotai/Kimi-K2-Thinking",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking",
+          "isNew": true,
+          "reachable": true,
+          "reachableStatus": 401,
+          "reachableDetail": "需要 API Key（HTTP 401）",
+          "reachableMethod": "GET"
+        },
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+          "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "isNew": true,
+          "reachable": true,
+          "reachableStatus": 401,
+          "reachableDetail": "需要 API Key（HTTP 401）",
+          "reachableMethod": "GET"
+        }
+      ]
+    },
+    "bwe:ai-models": {
+      "ok": true,
+      "models": [
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+          "label": "moonshotai/Kimi-K2-Thinking",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        },
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+          "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        }
+      ],
+      "active": "trae:siliconflow-moonshotai-kimi-k2-thinking"
+    },
+    "bwe:ai-set-model": {
+      "ok": true,
+      "models": [
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+          "label": "moonshotai/Kimi-K2-Thinking",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        },
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+          "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        }
+      ],
+      "active": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+      "message": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key",
+      "ready": false
+    },
+    "bwe:ai-add-model": {
+      "ok": true,
+      "models": [
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+          "label": "moonshotai/Kimi-K2-Thinking",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        },
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+          "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        },
+        {
+          "id": "manual:deepseek:deepseek-v4-flash",
+          "label": "DeepSeek 官方 Flash",
+          "provider": "deepseek",
+          "baseUrl": "https://api.deepseek.com",
+          "model": "deepseek-v4-flash",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "manual",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "模型「DeepSeek 官方 Flash」没有配置 API Key"
+        }
+      ],
+      "active": "manual:deepseek:deepseek-v4-flash",
+      "message": "模型「DeepSeek 官方 Flash」没有配置 API Key",
+      "ready": false,
+      "id": "manual:deepseek:deepseek-v4-flash",
+      "created": true,
+      "updated": false
+    },
+    "bwe:ai-add-model:dup": {
+      "ok": true,
+      "models": [
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+          "label": "moonshotai/Kimi-K2-Thinking",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        },
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+          "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        },
+        {
+          "id": "manual:deepseek:deepseek-v4-flash",
+          "label": "DeepSeek 官方 Flash（改名）",
+          "provider": "deepseek",
+          "baseUrl": "https://api.deepseek.com",
+          "model": "deepseek-v4-flash",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "manual",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "模型「DeepSeek 官方 Flash（改名）」没有配置 API Key"
+        }
+      ],
+      "active": "manual:deepseek:deepseek-v4-flash",
+      "message": "模型「DeepSeek 官方 Flash（改名）」没有配置 API Key",
+      "ready": false,
+      "id": "manual:deepseek:deepseek-v4-flash",
+      "created": false,
+      "updated": true
+    },
+    "bwe:ai-set-model:withkey": {
+      "ok": true,
+      "models": [
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+          "label": "moonshotai/Kimi-K2-Thinking",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking",
+          "ready": true,
+          "needsKey": true,
+          "needsKeyMissing": false,
+          "keyUndecryptable": false,
+          "hasApiKey": true,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": ""
+        },
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+          "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        },
+        {
+          "id": "manual:deepseek:deepseek-v4-flash",
+          "label": "DeepSeek 官方 Flash（改名）",
+          "provider": "deepseek",
+          "baseUrl": "https://api.deepseek.com",
+          "model": "deepseek-v4-flash",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "manual",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "模型「DeepSeek 官方 Flash（改名）」没有配置 API Key"
+        }
+      ],
+      "active": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+      "message": "已切换到「moonshotai/Kimi-K2-Thinking」",
+      "ready": true
+    },
+    "bwe:ai-status": {
+      "provider": "siliconflow",
+      "intendedProvider": "siliconflow",
+      "ready": true,
+      "mode": "desktop",
+      "message": "moonshotai/Kimi-K2-Thinking（siliconflow）已就绪 · 模型 moonshotai/Kimi-K2-Thinking",
+      "models": {
+        "flash": "moonshotai/Kimi-K2-Thinking",
+        "pro": "moonshotai/Kimi-K2-Thinking-Turbo"
+      },
+      "activeModelId": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+      "activeModel": {
+        "id": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+        "label": "moonshotai/Kimi-K2-Thinking",
+        "provider": "siliconflow",
+        "model": "moonshotai/Kimi-K2-Thinking",
+        "ready": true,
+        "needsKey": true
+      },
+      "modelList": [
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking",
+          "label": "moonshotai/Kimi-K2-Thinking",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking",
+          "ready": true,
+          "needsKey": true,
+          "needsKeyMissing": false,
+          "keyUndecryptable": false,
+          "hasApiKey": true,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": ""
+        },
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+          "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        },
+        {
+          "id": "manual:deepseek:deepseek-v4-flash",
+          "label": "DeepSeek 官方 Flash（改名）",
+          "provider": "deepseek",
+          "baseUrl": "https://api.deepseek.com",
+          "model": "deepseek-v4-flash",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "manual",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "模型「DeepSeek 官方 Flash（改名）」没有配置 API Key"
+        }
+      ],
+      "usage": {
+        "cacheHitRate": 0,
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "outputTokens": 0
+      },
+      "storage": {
+        "dir": "D:\\githubdesktop\\BrokenWonderEngine\\.tmp_ipc2\\ud\\sessions\\1272162f0993\\conversations\\c_mwdh7fya_u93qxj",
+        "promptVersion": "bwe-prompt-v2",
+        "messages": 0
+      },
+      "activeSession": "c_mwdh7fya_u93qxj",
+      "sessionCount": 1,
+      "insecure": false,
+      "keyUndecryptable": false,
+      "keyUndecryptableEntries": [],
+      "keyUndecryptableCount": 0,
+      "keyPlaintextFallback": false
+    },
+    "bwe:ai-remove-model": {
+      "ok": true,
+      "models": [
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+          "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        },
+        {
+          "id": "manual:deepseek:deepseek-v4-flash",
+          "label": "DeepSeek 官方 Flash（改名）",
+          "provider": "deepseek",
+          "baseUrl": "https://api.deepseek.com",
+          "model": "deepseek-v4-flash",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "manual",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "模型「DeepSeek 官方 Flash（改名）」没有配置 API Key"
+        }
+      ],
+      "active": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+      "message": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key",
+      "ready": false,
+      "removed": "trae:siliconflow-moonshotai-kimi-k2-thinking"
+    },
+    "bwe:ai-remove-model:last": {
+      "ok": false,
+      "error": "至少要保留一个模型（删完就没有可用的了，先添加新的再删这条）",
+      "models": [
+        {
+          "id": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo",
+          "label": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "provider": "siliconflow",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "model": "moonshotai/Kimi-K2-Thinking-Turbo",
+          "ready": false,
+          "needsKey": true,
+          "needsKeyMissing": true,
+          "keyUndecryptable": false,
+          "hasApiKey": false,
+          "source": "trae-import",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "reason": "这个模型来自 Trae 导入，但 Trae 的 API Key 是设备绑定的、无法导出，请手动填 Key"
+        }
+      ],
+      "active": "trae:siliconflow-moonshotai-kimi-k2-thinking-turbo"
+    }
+  },
+  "plaintextKeyLeaks": []
+}

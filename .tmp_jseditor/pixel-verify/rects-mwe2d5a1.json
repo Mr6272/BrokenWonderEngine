@@ -1,0 +1,66 @@
+{
+  "picks": [
+    {
+      "cls": "tk-comment",
+      "text": "// 注释行：这一整行都是 commen",
+      "color": "rgb(106, 103, 94)",
+      "x": 372,
+      "y": 123,
+      "w": 216,
+      "h": 14
+    },
+    {
+      "cls": "tk-string",
+      "text": "'hello'",
+      "color": "rgb(55, 97, 61)",
+      "x": 449,
+      "y": 142,
+      "w": 49,
+      "h": 14
+    },
+    {
+      "cls": "tk-keyword",
+      "text": "var",
+      "color": "rgb(95, 60, 138)",
+      "x": 372,
+      "y": 142,
+      "w": 21,
+      "h": 14
+    },
+    {
+      "cls": "tk-bwe",
+      "text": "bwe",
+      "color": "rgb(125, 87, 48)",
+      "x": 386,
+      "y": 256,
+      "w": 21,
+      "h": 14
+    },
+    {
+      "cls": "tk-global",
+      "text": "Math",
+      "color": "rgb(42, 92, 128)",
+      "x": 478,
+      "y": 218,
+      "w": 28,
+      "h": 14
+    },
+    {
+      "cls": "tk-number",
+      "text": "42",
+      "color": "rgb(168, 69, 14)",
+      "x": 456,
+      "y": 180,
+      "w": 14,
+      "h": 14
+    }
+  ],
+  "code": {
+    "x": 329,
+    "y": 112,
+    "w": 959,
+    "h": 600
+  },
+  "missing": [],
+  "snippetLines": 15
+}

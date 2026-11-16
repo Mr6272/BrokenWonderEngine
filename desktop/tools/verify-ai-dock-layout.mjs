@@ -53,7 +53,8 @@ function check(cond, name, detail) {
  * 的产物、只打在控制台不落盘。想断言「与辅助栏同高」这类几何事实，
  * 直接用 e2e 脚本量最可靠（也就不用依赖日志文本解析）。
  */
-const MEASURE_SCRIPT = `(() => {
+const MEASURE_SCRIPT = `(async () => {
+  const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   const rect = (sel) => {
     const el = document.querySelector(sel);
     if (!el) return null;
@@ -62,7 +63,30 @@ const MEASURE_SCRIPT = `(() => {
   };
   const dock = document.querySelector(".ai-dock");
   const de = document.documentElement;
+
+  /**
+   * 启动态先取证：二轮改动把 AI 栏改成**默认收起**（AI 是独立工作面，不是常驻侧栏）。
+   * 这里先记下"启动第一眼"的样子，再由脚本自己展开去量右侧栏形态 ——
+   * 没有这一步，后面的断言会在一个宽度为 0 的栏上量出全部红。
+   */
+  const boot = {
+    dock: rect(".ai-dock"),
+    collapsed: Boolean(dock && dock.classList.contains("collapsed")),
+    hasAiPanel: Boolean(document.querySelector(".ai-panel")),
+    editorArea: rect(".editor-area")
+  };
+
+  // 展开右侧栏（等价于点活动栏之外的那个入口；用 editor 的公开方法，避免依赖按钮在折叠态里可见）
+  const ed = window.__BWE__ && window.__BWE__.editor;
+  if (ed && typeof ed.toggleAiPanel === "function" && boot.collapsed) {
+    ed.toggleAiPanel();
+    await frame();
+    await new Promise((r) => setTimeout(r, 80));
+    await frame();
+  }
+
   return {
+    boot,
     rects: {
       aiDock: rect(".ai-dock"),
       aiDockBody: rect(".ai-dock-body"),
@@ -82,7 +106,9 @@ const MEASURE_SCRIPT = `(() => {
     viewport: { width: window.innerWidth, height: window.innerHeight }
   };
 })()`;
-const TOGGLE_SCRIPT = `(() => {
+
+const TOGGLE_SCRIPT = `(async () => {
+  const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   const out = [];
   const read = (tag) => {
     const dock = document.querySelector(".ai-dock");
@@ -97,16 +123,25 @@ const TOGGLE_SCRIPT = `(() => {
       resizerDisplay: resizer ? getComputedStyle(resizer).display : "no-resizer"
     });
   };
+  // 默认收起 → 先展开，才能量到「折叠前」的宽度（见 MEASURE_SCRIPT 里的 boot 注释）
+  const ed = window.__BWE__ && window.__BWE__.editor;
+  if (document.querySelector(".ai-dock.collapsed") && ed && typeof ed.toggleAiPanel === "function") {
+    ed.toggleAiPanel();
+    await frame();
+    await new Promise((r) => setTimeout(r, 80));
+    await frame();
+  }
   read("before");
   const btn = document.querySelector("[data-ai-collapse]");
   if (!btn) { out.push({ tag: "no-button" }); return out; }
   btn.click();
+  await frame();
   read("after-collapse");
   btn.click();
+  await frame();
   read("after-expand");
   return out;
 })()`;
-
 function runElectron({ userDataDir, size, probeDom, e2eScript, e2eOut }) {
   return new Promise((resolvePromise) => {
     const env = { ...process.env };
@@ -166,6 +201,21 @@ async function main() {
     const sk = JSON.parse(readFileSync(outJson, "utf8"));
     const r = sk.rects ?? {};
     const st = sk.aiDockStructure ?? {};
+
+    // ---- 启动态：二轮约定「AI 栏默认收起」，启动第一眼不该有那个 460px 小窗 ----
+    const boot = sk.boot ?? {};
+    check(boot.collapsed === true, "★ 启动时 AI 栏默认收起（AI 是独立工作面，不是常驻侧栏）", `collapsed=${boot.collapsed}`);
+    check((boot.dock?.width ?? -1) === 0, "启动时 AI 栏宽度为 0", `宽=${boot.dock?.width}`);
+    check(
+      boot.hasAiPanel === false,
+      "★ 启动时 DOM 里没有 .ai-panel（面板只在进入 AI 界面后才建，不是靠 display:none 藏）",
+      `hasAiPanel=${boot.hasAiPanel}`
+    );
+    check(
+      (boot.editorArea?.width ?? 0) >= 900,
+      "启动时编辑区拿到空出来的整块宽度",
+      `编辑区=${boot.editorArea?.width}`
+    );
 
     check(Boolean(r.aiDock), "AI 栏存在（.ai-dock）", r.aiDock ? `${r.aiDock.width}x${r.aiDock.height} @ x=${r.aiDock.x}` : "null");
     check(st.insideShellMain === true, "AI 栏位于主工作区（.shell-main）内", `parent=${st.parent}`);

@@ -18,7 +18,7 @@ import { createAiBridge } from "./ai/bridge.mjs";
 import { createApiIndex, defaultApiDocsPath } from "./ai/apiIndex.mjs";
 import { importTraeConfig, toModelEntries } from "./ai/trae-import.mjs";
 import { listModels } from "./ai/provider.mjs";
-import { addModel, setActiveModel } from "./ai/modelCatalog.mjs";
+import { addModel, setActiveModel, removeModel } from "./ai/modelCatalog.mjs";
 import { parseTapSeq, runTapSequence } from "./tapSeq.mjs";
 import { probeModelEndpoint, PROBE_TIMEOUT_MS } from "./ai/probe.mjs";
 import { createToolCache } from "./ai/prune.mjs";
@@ -78,6 +78,7 @@ function parseArgs(argv) {
     else if (arg.startsWith("--tap-seq=")) out.tapSeq = stripQuotes(arg.slice("--tap-seq=".length));
     else if (arg.startsWith("--e2e-script=")) out.e2eScript = stripQuotes(arg.slice("--e2e-script=".length));
     else if (arg.startsWith("--e2e-out=")) out.e2eOut = stripQuotes(arg.slice("--e2e-out=".length));
+    else if (arg.startsWith("--e2e-shot=")) out.e2eShot = stripQuotes(arg.slice("--e2e-shot=".length));
     else if (arg === "--e2e-main-ai") out.e2eMainAi = true;
     else if (arg === "--protocol-live") out.protocolLive = true;
     else if (arg.startsWith("--size=")) {
@@ -1305,6 +1306,52 @@ function registerIpc() {
   ipcMain.handle("bwe:ai-add-model", async (_e, payload) => handleAddModel(payload));
 
   /**
+   * 删除一条模型（用户配错了想清掉，或想删掉用不上的供应商）。
+   *
+   * 三条纪律：
+   *   1. **不许删到清单为空**：一条都不剩时 AI 面板会变成"没有可用模型"的死状态，
+   *      用户唯一的自救路径是重新导入/添加 —— 而删之前他通常只是想清一条。
+   *      所以最少保留一条，宁可拒绝并说清楚。
+   *   2. 删的如果是**当前 active**，active 必须跟着落到剩下的第一条：
+   *      否则 settings 里 activeModelId 指向一个已不存在的 id，下一轮对话直接失败
+   *      （provider.mjs 会报"模型不在清单里"）。这和 aiSessions 删除当前会话是同一类坑。
+   *   3. 删完返回完整清单 + 新 active，UI 直接用返回值重画（不自己猜）。
+   */
+  async function handleRemoveModel(payload) {
+    try {
+      const settings = await settingsStore.load();
+      const models = settings.ai?.models ?? [];
+      const target = String(payload?.id ?? "").trim();
+      const result = removeModel(models, target);
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: result.error,
+          models: listModels(settings.ai ?? {}).models,
+          active: settings.ai?.activeModelId ?? ""
+        };
+      }
+      if (!result.models.length) {
+        return {
+          ok: false,
+          error: "至少要保留一个模型（删完就没有可用的了，先添加新的再删这条）",
+          models: listModels(settings.ai ?? {}).models,
+          active: settings.ai?.activeModelId ?? ""
+        };
+      }
+      // 删的是当前项 → active 落到剩下的第一条（不猜"最像原来那条"的，
+      // 清单顺序是稳定排序，第一条最好预期）
+      const prevActive = String(settings.ai?.activeModelId ?? "").trim();
+      const nextActive = prevActive === target ? result.models[0].id : prevActive;
+      await settingsStore.save({ ai: { models: result.models, activeModelId: nextActive } });
+      return { ...(await respondWithModels(nextActive)), removed: target };
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e), models: [], active: "" };
+    }
+  }
+  ipcMain.handle("bwe:ai-remove-model", async (_e, payload) => handleRemoveModel(payload));
+
+  /**
    * 保存后统一回一个「清单 + 当前项」的结构。
    *
    * 抽出来是因为 set-model / add-model 的返回体必须完全一致，
@@ -1437,6 +1484,7 @@ function registerIpc() {
     getModels: handleGetModels,
     setModel: handleSetModel,
     addModel: handleAddModel,
+    removeModel: handleRemoveModel,
     probeModel: handleProbeModel,
     scriptComplete: handleScriptComplete,
     scriptQuickInfo: handleScriptQuickInfo,
@@ -1656,6 +1704,25 @@ async function runIpcProbe(outFile) {
     }
 
     record("bwe:ai-status", await ai.aiStatus());
+
+    // ⑤ 删模型通道的两条硬约束（跑真 handler，不只是纯函数）：
+    //    a. 删一条非 active 的 → 成功，清单少一条；
+    //    b. 删到只剩一条时再删 → 必须 ok:false
+    //       （否则 AI 面板变成"没有可用模型"的死状态，用户再也发不出请求）。
+    const beforeRemove = report.channels["bwe:ai-add-model:dup"]?.models ?? [];
+    if (beforeRemove.length >= 2) {
+      const removedActive = report.channels["bwe:ai-add-model:dup"]?.active;
+      const victim = beforeRemove.find((m) => m.id !== removedActive);
+      if (victim) record("bwe:ai-remove-model", await probeHandlers.removeModel({ id: victim.id }));
+    }
+    const remain = report.channels["bwe:ai-remove-model"]?.models ?? beforeRemove;
+    for (const m of remain.slice(1)) {
+      await probeHandlers.removeModel({ id: m.id });
+    }
+    const lastOne = (report.channels["bwe:ai-remove-model"]?.models ?? remain).slice(0, 1);
+    if (lastOne.length) {
+      record("bwe:ai-remove-model:last", await probeHandlers.removeModel({ id: lastOne[0].id }));
+    }
   } catch (e) {
     record("error", { message: e?.stack || e?.message || String(e) });
   }
@@ -2261,6 +2328,26 @@ async function runShotMode() {
         }
       } else {
         payload = await mainWindow.webContents.executeJavaScript(code, true);
+      }
+      /**
+       * `--e2e-shot=<png>`：端到端脚本跑完后**再截一张图**。
+       *
+       * 为什么需要它：`--e2e-script` 执行完就 `app.exit()`，截图那条路径根本走不到 ——
+       * 于是"脚本改了界面状态"这件事永远拿不到画面。而像素级验收（颜色、错位、重影）
+       * 只能看画面。有了它就能一条命令做「操作 + 取证 + 截图」。
+       * ⚠ 截图前等 400ms：脚本里最后一次 DOM 更新可能还在下一帧的合成里。
+       */
+      if (ARGS.e2eShot) {
+        await new Promise((r) => setTimeout(r, 400));
+        const shotResult = await captureAndJudge({
+          target: ARGS.e2eShot,
+          want: ARGS.size ?? DEFAULT_SHOT_SIZE,
+          strict: false,
+          writeProbe: false,
+          tapSeq: null,
+          errors
+        });
+        console.log(`[e2e] 截图 ${ARGS.e2eShot}（${shotResult.ok ? "OK" : "判定失败"}）`);
       }
       if (ARGS.e2eOut) {
         await writeFile(ARGS.e2eOut, JSON.stringify(payload, null, 2), "utf8");

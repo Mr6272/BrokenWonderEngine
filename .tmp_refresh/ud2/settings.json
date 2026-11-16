@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "ai": {
+    "provider": "mock",
+    "baseUrl": "",
+    "apiKey": "",
+    "modelFlash": "",
+    "modelPro": "",
+    "autoRoute": true,
+    "manualModel": "",
+    "activeModelId": "manual:deepseek:deepseek-chat-uipath",
+    "models": [
+      {
+        "id": "manual:deepseek:deepseek-chat-uipath",
+        "label": "UI路径验证模型",
+        "provider": "deepseek",
+        "baseUrl": "https://api.deepseek.com",
+        "model": "deepseek-chat-uipath",
+        "apiKey": "",
+        "apiKeyRef": "",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "notes": "",
+        "source": "manual",
+        "needsKey": true,
+        "encryptedApiKey": "djEwGec3Jl8VTxoOREIkrwvZu5bIJJLqQWVmVS5Wf5teTaI7QWvY6HuRHqEQnw=="
+      }
+    ],
+    "contextWindow": 128000,
+    "maxTokens": 16384
+  },
+  "editor": {
+    "theme": "cream",
+    "uiScale": 1,
+    "autoSave": true
+  },
+  "insecure": false,
+  "keyUndecryptable": false,
+  "keyUndecryptableEntries": [],
+  "keyPlaintextFallback": false,
+  "encryptedApiKey": ""
+}

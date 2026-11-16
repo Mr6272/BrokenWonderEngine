@@ -14,6 +14,7 @@ import { bootstrapProject, startAutoSave, armStartupGuard } from "./app/project.
 import { createProject } from "./core/model.ts";
 import { store } from "./core/store.ts";
 import { error, info } from "./ui/toast.ts";
+import { allCommands } from "./ui/commands.ts";
 
 function applySavedThemeAndScale(): void {
   try {
@@ -111,13 +112,18 @@ function boot(): void {
     store,
     editor,
     /**
-     * AI 脚本写类工具的落地入口（桌面版主进程经 executeJavaScript 调用）。
+     * AI 写类工具的落地入口（桌面版主进程经 executeJavaScript 调用）。
      *
-     * ⚠ 这条通道是**唯一**允许 AI 改工程脚本的入口，因此它：
-     *   1. 只接受 `editor.runScriptTool` 认识的 5 个工具名（别的名字由那一层返回错误）；
-     *   2. 真正的规则判定在 `core/scriptOps.ts`（纯函数、有单测），这里不做第二套判断
-     *      —— 两套规则必然分叉，表现为「工具说成功、编辑器里却是另一种结果」；
-     *   3. 落地一律走 `editor.applyAiScript`（markDirty + commit 快照 → 可 Ctrl+Z 撤销）。
+     * ⚠ 这条通道是**唯一**允许 AI 改工程的入口，因此它：
+     *   1. **不做工具名白名单**。白名单只有一份 —— `desktop/lib/ai/tools.mjs` 的
+     *      `TOOL_NAMES`。这里再拦一遍就会变成两套清单，加一个工具要改两处，
+     *      漏改的表现是「schema 里有、模型照调、这里静默拒绝」。
+     *      （原来这段注释写着"只接受 5 个工具名"—— 那是加工程类工具之前的事实，
+     *      注释过期比没有注释更坏，它会让人以为能力故意被限住了。）
+     *   2. 真正的规则判定全在 `core/scriptOps.ts` 与 `core/projectOps.ts`（纯函数、有单测），
+     *      这里不做第二套判断 —— 两套规则必然分叉，表现为「工具说成功、编辑器里却是另一种结果」；
+     *   3. 落地一律走 `editor.applyAiScript` / `editor.applyAiProject`
+     *      （markDirty + commit 快照 → AI 的每次改动都可 Ctrl+Z 撤销）。
      * 参数是主进程 JSON 序列化后传进来的，**必须容错**：坏参数要返回错误而不是抛，
      * 否则 executeJavaScript 以 Promise reject 结束，主进程只能看到一个没有上下文的异常。
      */
@@ -173,6 +179,51 @@ function boot(): void {
     },
     /** 打开某个底部面板标签（problems / output / ai） */
     showPanelTab: (id: "problems" | "output" | "ai") => editor.openBottomTab(id),
+    /**
+     * 命令注册表快照（id / 标题 / 分组），验收脚本用来断言"某个命令在不在"。
+     *
+     * 为什么必须导出这个：有些功能的下线只能靠命令 id 断言 ——
+     * 例如「预览」被废掉后，如果它只是从工具栏消失、命令还注册着，
+     * 命令面板里一搜就能调出那个已经不该存在的静态画布弹窗。
+     * 只查按钮文字查不出这种"残留在命令表里"的情况。
+     */
+    commands: () => allCommands().map((c) => ({ id: c.id, title: c.title, group: c.group })),
+    /**
+     * AI 界面（AI 工作面）的三个状态出口。
+     *
+     * 名字是契约（docs/ai-interface.md §3）：`desktop/tools/verify-ai-interface.mjs`
+     * 直接按这三个名字取函数，改名等于让整条验收静默失效（脚本只会拿到 undefined）。
+     */
+    enterAiMode: () => editor.enterAiMode(),
+    exitAiMode: () => editor.exitAiMode(),
+    aiMode: () => editor.aiModeActive(),
+    /**
+     * 往当前 AI 面板灌 n 条**假的**工具调用（+1 条用户消息 +1 条助手消息），只改内存 DOM。
+     *
+     * 用途：验证「工具块一多就被压成一条缝」这条几何契约 —— 真跑 12 次工具调用太慢。
+     * 为什么动态 import 且宽类型取函数：面板层（panels/aiPanel.ts）与外壳并行开发，
+     * 静态 import 会让「面板还没落地」变成构建失败；契约钉的是函数名，不是模块类型。
+     */
+    debugAiStream: (n: number = 12) => {
+      void import("./panels/aiPanel.ts").then((m) => {
+        /**
+         * 面板层与外壳是并行开发的，契约只钉了「灌 n 条假工具调用」这个**行为**，
+         * 没钉函数名。这里按优先级找可实现者，而不是把某一时刻的函数名焊死：
+         * 找不到就打一条 warn（验收脚本会因为工具块数量为 0 而红，不会静默通过）。
+         */
+        const mod = m as unknown as Record<string, unknown>;
+        const candidates = ["injectDemoToolCalls", "injectDemoTools", "debugAiStream"];
+        for (const key of candidates) {
+          const fn = mod[key];
+          if (typeof fn === "function") {
+            (fn as (count: number) => void).call(m, n);
+            console.log(`[AI] 已注入 ${n} 条演示工具调用（${key}）`);
+            return;
+          }
+        }
+        console.warn(`[AI] 面板层未提供演示流入口（候选：${candidates.join(" / ")}），本次跳过注入`);
+      });
+    },
     /**
      * 交互态对照（仅用于验收截图）：把画布工具条的按钮分别套上
      * 常态 / hover / active 三档，让一张截图里能同时看到三档底色与文字可读性。

@@ -5332,3 +5332,575 @@ body .command-palette {
   color: var(--text-3);
   font-size: 10.5px;
 }
+
+/* ==========================================================================
+   AI 界面（AI 工作面）—— 布局几何
+   --------------------------------------------------------------------------
+   契约：docs/ai-interface.md §2（DOM：.ai-streams / .ai-agent / .ai-chat）、
+   §3（状态：.is-idle / data-busy / data-state）、§5（几何与「被挤成一条缝」根因）。
+   本节只写**几何**（谁伸缩、谁滚动、谁退场），颜色与观感在 cream.css 的
+   「AI 界面 —— 视觉层」一节；两节按 CSS 属性分工，选择器互不重叠。
+   ========================================================================== */
+
+/* ---------- 1. 修「工具调用一多就被挤成一条缝」 ----------
+   根因（已确认，不是猜）是三层叠加：
+     ① .ai-thread / .ai-agent-list 是 display:flex + flex-direction:column
+        + overflow:auto；
+     ② flex item 默认 flex-shrink:1 —— 总高一旦超出容器，**每一条都被压**；
+     ③ .ai-panel .ai-tool 带 overflow:hidden：按 flex 规范，item 自身 overflow
+        非 visible 时，min-height:auto 的「内容下限」**解析为 0**，于是连
+        「至少一行文字」这道底线也没了 → 每条压到几像素，肉眼就是一条缝。
+   修法两层，缺一不可（只有 ② 或只有 min-height 都还会在极端条数下失守）：
+     · 子元素一律 flex:0 0 auto —— 不许收缩，超出就让宿主容器自己滚；
+     · 可读下限 min-height:34px ≈ 头部一行（5+5 padding + 行高）+ 上下边框。
+   ⚠ 不要用 overflow:hidden / text-overflow 去「掩盖」：块本身还是几像素高，
+     只是内容看不见了 —— 那是把问题藏起来，不是修好。 */
+.ai-thread > *,
+.ai-agent-list > * {
+  flex: 0 0 auto;
+}
+
+.ai-panel .ai-tool {
+  min-height: 34px;
+}
+
+.ai-panel .ai-msg {
+  flex: 0 0 auto;
+}
+
+/* 行为块（工具 / 思考 / 提示 / 错误 / diff）现在住在 .ai-thread 里。
+   它们自带 `margin: 6px 12px` 与 `align-self:flex-start`，而 .ai-thread 本身
+   已有 `padding: 10px 12px` —— 两者叠加会变成 24px 的悬空缩进，
+   比用户消息还往里缩一截，看着像「这些块属于另一个缩进层级」。
+   所以横向外边距归零，纵向保留（块与块之间要有呼吸）。 */
+.ai-thread > .ai-act {
+  margin-inline: 0;
+}
+
+/* ---------- 2. 单轨容器：摘要条 + 聊天流（v3 起 Agent 行为不再独占一区） ----------
+ *
+ * 曾经的上下两区（.ai-agent 吃剩余高度、.ai-chat 封顶 46%）是照参考图做的，
+ * 实际用起来是「一块大空板挡住半屏，而真正要看的对话被挤到底部」——
+ * 用户明确要求取消。现在只有：
+ *
+ *   .ai-streams > (.ai-hero? 仅空闲) + .ai-chat > (.ai-agent-head 一行摘要 + .ai-thread)
+ *
+ * 行为（工具调用 / 思考 / 提示 / 错误 / diff）全部按时间顺序进 .ai-thread，
+ * 摘要条只留「N 步 · 状态」，一行 22px，不参与滚动。
+ */
+.ai-panel {
+  /* AI 面板里有代码块与长行：不给 min-width:0 会让内容把列顶宽 */
+  min-width: 0;
+  /* 空闲态的 hero + 输入卡比矮栏（右侧栏主体常只有 ~300px）更高时，
+     宁可整块可滚，也不能让它们溢出面板外压住状态栏（实测溢出 ~200px）。 */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.ai-panel .ai-streams {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 0;
+  /* 兜底用纵向 auto 而不是 hidden：AI 界面整屏时两区永远放得下（不会出现滚动条），
+     但右侧固定宽栏只有 ~300px 高时，两区的 min-height 之和可能超过可用高度 ——
+     那时宁可整块可滚，也不能让 overflow:hidden 把 .ai-chat **裁掉**（裁掉 = 对话区消失）。 */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* hero 只在空闲态存在于 DOM；几何上不参与伸缩 */
+.ai-panel .ai-hero {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  text-align: center;
+}
+
+/* Agent 行为区。
+   ⚠ 这里的 flex / min-height 是**右侧固定宽栏（默认态）**的分配：宽栏扣掉头部、标签条、
+   输入卡后主体常只剩 ~150px，120 + 110 的 AI 模式下限在那儿放不下，两个硬下限会
+   互相把对方挤出可视区（实测过：.ai-chat 直接被裁没）。窄栏里用户要看的是**对话**，
+   所以：聊天区吃剩余高度（可滚），Agent 日志封顶 40%（也可滚），两区下限 48 / 72。
+   AI 界面模式（整屏）的分配在下面第 4 节用 `.app-root.ai-mode` 覆盖回 120 / 110。
+   为什么不写 `.app-root:not(.ai-mode)`：编辑器 DOM 里 .app-root 是**嵌套**的
+   （首页骨架一层 + 外壳一层），`:not(.ai-mode)` 作为祖先选择器会在 AI 模式下被外层
+   那个不带 ai-mode 的 .app-root 命中 —— 实测就是这样静默失效的。 */
+.ai-panel .ai-agent-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 22px;
+  white-space: nowrap;
+}
+
+.ai-panel .ai-agent-head > * {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* 步骤计数可能很长：只让它省略，不要把后面的徽标挤出去 */
+.ai-panel .ai-agent-head > .ai-agent-count {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 聊天区（默认态 = 右侧宽栏）：吃剩余高度，自己滚 */
+.ai-panel .ai-chat {
+  flex: 1 1 auto;
+  min-height: 72px;
+  max-height: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.ai-panel .ai-chat > .ai-thread {
+  flex: 1 1 auto;
+  /* 高度交给 .ai-chat 的 min/max-height 说话：这里**不能**再留 96/120 的下限，
+     否则窄窗口下「thread 下限 > chat 上限」会溢出到面板外。
+     左右内边距清零：外层 .ai-streams 已经给了 12px，再加就是 24px 的悬空边。 */
+  min-height: 0;
+  min-width: 0;
+  padding: 2px 2px 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ---------- 3. 空闲态：hero + 输入卡一起在面板中央垂直居中 ----------
+   v3 起 Agent 行为区取消（行为直接进聊天流），所以「空闲隐藏」只需要藏 .ai-chat
+   这一条。`.ai-agent` 已不再创建 —— 留一条死选择器只会让下一个人以为还有那个区。 */
+.ai-panel.is-idle .ai-chat,
+.ai-panel:not(.is-idle) .ai-hero {
+  /* 用 display:none 而不是高度归零：否则内部的滚动容器仍然参与布局，
+     会出现「看不见却还能滚」的状态（键盘 Tab 会跳进去） */
+  display: none;
+}
+
+/* 居中手法：hero 所在的 .ai-streams 用 margin-top:auto、输入卡用
+   margin-bottom:auto —— 把「hero + 输入卡」当成一组推到剩余空间的**正中间**，
+   而顶部的状态条 / 提示条仍留在原位。
+   （用 justify-content:center 会把状态条也一起推到中间，那不是要的效果。）
+   当前主题下没有 margin:auto 的兼容问题，flex 容器内的自动外边距是最稳的居中方式。 */
+.ai-panel.is-idle .ai-streams {
+  flex: 0 0 auto;
+  margin-top: auto;
+  gap: 0;
+  padding-bottom: 14px;
+  overflow: visible;
+}
+
+.ai-panel.is-idle .ai-compose {
+  width: 100%;
+  /* 输入框宽度上限 720px：空态的主角是标题，不是输入框 */
+  max-width: 720px;
+  margin-inline: auto;
+  margin-bottom: auto;
+}
+
+/* ---------- 4. AI 界面模式：其它界面退场，AI 栏铺满主工作区 ----------
+   纪律：**绝不改 .ai-dock 的基础 flex-basis**。非 AI 模式下它必须是右侧固定
+   宽度栏（flex: 0 0 var(--ai-w, 460px)），且 1320 / 1100 两条媒体查询会把
+   --ai-w 收到 380 / 320 —— 这里只用「.app-root.ai-mode」前缀的更高优先组合
+   做增量覆盖（0,3,0 > .ai-dock 的 0,1,0），退出 AI 模式立刻回原样，
+   媒体查询一行都不用动。 */
+.app-root.ai-mode .sidebar-wrap,
+.app-root.ai-mode .sidebar-resizer,
+.app-root.ai-mode .editor-area,
+.app-root.ai-mode .aux-panel,
+.app-root.ai-mode .ai-resizer,
+.app-root.ai-mode .panel,
+.app-root.ai-mode .panel-resizer {
+  display: none;
+}
+
+.app-root.ai-mode .ai-dock {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  border-left: 0;
+}
+
+/* AI 界面里聊天区吃满剩余高度（v3：不再有 Agent 区来分高度）。
+   ⚠ 曾经的 `max-height: 46%` 必须去掉 —— 那是两区时代为了给上面那块留位置；
+   现在 chat 就是全部内容，再封顶就等于把用户抱怨的「挡住空间的空板」
+   换个方向复现（对话自己缩到 46%，剩下半屏空着）。 */
+.app-root.ai-mode .ai-panel .ai-chat {
+  flex: 1 1 auto;
+  min-height: 110px;
+  max-height: none;
+}
+
+/* 摘要条 + 聊天轨是 .ai-chat 的两个子项：摘要条固定，轨道吃剩余并自己滚。 */
+.ai-panel .ai-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.app-root.ai-mode .ai-panel .ai-chat {
+  padding-top: 0;
+}
+
+/* 留白在 AI 界面里收一点（6px）。 */
+.app-root.ai-mode .ai-panel .ai-streams {
+  padding-top: 6px;
+  gap: 6px;
+}
+
+/* 内容列：最大 880px 居中。
+   1280x720 下 1280 − 42(活动栏) − 880 = 358px 两侧留白（各 179px），
+   不会顶出横向滚动：所有子项都 min-width:0 且长内容可换行。 */
+.app-root.ai-mode .ai-panel .ai-streams,
+.app-root.ai-mode .ai-panel .ai-compose {
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+/* 空态再窄一档（720px），比上一条更具体，优先于 880 */
+.app-root.ai-mode .ai-panel.is-idle .ai-compose {
+  max-width: 720px;
+}
+
+/* 头部按钮：AI 模式下「退出 AI 界面」出现、「收起」退场（栏已铺满，无可收起） */
+.ai-dock-head [data-ai-exit] {
+  display: none;
+}
+
+.app-root.ai-mode .ai-dock-head [data-ai-exit] {
+  display: inline-flex;
+}
+
+.app-root.ai-mode .ai-dock-head [data-ai-collapse] {
+  display: none;
+}
+
+/* ---------- 5. 窄窗口：内容列跟窗口一起收，永不横向溢出 ---------- */
+@media (max-width: 1100px) {
+  .app-root.ai-mode .ai-panel .ai-streams,
+  .app-root.ai-mode .ai-panel .ai-compose {
+    max-width: clamp(280px, calc(100% - 16px), 880px);
+  }
+
+  .app-root.ai-mode .ai-panel .ai-streams {
+    padding-inline: 10px;
+  }
+}
+
+/* ==========================================================================
+   AI 界面 v2（二轮）：page 布局 = 左会话历史栏 + 右主区
+   --------------------------------------------------------------------------
+   契约：docs/ai-interface.md §9（DOM 与宽度取值）、§11（参考图读数：左列 16.5%
+   ≈260px、主区内容**铺满**而不是 880 窄居中、底部一条满宽圆角输入卡）。
+
+   ⚠ 本节是**纯追加**：v1 的规则一条都没改、没删，它们各自是一条回归防线 ——
+     · `.ai-thread > * / .ai-agent-list > *` 的 flex:0 0 auto  → 工具块不被压扁
+     · `.ai-panel .ai-tool` 的 min-height:34px                → 可读下限
+     · `.app-root.ai-mode` 那组                               → 进入即铺满
+     · `.ai-panel.is-idle` 那组                               → 空闲态 hero 居中
+
+   作用域纪律：page 布局的一切都用 `.ai-panel[data-ai-layout="page"]` 前缀收窄。
+   理由不是洁癖：page 与 dock 是两套互斥 DOM，却**共用** .ai-panel / .ai-streams /
+   .ai-compose 这些类名 —— 写成裸后代选择器（`.ai-streams { width:100% }`）会把
+   右侧 460px 窄栏一起改掉，而那个形态是 verify-ai-dock-layout 22 项在量的。
+   page 挂在 aiPanel 自己的 data 属性上（`renderAiPanel(..., { layout })`），
+   与「在不在 AI 模式」正交，所以本节的几何**不依赖** .app-root.ai-mode；
+   只有必须压过 cream.css 里的 AI 模式观感时才叠上那个前缀（见 §6 的说明）。
+   ========================================================================== */
+
+/* ---------- 1. 面板外壳：page 下整块不滚，滚动权交给两列各自 ----------
+   v1 给 .ai-panel 写了 overflow-y:auto（右侧窄栏的兜底：hero 比栏高时整块可滚）。
+   page 下必须收回 hidden，否则滚的是整个面板 —— 历史列表和消息区都不会自己滚，
+   输入卡会被顶出可视区（「输入框跑没」这类反馈的典型来源）。 */
+.ai-panel[data-ai-layout="page"] {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 提示条（.ai-mock-hint / .ai-insecure-hint / .ai-keybroken-hint）可能挂在面板根，
+   也可能挂在 .ai-main 里（契约只要求「保持在 streams 之外」）。两处都保证不收缩、
+   不参与分高，否则提示条一多，两列会被压掉。 */
+.ai-panel[data-ai-layout="page"] .ai-mock-hint,
+.ai-panel[data-ai-layout="page"] .ai-insecure-hint,
+.ai-panel[data-ai-layout="page"] .ai-keybroken-hint,
+.ai-panel[data-ai-layout="page"] .ai-probe-host {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* ---------- 2. 两列容器 ---------- */
+.ai-panel[data-ai-layout="page"] .ai-page {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---------- 3. 左：会话历史栏（常驻，自己滚） ----------
+   宽度：默认 260px（参考图 16.5% ≈ 211 CSS px @1280，260 是「标题能读、又不抢主区」
+   的折中）；1400 以下 232、1000 以下 200。折叠态由 `data-collapsed="1"` 归零，
+   见本节末尾。 */
+.ai-panel[data-ai-layout="page"] .ai-history {
+  flex: 0 0 260px;
+  width: 260px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--line-soft);
+  background: var(--surface-2);
+}
+
+/* 栏头 / 栏尾固定，列表自己滚 —— 否则滚到第 30 条时「+ 新建」就没了 */
+.ai-panel[data-ai-layout="page"] .ai-history-head,
+.ai-panel[data-ai-layout="page"] .ai-history-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-head {
+  min-height: 32px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-head > * {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* 标题左、新建按钮右：按钮不给 margin-left:auto 的话会被标题的省略号推着跑 */
+.ai-panel[data-ai-layout="page"] .ai-history-head > [data-ai-session-new] {
+  margin-left: auto;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-foot {
+  min-height: 26px;
+  padding: 0 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  /* 滚动条常驻占位：出现/消失时行宽不跳（和 .ai-agent-list 同一个理由） */
+  scrollbar-gutter: stable;
+}
+
+/* ---------- 4. 会话行 ----------
+   ⚠ 不新造类名（契约 §9 明令）：`.ai-session-row / -main / -title / -sub / -now / -del`
+   与浮层 `.ai-sessions-pop` 完全同一套。浮层那份写在 `.ai-sessions-pop .ai-session-*`，
+   祖先不同 → 两份规则不会互相命中，浮层观感一点不动。
+   行高纪律：≥40px。这里是 min-height（下限），两行文本放不下时可以长高，绝不裁字。 */
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-height: 40px;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 标题独占一行，副标题与「当前」胶囊共用第二行：DOM 里三者是兄弟节点（契约不许改），
+     flex-wrap + title 的 flex-basis:100% 是最省事的两行方案，也不用 grid 铺模板。 */
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  align-items: center;
+  gap: 1px 6px;
+  padding: 5px 4px 5px 10px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main .ai-session-title {
+  flex: 0 0 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main .ai-session-sub {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main .ai-session-now {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* 删除按钮：22×22 的方形热区。默认不占视觉（透明），行 hover / 行内聚焦时才出现 */
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-del {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  align-self: center;
+  margin-right: 4px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* 选中行的左侧 2px 主色条：几何在这里，主色在 cream.css（遵守「颜色只在视觉层」） */
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 999px;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-sessions-empty {
+  padding: 12px 8px;
+}
+
+/* ---------- 5. 右：主区（内容列铺满，不再 880 居中） ----------
+   参考图读数（§11）：主区内容行是**铺满**的（≈630..2490），不是窄居中列。
+   所以 880 收成「1200 上限 + 24px 内边距」：宽屏上仍留一档上限（一行太长不好读），
+   1280 下则是 100% 铺满。
+   优先级说明：v1 的 `.app-root.ai-mode .ai-panel .ai-streams` 是 (0,4,0)、写在前面，
+   本节的 (0,4,0) 在后面 → 覆盖成功；同理压过 ≤1100 那条 clamp(…, 880)。 */
+.ai-panel[data-ai-layout="page"] .ai-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-main .ai-head {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 1200px;
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-main .ai-streams,
+.ai-panel[data-ai-layout="page"] .ai-main .ai-compose {
+  width: 100%;
+  max-width: 1200px;
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
+/* 空态输入卡在 v1 里被单独收到 720（`.app-root.ai-mode .ai-panel.is-idle .ai-compose`
+   是 (0,5,0)，压得住上面的 (0,4,0)）。page 布局的输入卡是**满宽**的（参考图底部那条），
+   所以这里抬到 (0,7,0) 明确取消那一档。 */
+.app-root.ai-mode .ai-panel[data-ai-layout="page"].is-idle .ai-compose {
+  width: 100%;
+  max-width: 1200px;
+  margin-inline: auto;
+}
+
+/* ---------- 6. 可折叠（契约 §9：1000 以下由 data-collapsed 折叠掉） ----------
+   只写样式，切换由 JS 负责（本轮不做按钮）。display:none 而不是宽度归零：
+   折叠后里面的行不该再被 Tab 命中，也不该被读到无障碍树里。
+   两个选择器都写：契约锚点是 `[data-ai-history][data-collapsed="1"]`，
+   但若 JS 只写了 data-collapsed，少一个属性就整条失效 —— 那是静默失败，
+   所以补一条不带 data-ai-history 的等价规则（都能压过上面的媒体查询，0,5,0 > 0,4,0）。 */
+.ai-panel[data-ai-layout="page"] .ai-history[data-ai-history][data-collapsed="1"],
+.ai-panel[data-ai-layout="page"] .ai-history[data-collapsed="1"] {
+  display: none;
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  border-right: 0;
+}
+
+/* ---------- 7. 响应式：1280×720 严禁横向滚动 ----------
+   两种收法：先收历史栏（主区内容优先），再收主区内边距。
+   所有节点都有 min-width:0，且内容列是 width:100% + max-width —— 没有一处是
+   固定宽度大于父容器的，所以不存在「窗口一变窄就横滚」。 */
+@media (max-width: 1400px) {
+  .ai-panel[data-ai-layout="page"] .ai-history {
+    flex: 0 0 232px;
+    width: 232px;
+  }
+}
+
+@media (max-width: 1000px) {
+  .ai-panel[data-ai-layout="page"] .ai-history {
+    flex: 0 0 200px;
+    width: 200px;
+  }
+
+  .ai-panel[data-ai-layout="page"] .ai-main .ai-head,
+  .ai-panel[data-ai-layout="page"] .ai-main .ai-streams,
+  .ai-panel[data-ai-layout="page"] .ai-main .ai-compose {
+    padding-inline: 16px;
+  }
+}
+
+/* 矮窗口（<=640）：纵向每一像素都贵，会话行收到 36px。
+   min-height 仍是下限 —— 两行文本需要更多高度时行会自己长高，不会被裁。 */
+@media (max-height: 640px) {
+  .ai-panel[data-ai-layout="page"] .ai-history-head {
+    min-height: 28px;
+  }
+
+  .ai-panel[data-ai-layout="page"] .ai-history-list {
+    gap: 1px;
+    padding: 4px;
+  }
+
+  .ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row {
+    min-height: 36px;
+  }
+
+  .ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main {
+    padding-block: 3px;
+  }
+}

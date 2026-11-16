@@ -1,0 +1,683 @@
+/* ==========================================================================
+   BWE Studio — JS 编辑器增强 UI（查找替换 / 高亮覆盖层 / 悬浮提示 / 标签页 / 结果列表）
+   --------------------------------------------------------------------------
+   为什么单独一个文件、而不是继续往 app.css 里堆：
+     1. app.css 已经有 5900+ 行，这批 UI 是「JS 模式专属」的、可整体回退的增量，
+        单文件放便于用一行 <link> 摘掉；
+     2. 本文件只使用 app.css 顶部 :root 已定义的令牌，不新增任何主题色 ——
+        奶油（cream.css）、深夜（theme-midnight）、高对比（theme-high-contrast）
+        三套主题换令牌时会自动跟着变，不需要在这里各写一份覆盖。
+     3. 加载顺序：app.css → cream.css → 本文件（见 web/index.html）。
+        本文件放在最后，才能「只读地覆盖」.js-code / .js-source 的少量属性
+        （定位父级、层级），而不去修改 app.css 里已有的规则。
+
+   圆角/字号约定沿用 app.css 的 JS 面板：正文 12px / 行高 19px、辅助文字 11~11.5px、
+   弱化文字 10~10.5px，圆角一律 4~6px（小控件用小圆角，避免界面「泡泡化」）。
+   ========================================================================== */
+
+/* ==========================================================================
+   0. 结构前提：覆盖层与弹层的定位父级
+   --------------------------------------------------------------------------
+   .js-hl（高亮覆盖层）、.js-hover（悬浮提示）、.js-findbar 都是绝对定位，
+   必须有一个 position 不为 static 的父级。.js-code 是这三者共同的容器，
+   所以在这里把它变成定位父级（app.css 里 .js-code 只有 display:flex，
+   没有 position，写在这里比去改 app.css 安全）。
+   ========================================================================== */
+.js-code {
+  position: relative;
+}
+
+/* 编辑器容器：包住 textarea 与覆盖层，是两者「同原点」的唯一保证。
+   --------------------------------------------------------------------------
+   为什么必须有这一层（上一版的真实事故）：覆盖层原先直接挂在 .js-code 上、
+   与 textarea 是**跨行号栏的兄弟**，于是覆盖层的原点是 .js-code 的左上角，
+   而 textarea 的原点还要右移一个行号栏宽度 —— 实测整体偏 39px，
+   而「padding/font-size/line-height 全同」的断言却是绿的（属性相同 ≠ 原点相同）。
+   现在 overlay 与 textarea 同为 .js-edit 的子项，inset:0 的覆盖层就一定与
+   textarea 的盒子重合，偏移量恒等于 0，不再依赖任何一方的 padding
+   去「手工凑」出对齐。
+
+   flex 三项缺一不可：
+     - flex:1 1 auto → 吃掉行号栏右侧的剩余宽度（否则它按内容宽，窄编辑器下不收缩）；
+     - min-width:0   → flex 子项默认 min-width:auto 会让长行把它顶宽（textarea 内部本不换行）；
+     - position:relative → 给 .js-hl 的 inset:0 提供包含块。 */
+.js-edit {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* .js-source 的文字必须**透明**：文字现在由覆盖层显示。
+   --------------------------------------------------------------------------
+   这是「textarea + overlay 着色」方案的核心取舍：
+     - textarea 保留全部成熟行为（撤销栈、输入法、Tab、setRangeText、光标测量）；
+     - 但它没有「局部上色」的能力，所以让它只负责**输入与光标**，不上色。
+   三个属性一一对应三件不能丢的东西：
+     - color:transparent           → 不让它和覆盖层叠成重影（两份文字差半像素就会糊）；
+     - caret-color:var(--text)     → 字可以透明，**光标必须可见**，否则用户找不到插入点；
+     - -webkit-text-fill-color     → Chromium 里文字填充色优先级高于 color，
+                                     只写 color 在部分场景（打印/高 DPI 合成）会漏出字，
+                                     两条一起写才是真正的「字透明」。
+   注意：不写 -webkit-text-stroke，那会让文字带一圈描边，等于又画了一遍字。
+
+   本类**不改** app.css 里 .js-source 的布局（padding/字号/行高/pre/tab-size）——
+   那是覆盖层对齐的基准，改一侧就必须同步另一侧，属于约定不动的部分。 */
+.js-source {
+  position: relative;
+  z-index: 2;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  -webkit-text-fill-color: transparent;
+}
+
+/* 选中态：底色由 textarea 自己画（app.css 已有 ::selection 底色），
+   文字仍保持透明 —— 否则选区里会出现一份「选中色文字 + 覆盖层彩色文字」的重影。
+   用 currentColor 表达「跟 color 走（= transparent）」，避免把色值写死在这里。 */
+.js-source::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ==========================================================================
+   1. 查找替换条
+   --------------------------------------------------------------------------
+   右上角浮在代码上：它只在 Ctrl+F 时出现，不该把编辑器挤矮（挤矮会导致
+   光标行跳动）。z-index 40 高于 .sc-pop 的 30、低于 .js-hover 的 45 ——
+   悬浮提示是「跟随鼠标的临时信息」，必须能盖住查找条。
+   ========================================================================== */
+.js-findbar {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 40;
+  /* 纵向两行：第一行查找、第二行替换（DOM 见 jsFindBar.ts 的 mainRow / replaceRow）。
+     用 column 而不是让 9 个控件横向排一行 —— 一行排出来 490+px 宽，
+     在 300px 的左栏或窄编辑器里会直接盖掉半屏代码。
+     align-items:stretch 让两行都吃满同宽，右侧按钮才对得齐（center 会让两行各自居中、边缘参差）。 */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  /* 上限防越界：窄编辑器下 findbar 不能再比编辑器本身宽。
+     calc(100% - 16px) 留出左右各 8px 的呼吸位（与 right:8px 呼应）；
+     520px 是两行内容在常规字号下的自然宽度上限，超过它也没必要。 */
+  max-width: min(520px, calc(100% - 16px));
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  /* 用令牌阴影而不是自己写 rgba：奶油主题的阴影要更淡，令牌已经按主题调过 */
+  box-shadow: var(--shadow-pop);
+}
+
+/* 一行控件。min-width:0 是必须的：flex 子项的默认 min-width 是 auto（=内容宽度），
+   少了它，窄编辑器下这一行会拒绝收缩、把 findbar 顶出容器。
+   有这个类之后两行各自独立收缩，第一行按钮不会因为第二行「全部替换」变宽而重新计算。
+
+   flex-wrap:wrap 是实测逼出来的：第一行有 9 个控件（查找框 / 计数 / Aa / W / 正则 / 上 / 下 / 工程内 / 关闭），
+   自然宽度 ~433px。在 300px 宽的编辑器里它们塞不下，不加 wrap 时实测
+   **查找框被压到 14px、关闭按钮被顶到 findbar 边框外面**（视觉上就是「× 跑到框外面」）。
+   加上 wrap 后，放不下的按钮整体换到下一行，全部留在框内 —— 窄屏下变成三行是可接受的降级，
+   丢控件则不可接受。宽编辑器（≥433px）下 wrap 不触发，仍是单行，观感不变。 */
+.js-findbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 输入框：132px 是「能看清 8~10 个字」和「不遮挡代码右端」的折中。
+   等宽字体 + 12px：与编辑器正文同字号，用户不会误以为自己在另一个输入环境。
+   ⚠ 在 .js-findbar-row 里改成 flex:0 0 132px（不收缩）+ 行内 wrap 兜底：
+   原来用 0 1 132px 允许收缩，实测窄到 300px 时被压成 14px（只剩两条边线，
+   完全没法输入）。既然 .js-findbar-row 已经允许换行，就没有理由再牺牲输入框宽度。
+
+   这是**第一行查找框**的度量。第二行的替换框要吃掉剩余宽度，见下面的
+   [data-js-replace-input] 覆盖规则（两行共用 .js-findbar input，必须按属性区分）。 */
+.js-findbar input {
+  flex: 0 0 132px;
+  width: 132px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  outline: none;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.js-findbar input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.js-findbar input::placeholder {
+  color: var(--text-3);
+}
+
+/* 第二行的替换框吃掉剩余宽度。
+   为什么不直接写 `.js-findbar-row input`：那条会同时命中第一行的查找框（132px 是对的），
+   把查找框也拉宽会让第一行的 ↑/↓/工程内/× 被挤到换行。
+   用 [data-js-replace-input] 精确区分两行 —— 这是 DOM 里给的稳定标记（jsFindBar.ts:77），
+   比 :first-child / :last-child 稳：将来行内再加控件，结构性选择器会静默指错元素。
+   替换框拉宽是合理的：替换词往往比查找词长，而第二行只有 3 个控件，天然有余量。 */
+.js-findbar [data-js-replace-input] {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+/* 命中计数：固定 64px 且居中，这样 "3/12" 变 "1234/5678" 时
+   右侧按钮不会左右跳（分辨率抖动比信息缺失更烦人）。 */
+.js-find-count {
+  min-width: 64px;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* 小方按钮（Aa / .* / 上下箭头 / 关闭）：padding 2px 5px 让它足够小但有可点面积。
+   平时用 --text-3 弱化，不跟代码抢注意力。 */
+.js-find-toggle {
+  padding: 2px 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.js-find-toggle:hover {
+  border-color: var(--line);
+  color: var(--text-2);
+}
+
+/* .on = 该开关当前生效（区分大小写 / 正则）：
+   只靠文字颜色不够醒目，加 --accent-soft 底 + --accent 描边，
+   在深色与奶油两套主题下都是「一圈主色」，语义一致。 */
+.js-find-toggle.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.js-find-close {
+  padding: 2px 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+/* 关闭按钮 hover 变 --danger：用语义色提示「这一下会让东西消失」，
+   与其他界面的破坏性操作保持同一套暗示。 */
+.js-find-close:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ==========================================================================
+   2. 覆盖层：现在是**唯一显示文字的地方**
+   --------------------------------------------------------------------------
+   结构（与 jsOverlay.ts 顶部注释一致）：
+     .js-code → .js-gutter + .js-edit → (textarea.js-source, .js-hl)
+   覆盖层与 textarea 是同一个 .js-edit 的子项，所以 inset:0 的覆盖层盒子
+   与 textarea 盒子**逐像素重合**，两者的内容原点只由各自的 padding 决定。
+   这就是为什么这里的 padding 必须与 app.css 的 .js-source 一字不差：
+   现在两边起点相同，padding 再相同，文字才真正落在同一处。
+
+   ⚠ 对齐纪律（最容易踩的坑）：本层的 padding / font-size / line-height /
+     white-space / tab-size 必须与 app.css 里的 .js-source **逐项相同**
+     （.js-source 是 padding:8px 10px / 12px / 19px / pre / tab-size:2）。
+     差 1px 就会整体错位一行，而且看起来像「高亮随机乱飘」，很难定位原因。
+     任何一侧将来改了字号或行高，另一侧必须同步改；验收里有真实 Chromium 的逐项比对。
+
+   ⚠ 内层 .js-hl-inner 必须留在正常流里（static）：本层的 padding 靠它生效。
+     若给内层加 position:absolute（为了用 transform 做滚动平移），它的包含块变成
+     本层的 padding box，top/left:0 会落在**padding 外沿**，本层 padding 立刻失效、
+     文字整体左上偏移 8/10px。滚动平移用 transform 本身不需要 absolute ——
+     transform 对 static 块级元素同样生效。
+   ========================================================================== */
+.js-hl {
+  position: absolute;
+  inset: 0;
+  /* z-index 阶梯（本文件内，从低到高）：
+       1 去掉，覆盖层不再压在文字下面
+       2  .js-source  textarea 只剩光标与选区底色
+       3  .js-hl      覆盖层要压住 textarea 才能「显示」文字
+      30  .sc-pop     补全弹层
+      40  .js-findbar 查找条
+      45  .js-hover   悬浮提示（跟随鼠标，必须能盖住上面两者）
+     覆盖层必须在 textarea **之上**：它才是画字的那一层。它在下面时，
+     textarea 的选区底色会把彩色文字整片糊掉（这也是上一版看不见颜色的原因）。 */
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: none;
+  padding: 8px 10px;
+  /* 不再是 transparent：本层现在显示真正的彩色文字。
+     用 --text 而不是写死色值 —— 未被 token 覆盖的普通代码（变量名、运算符）
+     要跟正文同色，换主题时自动跟随。 */
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 19px;
+  white-space: pre;
+  tab-size: 2;
+}
+
+/* 搜索命中底色：用半透明黄，而不是实色 —— 实色会盖掉下面的语法着色，
+   半透明则「既标出来了，又还看得见原来的颜色」。
+   这里的 rgba 是本文件唯一允许出现的硬编码色值 —— 它是「高亮笔」语义，
+   三套主题下都要是同一个黄色，才符合用户对荧光笔的预期。
+
+   color:inherit 是**必须**的（原来是 transparent）：命中只负责加底色，
+   字色要跟着里面那层 .tk-* 走。写成 transparent 会把命中的词整段涂没 ——
+   用户搜到的恰恰就是要看的那几个词，涂没等于搜了个寂寞。
+
+   选择器同时覆盖 mark 与 .js-mark：渲染器合成 DOM 时用的是带 class 的 span
+   （见 jsOverlay.ts 的 decoCls），而旧结构用的是 <mark>。两种都挂上，
+   将来换回任一实现都不会「突然没有命中底色」。 */
+.js-hl mark,
+.js-hl .js-mark {
+  border-radius: 2px;
+  background: rgba(255, 214, 102, 0.34);
+  color: inherit;
+}
+
+/* 当前命中（Enter 跳到的那个）要明显更重：加深底色 + 一圈 --warn 描边。
+   粗描边会让整行 1px 抖动，所以用 outline（不占布局）。 */
+.js-hl mark.current,
+.js-hl .js-mark.current {
+  background: rgba(255, 170, 40, 0.62);
+  outline: 1px solid var(--warn);
+}
+
+/* 括号配对用蓝调，与查找黄刻意区分开：两种高亮经常同时出现（一边搜一边看括号），
+   同色就分不清哪个是哪个。 */
+.js-hl .js-hl-bracket {
+  background: rgba(120, 160, 255, 0.34);
+}
+
+/* ==========================================================================
+   3. 悬浮提示（hover quickinfo）
+   --------------------------------------------------------------------------
+   pointer-events:none 是关键：鼠标划过提示框时不能把它自己「挡掉」，
+   否则提示会闪烁。位置由 JS 按光标矩形算好，这里只给样式与层级上限。
+   max-width 420px：再宽就会盖住半屏代码，读者反而要移开鼠标才能看代码。
+   ========================================================================== */
+.js-hover {
+  position: absolute;
+  z-index: 45;
+  max-width: 420px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  font-size: 11.5px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+/* 签名行用等宽 + 12px 并保留换行：类型签名里的空格和对齐是有信息的，
+   折叠成一行会把 `(a: number, b: string)` 读错。 */
+.js-hover-code {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 文档注释用 --text-2 弱一档：读者先看签名，再看说明，层级靠颜色而不是字号。 */
+.js-hover-doc {
+  margin-top: 3px;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ==========================================================================
+   4. 工具栏与标签页（引用 / 大纲 / 编译产物）
+   ========================================================================== */
+.js-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+/* 标签栏横向 gap 只用 2px：这几个 tab 是同一组功能的分段，间距一大就会被误读成
+   独立按钮；flex-wrap 保证窄栏（左栏 300px）下自动换行而不是横向溢出。 */
+.js-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* 下划线式标签：与 cream.css 的 .editor-tab 同一套视觉语言（transparent 底 +
+   2px 主色下边线），用户不用学第二种「选中」表达。 */
+.js-tab {
+  padding: 3px 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.js-tab:hover {
+  color: var(--text-2);
+}
+
+.js-tab.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* 计数徽标：只有「有内容」的标签才需要它，所以做成胶囊小圆角 8px，
+   与 app.css 里 .js-api-tag / .js-lang-badge 的胶囊观感一致。 */
+.js-tab-badge {
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+/* 标签内容区：默认 display:none（而不是 visibility/height:0），
+   未激活的分页完全不参与布局，切换时才不会再算一次高度。
+   overflow:auto 让长结果自己滚，不去撑高整个辅助区。 */
+.js-tabpane {
+  display: none;
+}
+
+.js-tabpane.on {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 0;
+  overflow: auto;
+  /* 与上面的标签栏拉开 4px：下边线和第一行结果贴太近会显得「粘住」 */
+  padding-top: 4px;
+}
+
+/* ==========================================================================
+   5. 查找引用 / 跳转定义的结果行
+   --------------------------------------------------------------------------
+   观感与 app.css 的 .js-diag 保持一致（padding 3~4px / 圆角 4~5px / hover 变底），
+   让「结果列表」这一族控件在同一个面板里是一套东西。
+   ========================================================================== */
+.js-ref-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.js-ref-row:hover {
+  background: var(--surface-2);
+}
+
+/* 位置（脚本名:行）：用 --accent 而不是灰色 —— 它是「点击会跳过去」的那部分，
+   整行里只有它值得被当成链接看。flex:0 0 auto 保证文件名再长也不挤压预览文本。
+   ⚠ 但「不压缩」在极端情况下会反噬：左栏默认 300px，一个 30 字符的
+   `very-long-script-name.js:123:45` 在 11px 等宽下就占 ~198px，会把右边
+   .js-ref-text 挤到 0 宽 —— 实测（Chromium，行宽 200px）clientWidth 归零，
+   预览整段消失。所以加 max-width:52% + 省略号兜底：短名字完全不受影响，
+   超长名字截断成 `…` 也要给预览留一半位置（扫列表时预览比完整路径更有信息量）。 */
+.js-ref-where {
+  flex: 0 0 auto;
+  max-width: 52%;
+  overflow: hidden;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 代码预览：单行省略。结果列表的价值在于「一眼扫完」，折行会让每个命中变成 2~3 行，
+   滚三屏才看完 10 条，反而不如省略号 + 点击跳转。 */
+.js-ref-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 「定义 / 引用」小徽标：用 --surface-2 底而不是主色，避免每个命中都抢眼；
+   真正需要强调的只有「这是定义」那一行，靠文字已经能看出来。 */
+.js-ref-row .js-ref-badge {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+/* ==========================================================================
+   6. 大纲行
+   --------------------------------------------------------------------------
+   刻意复刻上面 .js-ref-row 的度量（同样的 padding / gap / 圆角 / hover），
+   两栏在视觉重量上必须等价：大纲和引用列表经常前后脚看，
+   一边圆角 5px、另一边 4px 会让人以为它们属于不同的组件族。
+   （分开写两条规则而不是合并选择器，是为了让每个类名都能被单独 grep 到。）
+   ========================================================================== */
+.js-outline-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.js-outline-row:hover {
+  background: var(--surface-2);
+}
+
+/* 种类列（function / class / const…）固定 52px：宽度不随最长单词变化，
+   后面的名字就从同一条竖线开始，扫视时是整齐的一列。 */
+.js-outline-kind {
+  flex: 0 0 auto;
+  width: 52px;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+/* ==========================================================================
+   7. 编译产物预览
+   --------------------------------------------------------------------------
+   background 用 --sunken（比面板更「陷」）而不是 --surface-2：编译结果是只读产物，
+   不是可编辑控件，视觉上应当明确「这是输出」。
+   max-height 220px + overflow:auto：产物可能几百行，不能把辅助区顶穿。
+   ========================================================================== */
+.js-compile-out {
+  max-height: 220px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 17px;
+  /* pre 而不是 pre-wrap：编译产物里缩进是结构性信息，自动折行会把它毁掉；
+     横向滚动条是可接受的代价。 */
+  white-space: pre;
+}
+
+.js-compile-meta {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* ==========================================================================
+   8. 语法着色：颜色令牌（三套主题）
+   --------------------------------------------------------------------------
+   为什么令牌写在本文件里、而不是 app.css / cream.css：
+     1. 语法色是「这一版 JS 编辑器新增的」语义，属于可整体回退的增量，
+        与那两份「全局设计令牌」不同层级；写在这里可以连同文件一起摘掉；
+     2. 本文件在三份样式表里**最后加载**（index.html 的 link 顺序），
+        所以这里的 :root 与 html.theme-* 一定覆盖前面同名的定义 ——
+        这正是它们能生效的前提，不依赖任何 !important。
+     3. 它们**只被 .js-hl 内部用**，不污染其它界面。
+
+   为什么必须分三套、而不是一套色值加 opacity 之类的手腕：
+     亮底与深底不是「同一个色相的明暗关系」。奶油底 #f0ece3 上，饱和亮色
+     （比如 #58a6ff 蓝）对比度只有 1.9:1，字会糊成一片；反过来 #2a5c80 这种
+     深色放到深夜底 #0e1015 上只剩 1.6:1，同样看不见。同一组色值在两侧
+     必然有一侧瞎掉，所以只能各写一份。
+
+   取色纪律（每个值都实际算过 WCAG 对比度，不是「看着差不多」）：
+     - 奶油主题对着代码区实际底色 #f0ece3（= cream.css 的 --sunken），
+       六个值全部 ≥ 4.5:1（正文可读线）；最低的是 comment 4.80
+       —— 注释刻意压到「刚好过线」，因为它需要弱化，但不能弱到读不动。
+     - 深夜主题对着 #0e1015，全部 ≥ 4.9:1，且刻意取高饱和高亮度，
+       深底上「亮而彩」才不显得脏。
+     - 高对比主题对着 #0a0a0a，全部 ≥ 7.3:1（AAA 线）。
+       **不用纯红 #ff0000**：红色在本产品里是错误语义（--danger），
+       代码里的关键字/字符串绝不能和错误提示抢同一个颜色。
+       也不用纯白 —— --text 已经是纯白，语法色再纯白就分不出「普通代码」与「有类别」。
+
+   六个类别的色相选择依据（不是随便配的）：
+     - comment 低饱和中性灰：注释要「退到背景里」，它不参与阅读主路径；
+     - string 绿：文本字面量的通行惯例，且与数字的橙、关键字的紫都拉得开；
+     - number 橙：数值是「常量」，暖色与其它类别区分最明显（橙/绿是互补对）；
+     - keyword 紫：控制流关键字应当是「结构色」，紫在暖底与冷底上都不与红冲突；
+     - bwe 用奶油主色系（--accent 那一族的棕/蓝）：bwe 是这个引擎自己的 API，
+       它在视觉上就该跟「界面主色」同族，让用户形成「这是我的引擎」的认知；
+     - global 蓝：JS 内置 API 是「外部世界」，冷蓝与 bwe 的暖棕在本产品里
+       天然是一对「自研 vs 语言标准」的对照。
+   ========================================================================== */
+
+/* 奶油软科技（默认主题）：暖向低饱和、全部够深可读。
+   这是唯一一处允许出现 hex 的地方 —— 令牌层就是颜色的单一来源，
+   规则层（下面的 .tk-*）一律只写 var()，这样换主题不需要改任何规则。 */
+:root {
+  --js-comment: #6a675e;
+  --js-string: #37613d;
+  --js-number: #a8450e;
+  --js-keyword: #5f3c8a;
+  --js-bwe: #7d5730;
+  --js-global: #2a5c80;
+}
+
+/* 深夜靛蓝：深底上必须「亮而饱和」，否则彩色反而比灰更糊。
+   这组值刻意贴着 VS Code / One Dark 一族的明度区间 —— 用户对深色主题的
+   语法配色有肌肉记忆，偏离太远会被读成「配错了」。 */
+html.theme-midnight {
+  --js-comment: #76839a;
+  --js-string: #7ee787;
+  --js-number: #f2b544;
+  --js-keyword: #c792ea;
+  --js-bwe: #58a6ff;
+  --js-global: #4ec9b0;
+}
+
+/* 纯黑高对比：可辨性优先于美观，六个值彼此的距离都拉到 99 以上（RGB 欧氏距离），
+   在低视力/远距离/劣质投影上也能分清类别。 */
+html.theme-high-contrast {
+  --js-comment: #9e9e9e;
+  --js-string: #00ff88;
+  --js-number: #ffb000;
+  --js-keyword: #ff8cf0;
+  --js-bwe: #00e5ff;
+  --js-global: #4da6ff;
+}
+
+/* ==========================================================================
+   9. 语法着色：六个类别规则
+   --------------------------------------------------------------------------
+   限定在 .js-hl 之下（而不是裸 .tk-comment）：
+     1. 这些类名太泛，裸写会被界面上任何一处同名 class 命中；
+     2. 悬浮提示 / 结果列表 / 编译产物里将来也可能复用 tokenizer 输出，
+        但它们不该是「代码区着色」，需要各写各的样式；
+     3. 限定后本节的规则对其它面板的影响为零，可以单独摘掉。
+
+   每条只写 color: var(...)：着色完全由令牌决定，主题切换不需要重画 DOM，
+   覆盖层的 innerHTML 不用重建，只是变量值变了。这也是「换主题不闪」的原因。
+   ========================================================================== */
+.js-hl .tk-comment {
+  color: var(--js-comment);
+}
+
+.js-hl .tk-string {
+  color: var(--js-string);
+}
+
+.js-hl .tk-number {
+  color: var(--js-number);
+}
+
+.js-hl .tk-keyword {
+  color: var(--js-keyword);
+}
+
+/* bwe 与它的点链、生命周期钩子同色：`bwe.world.find` 在语义上是一个整体
+   （tokenizer 也会把相邻同类片段合并），拆成两种色反而让人以为前半段是变量、
+   后半段是函数。 */
+.js-hl .tk-bwe {
+  color: var(--js-bwe);
+}
+
+.js-hl .tk-global {
+  color: var(--js-global);
+}
+
+/* ==========================================================================
+   10. 输入法（IME）组字兜底
+   --------------------------------------------------------------------------
+   这是「文字透明化」引入的**唯一**硬伤，不补就是功能故障：
+   中文输入法打拼音时，组字串（下划线那几个字母）是浏览器直接画在 **textarea**
+   里的，此时 input 事件还没发，覆盖层里还没有这段字 —— 而 textarea 的文字
+   被我们设成了透明。结果就是：用户打拼音时屏幕上一片空白，只有光标在闪，
+   完全看不见自己在打什么。
+
+   所以组字期间临时反过来：textarea 显示文字（且用正常字色），覆盖层隐藏。
+   两个 class 必须成对生效：
+     - 只恢复 textarea 而不藏覆盖层 → 组字串和覆盖层旧文字叠成重影；
+     - 只藏覆盖层而不恢复 textarea → 整片代码突然消失，像卡死了。
+   组字结束（compositionend）后 .composing 被移除，覆盖层接管，颜色立刻回来。
+   visibility 而不是 display:none —— 后者会让覆盖层下一次显示时重新布局，
+   组字刚结束的那一帧能看到文字闪一下。 */
+.js-edit.composing .js-source {
+  color: var(--text);
+  -webkit-text-fill-color: currentColor;
+}
+
+.js-edit.composing .js-hl {
+  visibility: hidden;
+}

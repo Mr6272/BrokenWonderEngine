@@ -249,50 +249,145 @@ export function toolDefinitions() {
       function: {
         name: "ApplyProjectOps",
         description:
-          "用一批**结构化操作**整块改造工程：建场景、加/改/删对象、挂模块、定义预制体、写 UI。"
-          + "这是唯一能真的改动关卡与 UI 的工具 —— 只写脚本不建世界是不够的。"
-          + "整批事务：任何一条非法（未知 kind、未知模块 defId、参数越界、引用不存在）都会"
-          + "导致**整批被拒且原工程不变**，并返回逐条拒绝原因。所以宁可分小批，不要赌。"
-          + "可用 kind：ACTOR / PROP / TILE / ZONE / SPAWN / PORTAL / LIGHT。"
-          + "UI 不是独立树：它就是一个 ui:true 的场景，里面放普通对象。",
+          "用一批**结构化操作**改造工程。这是唯一能真的改动关卡 / UI / 预制体 / 图层 / 素材 / "
+          + "规则包 / 工程设置的通道 —— 只写脚本不建世界是不够的。"
+          + "整批事务：任何一条非法（未知 kind、未知模块 defId、参数越界、引用不存在、"
+          + "删空最后一层）都会导致**整批被拒且原工程一字节不变**，并逐条返回原因码与修复提示。"
+          + "所以宁可分小批，不要赌。改之前先 ProjectDigest —— 它给的对象 id / 素材 id / "
+          + "模块 defId / 图层 id 是这里唯一认的坐标，不能凭记忆编。"
+          + "对象 kind：ACTOR / PROP / TILE / ZONE / SPAWN / PORTAL / LIGHT。"
+          + "UI 不是独立树：它就是一个 ui:true 的场景，里面放普通对象。"
+          + "**updateObjects 要的是 updates:[{id, patch}]**（不是 objects），"
+          + "**patchModules 才是「只改一个参数」**（attachModules 会把没给的参数补默认值）。",
         parameters: {
           type: "object",
           properties: {
             ops: {
               type: "array",
-              description: "操作数组，按顺序在同一份工程副本上生效。",
+              description:
+                "操作数组，按顺序在同一份工程副本上生效。每条只需 op + 它自己的字段，"
+                + "其余字段留空即可（参数表见每条 op 的说明）。",
               items: {
                 type: "object",
                 properties: {
                   op: {
                     type: "string",
-                    enum: [
-                      "createScene",
-                      "addObjects",
-                      "updateObjects",
-                      "deleteObjects",
-                      "attachModules",
-                      "definePrefabs"
-                    ],
-                    description: "操作类型"
+                    enum: PROJECT_OP_NAMES,
+                    description: "操作类型（见每条 op 的字段说明）"
                   },
+
+                  // ---- 目标定位（几乎每条 op 共用）----
+                  sceneId: { type: "string", description: "目标场景 id（与 sceneName 二选一）" },
+                  sceneName: { type: "string", description: "目标场景名（与 sceneId 二选一；同批次新建的场景可直接用名字）" },
+                  targetId: { type: "string", description: "目标对象 id（attachModules / detachModules / patchModules 用）" },
+                  isPrefab: { type: "boolean", description: "attachModules / detachModules / patchModules 用：目标是不是预制体，默认 false" },
+
+                  // ---- 工程级 ----
+                  set: {
+                    type: "object",
+                    description:
+                      "updateProject / updateScene / updatePrefabs 里包在 patch 内的字段，"
+                      + "或 updatePrefabs 的 patch 本体。只覆盖给出的键，未给的保持原值。"
+                  },
+
+                  // ---- 场景 ----
                   scene: {
                     type: "object",
                     description: "createScene 用：{ name, ui?, widthTiles?, heightTiles?, designW?, designH? }"
                   },
-                  sceneId: { type: "string", description: "目标场景 id（与 sceneName 二选一）" },
-                  sceneName: { type: "string", description: "目标场景名（与 sceneId 二选一；同批次新建的场景可直接用名字）" },
+                  order: {
+                    type: "array",
+                    items: { type: "string" },
+                    description:
+                      "reorderScenes / reorderObjects 用：**完整**的场景（或对象）id/名字列表，"
+                      + "顺序即新顺序。必须无重复、无未知项、覆盖全部 —— 不完整会被拒绝。"
+                  },
+
+                  // ---- 对象 ----
                   objects: {
                     type: "array",
                     description:
-                      "addObjects/updateObjects/deleteObjects 用。新增对象："
-                      + "{ name, kind, x, y, z?, halfW?, halfH?, rotation?, scaleX?, scaleY?, visible?, assetId?, modules? }；"
-                      + "修改对象：{ id 或 name，其余字段同上，只覆盖给出的字段 }；"
-                      + "删除对象：{ id 或 name }。"
+                      "addObjects 用：[{ name, kind, x, y, z?, halfW?, halfH?, rotation?, scaleX?, scaleY?, "
+                      + "visible?, assetId?, layerId?, tags?, props?, modules?, animMode?, animFps?, parentId? }]"
                   },
+                  updates: {
+                    type: "array",
+                    description:
+                      "updateObjects 用：[{ id, patch: {...同上字段...} }]。"
+                      + "patch 只覆盖给出的字段；parentId 传 null 表示挂回场景根。"
+                      + "**注意是 updates + patch，不是 objects**（按 schema 里 objects 传会被拒）。"
+                  },
+                  ids: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "deleteObjects / deletePrefabs / deleteLayers / deleteAssets / deletePacks 用：要删的 id 列表"
+                  },
+
+                  // ---- 预制体 ----
                   prefabs: {
                     type: "array",
-                    description: "definePrefabs 用：[{ name, kind, halfW?, halfH?, assetId?, modules? }]"
+                    description:
+                      "definePrefabs 用：[{ name, kind, blurb?, halfW?, halfH?, assetId?, tags?, props?, modules?, script? }]"
+                  },
+
+                  // ---- 模块 ----
+                  modules: {
+                    type: "array",
+                    description:
+                      "attachModules 用：[{ defId, label?, trigger?, values?, enabled? }]。"
+                      + "注意：整实例覆盖，没给的参数会被补默认值；只想改一个参数请用 patchModules。"
+                  },
+                  defIds: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "detachModules 用：要卸下的模块 defId 列表"
+                  },
+                  patches: {
+                    type: "array",
+                    description:
+                      "patchModules 用：[{ defId, values?, trigger?, enabled? }]。"
+                      + "values 只**合并**给出的键，其它参数保持原值 —— 这才是「只改一个参数」的正确做法。"
+                      + "trigger 传 null 表示清除触发时机。"
+                  },
+
+                  // ---- 图层 ----
+                  name: { type: "string", description: "addLayer 用：新图层名" },
+
+                  // ---- 素材 ----
+                  // （updateAssets 走 updates + patch，deleteAssets 走 ids）
+
+                  // ---- 规则包 ----
+                  packs: {
+                    type: "array",
+                    description: "definePacks 用：[{ name, blurb?, modules, exposed?, exposedLabel? }]"
+                  },
+                  targets: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "applyPacks 用：要套规则包的对象 id 列表"
+                  },
+                  packIds: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "applyPacks 用：要套的规则包 id 列表"
+                  },
+
+                  // ---- 脚本 ----
+                  scripts: {
+                    type: "array",
+                    description:
+                      "writeScripts 用：[{ path, source, name?, lang? }]。lang 缺省按后缀推断"
+                      + "（.js → js，.yarn → yarn）。scripts / setVariables 是两条老通道，"
+                      + "改脚本正文也可以用 WriteScript / PatchScript 工具。"
+                  },
+                  names: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "deleteScripts 用：要删的脚本名列表（被引用会被拒，先解引用）"
+                  },
+                  variables: {
+                    type: "object",
+                    description: "setVariables 用：{ 变量名: 值 }，值一律按字符串存"
                   }
                 },
                 required: ["op"]
@@ -300,7 +395,10 @@ export function toolDefinitions() {
             },
             dryRun: {
               type: "boolean",
-              description: "true 时只校验不落盘，用来试探一批操作是否合法。默认 false。"
+              description:
+                "true 时只校验不落地：会真的跑完所有校验、返回「这批操作会做什么」的摘要，"
+                + "但工程一字节不变（也不会产生撤销点）。改一大片（重建关卡 / 批量改属性）时"
+                + "建议先 dryRun 一遍确认无误，再不带它调第二次。默认 false。"
             }
           },
           required: ["ops"]
@@ -309,6 +407,55 @@ export function toolDefinitions() {
     }
   ];
 }
+
+/**
+ * `ApplyProjectOps` 支持的全部操作名。
+ *
+ * ⚠ 这份清单必须与 `web/src/core/projectOps.ts` 的实现**完全一致**，否则会出现
+ * 「schema 里有、实现里没有」（模型照调，永远失败）或「实现里有、schema 里没有」
+ * （模型根本不知道能做，能力等于不存在）两种断裂。
+ * 真实事故：上一版 schema 只列了 6 条，而实现有 11 条 —— deletePrefabs / detachModules /
+ * addLayer / writeScripts / setVariables **模型永远调不到**，用户看到的是「AI 说改不了图层」。
+ * 所以清单在这里集中定义，并由 Web 侧导出 PROJECT_OP_NAMES 供 verify 断言逐项比对。
+ */
+export const PROJECT_OP_NAMES = [
+  // 工程级
+  "updateProject",
+  // 场景
+  "createScene",
+  "updateScene",
+  "deleteScene",
+  "reorderScenes",
+  // 图层
+  "addLayer",
+  "updateLayers",
+  "deleteLayers",
+  // 对象
+  "addObjects",
+  "updateObjects",
+  "deleteObjects",
+  "reorderObjects",
+  // 预制体
+  "definePrefabs",
+  "updatePrefabs",
+  "deletePrefabs",
+  // 模块
+  "attachModules",
+  "detachModules",
+  "patchModules",
+  // 素材
+  "updateAssets",
+  "deleteAssets",
+  // 规则包
+  "definePacks",
+  "updatePacks",
+  "deletePacks",
+  "applyPacks",
+  // 脚本 / 变量
+  "writeScripts",
+  "deleteScripts",
+  "setVariables"
+];
 
 /** 工具名白名单：模型给出未定义的名字时直接拒掉，不要瞎执行。 */
 export const TOOL_NAMES = [

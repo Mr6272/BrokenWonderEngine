@@ -172,6 +172,15 @@ const host = {
     return invoke("bwe:ai-set-model", { id: String(id ?? ""), clearApiKey: true });
   },
   /**
+   * 删掉一条模型（配错了 / 想清掉用不上的供应商）。
+   *
+   * 主进程两条硬约束（见 ipc-contract 同名条目）：不许删到清单为空；
+   * 删的是当前 active 时 active 自动落到剩下的第一条。
+   */
+  aiRemoveModel(id) {
+    return invoke("bwe:ai-remove-model", { id: String(id ?? "") });
+  },
+  /**
    * 真实探测某条模型的连通性（用户点「测试」时调）。
    *
    * 与 `aiModels()` 里的 `ready` 是两件事：`ready` 只说「配置齐全」，不代表能连上；

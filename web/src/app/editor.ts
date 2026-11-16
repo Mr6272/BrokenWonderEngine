@@ -37,7 +37,7 @@ import {
   requestOpenScriptPanel
 } from "../panels/scriptPanel.ts";
 import { renderSettingsPanel } from "../panels/settingsPanel.ts";
-import { renderSearchPanel } from "../panels/searchPanel.ts";
+import { renderSearchPanel, setSearchQuery } from "../panels/searchPanel.ts";
 import { renderProblemsPanel, renderOutputPanel } from "../panels/bottomPanels.ts";
 import { renderAiPanel, setAiScriptApplyHook, aiPanelSummary, resetAiConversation, requestAiAction } from "../panels/aiPanel.ts";
 import { renderKnowledgePanel } from "../panels/knowledgePanel.ts";
@@ -46,7 +46,6 @@ import { renderOutlinePanel } from "../panels/outlinePanel.ts";
 import { openModuleEditor } from "../panels/moduleEditor.ts";
 import { saveProjectFile, openProjectFile, downloadProject, createExampleProject } from "./project.ts";
 import { buildExample, type ExampleId } from "../data/examples.ts";
-import { detectMinigame, renderDressup, renderMinesweeper } from "./minigames.ts";
 import { Session } from "../account/session.ts";
 import { appendOutput } from "../core/output.ts";
 import { problemCounts, onProblems } from "../core/diagnostics.ts";
@@ -125,6 +124,15 @@ export class Editor {
   private sidebarRailBtn: HTMLButtonElement | null = null;
   /** AI 栏的收起按钮（文案/提示随折叠态同步） */
   private aiToggleBtn: HTMLButtonElement | null = null;
+  /** AI 界面里的「退出 AI 界面」按钮（data-ai-exit；非 AI 模式隐藏） */
+  private aiExitBtn: HTMLButtonElement | null = null;
+  /**
+   * 进入 AI 界面前在看的活动栏条目。
+   *
+   * AI 界面里活动栏只有「AI 助手」是亮的；退出时如果不还回去，用户会停在
+   * 一个没有高亮的空壳上（侧边栏内容还在，但看不出自己在哪个视图）。
+   */
+  private aiModePrevActivity = "explorer";
   /** AI 栏当前标签：AI 助手 / 项目知识库 */
   private aiDockTab: "ai" | "kb" = "ai";
   private scriptDirtyDot: HTMLElement | null = null;
@@ -216,11 +224,30 @@ export class Editor {
     const collapse = button("收起", () => this.toggleAiPanel(), {
       size: "sm",
       variant: "ghost",
-      title: "收起 AI 栏（Ctrl+Shift+A 再按一次展开）"
+      title: "收起 AI 栏（Ctrl+Shift+A 进入 AI 界面）"
     });
     collapse.dataset.aiCollapse = "1";
     this.aiToggleBtn = collapse;
     head.appendChild(collapse);
+
+    // AI 界面里的「退出」。两个按钮都**预先建好、只切显隐**：
+    // 按模式重建头部会让标题条每次进出闪一下，也会让验收脚本抓不稳锚点
+    // （data-ai-exit 必须是常驻元素）。AI 界面里「收起」没有意义 —— 收起就没有界面了，
+    // 所以两者互斥显示。
+    const exit = button("退出 AI 界面", () => this.exitAiMode(), {
+      size: "sm",
+      variant: "ghost",
+      title: "退出 AI 界面（Esc）"
+    });
+    exit.dataset.aiExit = "1";
+    // ⚠ 用 hidden 而不是 style.display：显隐由样式表按 .app-root.ai-mode 决定
+    // （styles/app.css 里 `[data-ai-exit]{display:none}` + ai-mode 下 `inline-flex`）。
+    // 写行内 display 会**压过那两条规则**，结果是"类加了、按钮还是不出现"——
+    // 和 setAiPanelWidth 的内联 flex 压过 CSS 是同一类坑。hidden 是 UA 级
+    // display:none，作者样式能覆盖它，正好当"样式表没到位时的兜底"。
+    exit.hidden = true;
+    this.aiExitBtn = exit;
+    head.appendChild(exit);
   }
 
   // ---------------- 顶栏 ----------------
@@ -404,6 +431,12 @@ export class Editor {
     mkDemoBtn("data-demo-plaintext-fallback", () => {
       void import("../panels/aiPanel.ts").then((m) => m.demoPlaintextFallback());
     });
+    // 验收用：给「AI 界面」的双区截图灌一批工具调用（聊天框下沉后，上方是 Agent 行为）。
+    // 走 `__BWE__.debugAiStream` 同一条出口：截图里看到的块，就是几何验收量的那一份实现。
+    mkDemoBtn("data-demo-ai-stream", () => {
+      const w = window as unknown as { __BWE__?: { debugAiStream?: (n?: number) => void } };
+      w.__BWE__?.debugAiStream?.(8);
+    });
 
     // 验收用：量取编辑器几何（点一下就把 .js-code 等实际像素打进控制台，
     // 配合 --console 就能拿到数字，不必改 A 的 --probe-dom）。
@@ -490,6 +523,14 @@ export class Editor {
 
   /** 活动栏点击：不同条目切换侧边栏内容 / 打开标签 / 聚焦底部面板。 */
   private onActivity(id: string): void {
+    /**
+     * 点任何**非 ai** 条目 = 退出 AI 界面。
+     *
+     * 顺序不能反：AI 界面靠 `.ai-mode` 让编辑区/侧边栏 display:none，
+     * 不退场就执行原分支等于"点了、状态也改了，但屏幕上什么都没有"。
+     * 传 restoreActivity:false 是因为这一下点的就是目标视图，高亮由点击本身决定。
+     */
+    if (id !== "ai" && this.aiModeActive()) this.exitAiMode({ restoreActivity: false });
     switch (id) {
       case "explorer":
         this.shell.toggleSidebar(false);
@@ -516,7 +557,7 @@ export class Editor {
         this.openTab("package");
         break;
       case "ai":
-        this.focusAiPanel();
+        this.enterAiMode();
         break;
       case "settings":
         this.shell.toggleSidebar(false);
@@ -572,6 +613,18 @@ export class Editor {
     );
     this.sidebarViewHost.appendChild(this.explorerTab.root);
     this.sidebarTitle.textContent = "资源管理器";
+  }
+
+  /**
+   * 带查询词打开左栏搜索（JS 编辑器的「工程内」按钮走这里）。
+   *
+   * 顺序纪律：先写入查询词、再切页 —— 反过来的话面板会先按旧词渲染一次，
+   * 用户会看到列表闪一下旧结果再变成新的。
+   */
+  private openSearchWithQuery(q: string): void {
+    setSearchQuery(q);
+    this.shell.toggleSidebar(false);
+    this.showSidebarView("search");
   }
 
   /** 切侧边栏视图（资源管理器 / 搜索 / 设置 / 剧本列表）。 */
@@ -674,7 +727,11 @@ export class Editor {
     // 为什么收：1280x720 下工具条是横向滚动的，右端按钮会被辅助栏截掉半截，
     // 用户不知道要横滚。收进菜单后主操作区永远完整可见。
     bar.appendChild(button("保存", () => void saveProjectFile(), { size: "sm", variant: "primary", iconPath: I.save, title: "保存工程（Ctrl+S）" }));
-    bar.appendChild(button("预览", () => this.openPreview(), { size: "sm", iconPath: I.play, title: "在编辑器内预览场景" }));
+    // v4：「预览」（编辑器内静态画布）已废弃，这里换成「试跑」——
+    // 真的起 Java 窗口跑工程自己的脚本，才是用户想看的"效果"。
+    // 静态画布能看的其实编辑器主视图已经给了（同一套 painter、同一个场景），
+    // 再弹一个只读副本既不多信息，又比真跑更容易让人误以为"游戏就是这样"。
+    bar.appendChild(button("试跑", () => void this.openPlaytest(), { size: "sm", iconPath: I.play, title: "在本机启动 Java 窗口真跑这个工程（F6）" }));
     bar.appendChild(this.moreButton());
 
     view.appendChild(bar);
@@ -993,13 +1050,95 @@ export class Editor {
     this.shell.togglePanel(false);
   }
 
-  /** 展开并聚焦右侧 AI 栏（命令 / 活动栏 / 快捷键共用这一个入口）。 */
+  /**
+   * 展开右侧 AI 栏 / 进入 AI 界面（命令、活动栏、快捷键、旧调用点共用的入口）。
+   *
+   * 名字保留：命令 `ai.focus`、`openBottomTab("ai")`、`__BWE__.showPanelTab("ai")`、
+   * `bwe:open-ai` 事件、底部面板的「AI 助手」标签都按这个名字调用，改名会静默断掉这些入口。
+   * 但语义已经变成「进入 AI 界面」——AI 从右侧栏升级成独立工作面后，
+   * 「展开一个占满主区的界面」和「展开一条侧栏」不是一回事（契约 docs/ai-interface.md §4）。
+   */
   focusAiPanel(): void {
-    this.shell.toggleAiPanel(false);
-    this.renderAiDock();
+    this.enterAiMode();
   }
 
-  /** 折叠/展开右侧 AI 栏（Ctrl+Shift+A）。 */
+  /** 是否处于 AI 界面（唯一事实来源是 .app-root 上的 ai-mode 类）。 */
+  aiModeActive(): boolean {
+    return this.shell.aiModeOn();
+  }
+
+  /**
+   * 进入 AI 界面：侧边栏 / 编辑区 / 辅助栏 / 底部面板退场，AI 栏独占主工作区。
+   *
+   * 快照（三处折叠态 + AI 栏宽度）由 Shell 记，这里只管"记住我在哪个视图"和重渲染。
+   */
+  enterAiMode(): void {
+    if (this.aiModeActive()) {
+      // 已经在里面了：只保证内容在，别覆盖 Shell 的快照（覆盖了退出就还原错状态）
+      this.renderAiDock();
+      return;
+    }
+    // 从活动栏点进来时，点击本身已经把高亮改成 "ai" 了 —— 那时"上一个条目"才是用户
+    // 真正在看的视图；从命令/快捷键进来时当前条目还没变，直接用当前条目。
+    const cur = this.shell.currentActivity();
+    const prev = cur === "ai" ? this.shell.previousActivity() : cur;
+    // 兜底：万一两个值都是 ai（脚本直接改高亮），退出时不能还回 ai ——
+    // 那等于退出后指着不存在的视图。
+    this.aiModePrevActivity = prev === "ai" ? "explorer" : prev;
+    this.shell.setAiMode(true);
+    this.shell.setActiveActivity("ai");
+    // 面板在 AI 界面里拿到整个主区高度，必须重渲染一次：
+    // 之前在窄栏里算好的滚动位置/宽度假设都不成立了。
+    this.renderAiDock();
+    this.syncAiModeAffordances();
+  }
+
+  /**
+   * 退出 AI 界面，逐项还原进入前的折叠态、AI 栏宽度与活动栏高亮。
+   *
+   * `restoreActivity=false` 用于"用户点活动栏其它条目"这条路径：那一下点的就是目标视图，
+   * 不能再把高亮还回进入前的条目（否则高亮搜索、内容资源管理器，看着像坏了）。
+   */
+  exitAiMode(opts?: { restoreActivity?: boolean }): void {
+    if (!this.aiModeActive()) return;
+    this.shell.setAiMode(false);
+    if (opts?.restoreActivity !== false) {
+      this.shell.setActiveActivity(this.aiModePrevActivity);
+      // 只还原高亮不重跑 onActivity：侧边栏内容在 AI 界面里没被换掉（只是宽度归零），
+      // 重跑 onActivity 会额外触发 openTab 之类的副作用。
+    }
+    this.syncAiModeAffordances();
+  }
+
+  /** 进入 / 退出 AI 界面（Ctrl+Shift+A、命令面板共用）。返回切换后是否在 AI 界面里。 */
+  toggleAiMode(): boolean {
+    if (this.aiModeActive()) {
+      this.exitAiMode();
+      return false;
+    }
+    this.enterAiMode();
+    return true;
+  }
+
+  /**
+   * AI 界面专属的两个头部按钮互斥显隐。
+   *
+   * 用 `hidden`（UA 级 display:none，作者样式可覆盖）而不是行内 display：
+   * 真正的显隐规则写在 styles/app.css 的 `.app-root.ai-mode` 段里，
+   * 行内样式会把它压过去 —— 这正是「类加了、元素还藏着」那类静默失效。
+   * 这里只做"样式表没到位时也不会把两个按钮同时亮出来"的兜底。
+   *
+   * 单独一个方法而不是塞进 syncLayoutAffordances：后者是**折叠态**的同步器，
+   * 把"模式"也混进去会让一个函数管两个状态源（正是「点了按钮文案没变」这类
+   * 半更新 bug 的温床）。
+   */
+  private syncAiModeAffordances(): void {
+    const on = this.aiModeActive();
+    if (this.aiToggleBtn) this.aiToggleBtn.hidden = on;
+    if (this.aiExitBtn) this.aiExitBtn.hidden = !on;
+  }
+
+  /** 折叠/展开右侧 AI 栏（「收起」按钮；Ctrl+Shift+A 现在走 toggleAiMode）。 */
   toggleAiPanel(): boolean {
     const collapsed = this.shell.toggleAiPanel();
     if (!collapsed) this.renderAiDock();
@@ -1061,8 +1200,11 @@ export class Editor {
       renderKnowledgePanel(host, () => this.renderAiDock());
       return;
     }
-    // AI 面板自己算 sceneDigest、自己订流式事件；外壳只给挂载点与重画回调
-    renderAiPanel(host, () => this.renderAiDock());
+    // AI 面板自己算 sceneDigest、自己订流式事件；外壳只给挂载点与重画回调。
+    // layout 决定「左侧历史栏 + 主区铺满」的双列（page）还是右侧窄栏的单列（dock）：
+    // AI 界面里必须是 page —— 不传的话面板会按 dock 渲染，历史栏整块不出现，
+    // 表现为「AI 界面里找不到历史」（不是报错，是静默少一块）。
+    renderAiPanel(host, () => this.renderAiDock(), { layout: this.aiModeActive() ? "page" : "dock" });
   }
 
   private setBottomTab(id: "problems" | "output" | "ai"): void {
@@ -1361,16 +1503,21 @@ export class Editor {
     const ab = this.aiToggleBtn;
     if (ab && typeof st.ai === "boolean") {
       ab.textContent = st.ai ? "展开" : "收起";
-      ab.title = st.ai ? "展开 AI 栏（Ctrl+Shift+A）" : "收起 AI 栏（Ctrl+Shift+A）";
+      // 提示里不再写「Ctrl+Shift+A 收起」：那个键现在是"进出 AI 界面"，
+      // 写成收起会让用户按下去后看到界面铺满，以为是 bug。
+      ab.title = st.ai ? "展开 AI 栏（收起态点这里恢复右侧栏）" : "收起 AI 栏（想整块屏给 AI 用请按 Ctrl+Shift+A）";
       ab.setAttribute("aria-expanded", st.ai ? "false" : "true");
     }
 
-    // 常驻窄条：只在侧边栏折叠时出现
+    // 常驻窄条：只在侧边栏折叠时出现。
+    // AI 界面里侧边栏也是"折叠"的，但那条窄条没有意义（点它只会展开一条被
+    // ai-mode 的 display:none 压住的侧边栏），所以一并隐藏。
     const rail = this.ensureSidebarRail();
-    rail.style.display = st.sidebar ? "" : "none";
+    rail.style.display = st.sidebar && !this.aiModeActive() ? "" : "none";
     rail.setAttribute("aria-expanded", st.sidebar ? "false" : "true");
     // 折叠后焦点如果还留在已消失的按钮上，键盘用户会"迷路"
-    if (st.sidebar && document.activeElement === sb) rail.focus();
+    // （AI 界面里窄条是隐藏的，把焦点甩过去等于甩进虚空，所以跳过）
+    if (st.sidebar && !this.aiModeActive() && document.activeElement === sb) rail.focus();
   }
 
   // ==========================================================================
@@ -1387,6 +1534,40 @@ export class Editor {
     window.addEventListener("bwe:open-scripts", () => this.openTab("script"));
     window.addEventListener("bwe:open-script-tab", () => this.openTab("script"));
     window.addEventListener("bwe:open-canvas-tab", () => this.showTab("canvas"));
+    /**
+     * 「这次数据变化要进撤销栈」的统一信号。
+     *
+     * ⚠ 这个监听器以前**不存在**：全仓库有 7 处（prefab / inspector / module / lighting /
+     * AI 改脚本 / 对象删除 / 复制对象）都在 `dispatchEvent("bwe:commit")`，
+     * 但没有任何地方接住它 —— 于是"删对象、改模块参数、改光源、AI 改脚本"
+     * 全都**不可撤销**，而界面上看起来一切正常（没有任何报错，撤销按钮只是"没反应"）。
+     * 这是端到端验收（desktop/tools/verify-js-editor-ui.mjs）里被抓住的：
+     * 「全部替换」改完文本后按 Ctrl+Z 什么也没发生。
+     *
+     * 为什么在这里接而不是每个面板自己调 editor.commit：
+     *   面板之间互相持有引用是这套架构一直在避免的事（见 scriptPanel 里
+     *   jumpToLineHook 的注释）。事件是单向的、无生命周期负担，面板只要广播即可。
+     */
+    window.addEventListener("bwe:commit", (e) => {
+      const d = (e as CustomEvent<{ label?: string; immediate?: boolean }>).detail;
+      const label = String(d?.label ?? "");
+      /**
+       * `immediate` 是给**离散动作**用的：查找替换、整行移动、AI 改写这类
+       * "一次操作就是一步"的改动，必须当场入栈 —— 否则用户改完立刻按 Ctrl+Z，
+       * 防抖还没到点，撤销栈里没有这一步，界面表现为"撤销什么都没发生"。
+       * 反之连续拖动/连续调参用默认的 320ms 合并，避免几秒钟吃掉 80 步额度。
+       */
+      if (d?.immediate) this.commit(label);
+      else this.scheduleSnapshot(label);
+    });
+    // JS 编辑器里「工程内查找」：把查询词带进左栏的搜索面板。
+    // 为什么走事件而不是直接 import searchPanel：搜索面板的当前词是模块级状态，
+    // 而它渲染时自己会 focus 输入框 —— 直接调函数会让用户的光标被抢走两次
+    // （先跳到搜索框，再被面板重建打断）。事件这条路上，外壳先切页、再灌词，顺序可控。
+    window.addEventListener("bwe:search-project", (e) => {
+      const q = String((e as CustomEvent<{ query?: string }>).detail?.query ?? "");
+      this.openSearchWithQuery(q);
+    });
     window.addEventListener("bwe:open-ai", () => {
       this.focusAiPanel();
     });
@@ -1452,7 +1633,7 @@ export class Editor {
       // ---------------- 工程 ----------------
       { id: "project.settings", title: "工程设置", group: "工程", icon: "settings", run: () => { this.shell.toggleSidebar(false); this.showSidebarView("settings"); } },
       { id: "project.package", title: "打包到 BWE（Windows EXE）…", group: "工程", icon: "packageBox", hint: "需要本地服务（网页版）或桌面客户端", run: () => void openBwePackager() },
-      { id: "project.preview", title: "在编辑器内预览场景", group: "工程", icon: "eye", run: () => this.openPreview() },
+      { id: "project.playtest", title: "试跑当前工程", group: "工程", icon: "play", key: "F6", hint: "在本机起 Java 窗口真跑：先做 JS 诊断，通过才启动", run: () => void this.openPlaytest() },
       { id: "project.exportWeb", title: "导出 Web 游戏包", group: "工程", icon: "exportImg", enabled: () => false, run: () => this.exportWeb() },
       { id: "edit.prefabs", title: "预制体面板…", group: "工程", icon: "pack", run: () => { this.shell.toggleSidebar(false); this.showSidebarView("explorer"); this.explorerTab.focus("prefabs"); } },
       { id: "project.newExample", title: "新建示例工程", group: "工程", icon: "newFile", hint: "内置主角、敌人、箱子、触发区，直接可用", run: () => this.newExampleProject() },
@@ -1461,7 +1642,7 @@ export class Editor {
       { id: "project.example.topdown", title: "俯视角 JS 示例（.bwproj）", group: "工程", icon: "module", run: () => this.newBuiltinExample("topdown-js") },
       { id: "project.example.emergence", title: "涌现沙盘示例（.bwproj）", group: "工程", icon: "module", run: () => this.newBuiltinExample("emergence") },
       { id: "project.example.vampire", title: "吸血鬼幸存者（.bwproj）", group: "工程", icon: "module", run: () => this.newBuiltinExample("vampire") },
-      { id: "project.example.lighting", title: "2D 光照示例（.bwproj）", group: "工程", icon: "module", hint: "点光/聚光/遮挡/一键烘焙，打开即可预览", run: () => this.newBuiltinExample("lighting") },
+      { id: "project.example.lighting", title: "2D 光照示例（.bwproj）", group: "工程", icon: "module", hint: "点光/聚光/遮挡/一键烘焙，点「试跑」看效果", run: () => this.newBuiltinExample("lighting") },
       { id: "project.example.alienShooter", title: "孤胆枪手（.bwproj）", group: "工程", icon: "module", hint: "还原 Alien Shooter 第一关「潜入」：WASD + 鼠标瞄准、按住左键连射、打爆油桶炸开裂墙", run: () => this.newBuiltinExample("alien-shooter") },
 
       // ---------------- 剧本 ----------------
@@ -1470,7 +1651,10 @@ export class Editor {
       { id: "script.goToProblems", title: "查看问题列表", group: "剧本", icon: "warn", run: () => { this.setBottomTab("problems"); this.shell.togglePanel(false); } },
 
       // ---------------- AI ----------------
-      { id: "ai.focus", title: "AI：打开助手面板", key: "Ctrl+Shift+A", group: "AI", icon: "sparkles", run: () => this.focusAiPanel() },
+      // id 与快捷键不变（原生菜单 toggle-ai-panel 也映射到这个 id），只把语义从
+      // 「展开右侧栏」升级成「进入 / 退出 AI 界面」——两边必须同一个行为，
+      // 否则键盘和菜单会各自表现不同。
+      { id: "ai.focus", title: "AI：进入 / 退出 AI 界面", key: "Ctrl+Shift+A", group: "AI", icon: "sparkles", hint: "AI 界面铺满主工作区；退出时还原原来的折叠态", run: () => this.toggleAiMode() },
       { id: "ai.explainError", title: "AI：解释当前错误", group: "AI", icon: "warn", hint: "带诊断摘要 + 当前脚本", run: () => this.runAiAction("explain-error") },
       { id: "ai.editScript", title: "AI：改这段脚本", group: "AI", icon: "wand", hint: "AI 直接改脚本，改完可 Ctrl+Z 撤销；正文里的代码块仍会给 diff 供你确认", run: () => this.runAiAction("edit-script") },
       { id: "ai.sceneReview", title: "AI：审一遍当前场景", group: "AI", icon: "eye", hint: "发工程摘要，不发原始工程数据", run: () => this.runAiAction("scene-review") },
@@ -1601,7 +1785,17 @@ export class Editor {
    * 换引用并重绑场景与选中项，而不是原地改字段。
    */
   private applyAiProject(next: Project): void {
-    store.replaceProjectData(next);
+    /**
+     * 先立标志再换引用：`replaceProjectData` 会触发 `store.onProject`，
+     * 而那个监听器会调 `resetHistoryIfProjectReplaced()` —— 不走这个标志，
+     * 刚压进撤销栈的这一步会被立刻清空（详见该函数的注释）。
+     */
+    this.suppressHistoryReset = true;
+    try {
+      store.replaceProjectData(next);
+    } finally {
+      this.suppressHistoryReset = false;
+    }
     // 和 applyAiScript 一样必须**同步** commit：AI 改工程是一次离散动作，
     // 用 320ms 防抖会让用户看到结果后立刻 Ctrl+Z 时撤销到更早的状态。
     this.commit("AI 改工程");
@@ -1609,6 +1803,12 @@ export class Editor {
     // 场景结构变了，侧边栏若正停在世界视图上必须重建（否则列表里还是旧关卡）
     if (this.currentSidebarView === "explorer") this.explorerTab.refresh();
   }
+
+  /**
+   * 一次性标志：编辑器**自己**换了工程引用（AI 改工程 / 撤销还原），
+   * 此时不能让 `resetHistoryIfProjectReplaced` 清空撤销历史。
+   */
+  private suppressHistoryReset = false;
 
   /**
    * AI 的脚本写类工具在**渲染侧的落地入口**（桌面版主进程经 IPC 转发到这里）。
@@ -1734,7 +1934,10 @@ export class Editor {
     "save-project": "file.save",
     "save-project-as": "file.saveAs",
     pack: "project.package",
-    quickrun: "project.package",
+    // 菜单里「试跑当前工程」/「试跑（本机 Java 窗口）」都落到同一个动作上。
+    // v4 起这不是"打开打包面板"了：试跑是独立入口（命令 project.playtest），
+    // 主进程菜单只管发 quickrun，具体开哪个面板由这里决定。
+    quickrun: "project.playtest",
     "quickrun-stop": "project.quickRunStop",
     "command-palette": "view.commandPalette",
     "toggle-sidebar": "view.sidebar",
@@ -1795,16 +1998,37 @@ export class Editor {
       const t = e.target as HTMLElement;
       const inField = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
       if (inField) {
-        // 输入框里只放行 Esc（失焦）与命令面板组合键，其余交给输入框自己
+        // 输入框里只放行 Esc（失焦）、命令面板与「进出 AI 界面」两组组合键，其余交给输入框自己。
+        // Ctrl+Shift+A 要放行的原因：用户最常见的退出场景就是"正在 AI 输入框里打字"，
+        // 这时按 Esc 只会失焦，得按两次；组合键必须一次到位。
         if (e.key === "Escape") (t as HTMLInputElement).blur();
         else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "p") {
           e.preventDefault();
           openCommandPalette();
+        } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "a") {
+          e.preventDefault();
+          this.toggleAiMode();
         }
         return;
       }
 
       const ctrl = e.ctrlKey || e.metaKey;
+
+      // ---- AI 界面 ----
+      // Ctrl+Shift+A：进入 / 退出 AI 界面。旧行为只是「折叠/展开右侧栏」，
+      // 但 AI 现在是独立工作面 —— 折叠一个占满主区的界面没有意义。
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        this.toggleAiMode();
+        return;
+      }
+      // AI 界面里 Esc 退场。焦点在输入框里的情况已被上面的 inField 分支吃掉（那里 Esc = 失焦），
+      // 所以这里只会命中"用户没在打字"的场景，不会把他的输入框一闪弹出去。
+      if (e.key === "Escape" && this.aiModeActive()) {
+        e.preventDefault();
+        this.exitAiMode();
+        return;
+      }
 
       // ---- 新增的 VS Code 惯用键 ----
       if (ctrl && e.shiftKey && e.key.toLowerCase() === "p") {
@@ -2047,13 +2271,13 @@ export class Editor {
   private newBuiltinExample(id: ExampleId): void {
     const built = buildExample(id);
     const tips: Record<ExampleId, string> = {
-      minesweeper: "扫雷示例已载入：点「预览」直接试玩；行数、列数、地雷数在「模块」→「扫雷棋盘」里改。",
-      dressup: "换装示例已载入：点「预览」试玩；每个部位的造型和素材在「模块」→「换装部件」里改。",
+      minesweeper: "扫雷示例已载入：点「试跑」开窗口真玩（左键翻开、右键插旗、空白自动展开、首击必安全）；行数、列数、地雷数在「模块」→「扫雷棋盘」里改。",
+      dressup: "换装示例已载入：点「试跑」开窗口试玩（点击部件换装）；每个部位的造型和素材在「模块」→「换装部件」里改。",
       "topdown-js": "俯视角 JS 示例已载入：脚本在「剧本」标签里切到 JS 看 player/chaser/npc/hud/system；点「试跑」直接开窗口。",
       emergence: "涌现沙盘已载入：脚本在「剧本」标签（world/player/guard/civilian/bottle/hud）。点火看火势蔓延、烧穿木栅开路，守卫会被噪音引来——规则都在 bwe.material / bwe.field / bwe.ai 里组合。",
-      vampire: "吸血鬼幸存者已载入：点「预览」直接开打。WASD 走位、武器自动开火、1/2/3 选强化、R 重开；六个脚本（player/enemy/bullet/gem/director/hud）都在「剧本」标签里。",
-      lighting: "2D 光照示例已载入：点「预览」看夜晚的灯与影。按 R 切夜色档位（白天/黄昏/深夜/极暗）、按 B 手动重建动态贴图。画布上 5 盏灯各有用途——① 点光、② 聚光、③ 闪烁火把（不进烘焙）、④ 积木模块光、⑤ 墙前灯（演示遮挡阴影）。想试「一键烘焙」：右栏「光照」页 → 点烘焙按钮 → 再预览对比。",
-      "alien-shooter": "孤胆枪手已载入：点「试跑」开窗口玩（预览里鼠标按住开火同样可用）。WASD 按屏幕方向走、鼠标瞄准、按住左键连射、右键朝光标走；1~4 / Q E 切枪，R 重开。目标：清掉巢穴，打爆仓库西墙边的气瓶把裂墙炸开，钻进地下入口。8 个脚本（player/enemy/combat/fx/director/pickup/grenade/hud）都在「剧本」标签里；像素画与音效由 web/tools/gen-alien-shooter.mjs 程序生成。"
+      vampire: "吸血鬼幸存者已载入：点「试跑」开窗口真打。WASD 走位、武器自动开火、1/2/3 选强化、R 重开；六个脚本（player/enemy/bullet/gem/director/hud）都在「剧本」标签里。",
+      lighting: "2D 光照示例已载入：点「试跑」看夜晚的灯与影。按 R 切夜色档位（白天/黄昏/深夜/极暗）、按 B 手动重建动态贴图。画布上 5 盏灯各有用途——① 点光、② 聚光、③ 闪烁火把（不进烘焙）、④ 积木模块光、⑤ 墙前灯（演示遮挡阴影）。想试「一键烘焙」：右栏「光照」页 → 点烘焙按钮 → 再试跑对比。",
+      "alien-shooter": "孤胆枪手已载入：点「试跑」开窗口玩（鼠标按住开火）。WASD 按屏幕方向走、鼠标瞄准、按住左键连射、右键朝光标走；1~4 / Q E 切枪，R 重开。目标：清掉巢穴，打爆仓库西墙边的气瓶把裂墙炸开，钻进地下入口。8 个脚本（player/enemy/combat/fx/director/pickup/grenade/hud）都在「剧本」标签里；像素画与音效由 web/tools/gen-alien-shooter.mjs 程序生成。"
     };
     this.loadExampleProject(() => built.project, built.fileName, tips[id]);
   }
@@ -2098,245 +2322,24 @@ export class Editor {
     info("Web 游戏包导出正在开发中");
   }
 
-  /** 编辑器内静态预览：用 Canvas 把当前场景画出来，支持缩放和平移，不运行模块逻辑。 */
-  private openPreview(): void {
-    const scene = store.scene;
-    const project = store.project;
-    if (!scene || !project) {
-      info("没有可预览的场景");
+  /**
+   * 试跑当前工程（取代原来的「预览」）。
+   *
+   * 为什么废掉「预览」：它只是把当前场景用同一套 painter 再画一遍到弹窗里，
+   * 不跑任何脚本 —— 编辑器主视图本来就是同一份画面，弹窗既不多给信息，
+   * 又容易让人把「静态摆位」当成「游戏跑起来的样子」。
+   * 用户要看的是**真的动起来**，那是试跑（本机 Java 窗口跑工程自己的 JS）。
+   *
+   * 复用打包工作台的整套试跑逻辑（JS 诊断 → 收集素材 → 起 Java → 轮询日志），
+   * 而不是在这里再写一份启动流程：两边各写一套，「诊断规则」和「素材收集」
+   * 迟早会不一致，而这两件事恰好是最容易出错的地方。
+   */
+  private async openPlaytest(): Promise<void> {
+    if (!store.project) {
+      warn("先打开一个工程");
       return;
     }
-
-    const ordered = orderObjects(scene);
-    const tile = project.tileSize;
-    // UI 场景的「地图」是设计分辨率，不是「格 × tileSize」。
-    // 预览窗口里也必须用同一套尺寸，否则预览里的界面对不上编辑器里摆的位置。
-    const sceneSize = scenePixelSize(scene, tile);
-    const mapW = sceneSize.w;
-    const mapH = sceneSize.h;
-    const uiScene = isUiScene(scene);
-
-    const game = detectMinigame(scene);
-    let miniDispose: (() => void) | null = null;
-
-    let camX = mapW / 2;
-    let camY = mapH / 2;
-    // 初始缩放：UI 场景按设计稿整张铺进来，世界场景保持 1:1
-    let zoom = 1;
-    if (uiScene) {
-      const cw0 = 700;
-      const ch0 = 520;
-      zoom = Math.max(0.15, Math.min((cw0 - 24) / mapW, (ch0 - 24) / mapH));
-    }
-
-    let isPanning = false;
-    let lastScreen = { x: 0, y: 0 };
-    let previewWrap: HTMLDivElement | null = null;
-    let paintPreview: (() => void) | null = null;
-
-    const onMove = (e: MouseEvent) => {
-      if (!isPanning) return;
-      camX -= (e.clientX - lastScreen.x) / zoom;
-      camY -= (e.clientY - lastScreen.y) / zoom;
-      lastScreen = { x: e.clientX, y: e.clientY };
-      paintPreview?.();
-    };
-    const onUp = () => {
-      isPanning = false;
-      if (previewWrap) previewWrap.style.cursor = "default";
-    };
-
-    const close = modal({
-      title: game ? `试玩 — ${scene.name}` : `预览 — ${scene.name}`,
-      xwide: true,
-      closeOnMask: false,
-      body: (closeFn) => {
-        if (game) {
-          const host = el("div", { class: "mg-modal-body" });
-          const ctx = {
-            project,
-            scene,
-            obj: game.obj,
-            mod: game.mod,
-            onConfigure: () => {
-              closeFn();
-              openModuleEditor(game.obj);
-            }
-          };
-          const run = game.type === "minesweeper"
-            ? renderMinesweeper(host, ctx)
-            : renderDressup(host, ctx);
-          miniDispose = run.dispose;
-          return host;
-        }
-
-        const box = el("div", { class: "col" });
-        box.style.gap = "8px";
-
-        const hint = el("div", { class: "hint", style: { fontSize: "11.5px", color: "var(--text-3)" } });
-        hint.textContent = "拖动平移 · 滚轮缩放 · 这是静态预览，不运行游戏逻辑";
-        box.appendChild(hint);
-
-        const wrap = el("div", { class: "preview-wrap" });
-        wrap.style.width = "100%";
-        wrap.style.height = "520px";
-        wrap.style.background = "var(--canvas-bg)";
-        wrap.style.border = "1px solid var(--line)";
-        wrap.style.borderRadius = "var(--r-md)";
-        wrap.style.overflow = "hidden";
-        wrap.style.position = "relative";
-        box.appendChild(wrap);
-
-        const canvas = el("canvas");
-        canvas.style.position = "absolute";
-        canvas.style.top = "0";
-        canvas.style.left = "0";
-        wrap.appendChild(canvas);
-
-        const ctrl = el("div", { class: "row tight" });
-        ctrl.style.marginTop = "6px";
-        ctrl.appendChild(button("缩小 −", () => { zoom = Math.max(0.25, zoom - 0.25); paintPreview?.(); }, { size: "sm" }));
-        ctrl.appendChild(button("放大 ＋", () => { zoom = Math.min(3, zoom + 0.25); paintPreview?.(); }, { size: "sm" }));
-        ctrl.appendChild(button(uiScene ? "整张设计稿" : "整张地图", () => {
-          zoom = Math.min((wrap.clientWidth - 24) / mapW, (wrap.clientHeight - 24) / mapH, 2);
-          // UI 场景整稿缩放可能小于 0.25（1280 宽塞进 700 窗口 = 0.53，但 1920 会是 0.35），
-          // 所以下限也要跟着放宽，否则「点了没反应」。
-          zoom = Math.max(uiScene ? 0.1 : 0.25, zoom);
-          camX = mapW / 2;
-          camY = mapH / 2;
-          zoomLabel.textContent = `缩放 ${Math.round(zoom * 100)}%`;
-          paintPreview?.();
-        }, { size: "sm" }));
-        ctrl.appendChild(el("div", { class: "spacer" }));
-        const zoomLabel = el("span", { class: "muted tabular" }, `缩放 ${Math.round(zoom * 100)}%`);
-        ctrl.appendChild(zoomLabel);
-        // 「放大/缩小」按钮也要同步更新百分比，否则用户点了看到的数字永远不变
-        const bumpZoom = (next: number) => {
-          zoom = Math.min(3, Math.max(uiScene ? 0.1 : 0.25, next));
-          zoomLabel.textContent = `缩放 ${Math.round(zoom * 100)}%`;
-          paintPreview?.();
-        };
-        const [minusBtn, plusBtn] = Array.from(ctrl.querySelectorAll("button")) as HTMLButtonElement[];
-        minusBtn?.replaceWith(button("缩小 −", () => bumpZoom(zoom - 0.25), { size: "sm" }));
-        plusBtn?.replaceWith(button("放大 ＋", () => bumpZoom(zoom + 0.25), { size: "sm" }));
-        box.appendChild(ctrl);
-
-        const dpr = window.devicePixelRatio || 1;
-        const cw = wrap.clientWidth || 700;
-        const ch = wrap.clientHeight || 520;
-        canvas.width = Math.round(cw * dpr);
-        canvas.height = Math.round(ch * dpr);
-        const g = canvas.getContext("2d")!;
-        const cssVar = (name: string, fallback: string): string => {
-          const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-          return v || fallback;
-        };
-
-        const worldToScreen = (wx: number, wy: number) => {
-          return { x: (wx - camX) * zoom + cw / 2, y: (wy - camY) * zoom + ch / 2 };
-        };
-
-        paintPreview = () => {
-          g.setTransform(dpr, 0, 0, dpr, 0, 0);
-          g.imageSmoothingEnabled = false;
-          // 用主题令牌而不是写死深色：奶油主题下预览也要是奶油底
-          g.fillStyle = cssVar("--canvas-bg", "#15171d");
-          g.fillRect(0, 0, cw, ch);
-
-          // 画网格：UI 场景按 8px 参考线，世界场景按瓦片
-          g.strokeStyle = cssVar("--canvas-grid", "#22252f");
-          g.lineWidth = 1;
-          const gridStep = uiScene ? 8 * (zoom < 0.5 ? 8 : 2) : tile;
-          const startX = Math.floor(camX / gridStep) * gridStep;
-          const startY = Math.floor(camY / gridStep) * gridStep;
-          for (let x = startX; x < camX + cw / zoom; x += gridStep) {
-            const sx = worldToScreen(x, 0).x;
-            g.beginPath();
-            g.moveTo(sx, 0);
-            g.lineTo(sx, ch);
-            g.stroke();
-          }
-          for (let y = startY; y < camY + ch / zoom; y += gridStep) {
-            const sy = worldToScreen(0, y).y;
-            g.beginPath();
-            g.moveTo(0, sy);
-            g.lineTo(cw, sy);
-            g.stroke();
-          }
-
-          // UI 场景：画设计分辨率外框 + 安全区，让预览能看出「窗口裁切边界」
-          if (uiScene) {
-            const o0 = worldToScreen(0, 0);
-            const o1 = worldToScreen(mapW, mapH);
-            g.strokeStyle = "rgba(76,141,255,0.85)";
-            g.lineWidth = 1.5;
-            g.strokeRect(o0.x, o0.y, o1.x - o0.x, o1.y - o0.y);
-            const sv = uiSafeArea(scene);
-            const sa = worldToScreen(sv.x, sv.y);
-            const sb = worldToScreen(sv.x + sv.w, sv.y + sv.h);
-            g.strokeStyle = "rgba(46,204,143,0.6)";
-            g.setLineDash([5, 4]);
-            g.strokeRect(sa.x, sa.y, sb.x - sa.x, sb.y - sa.y);
-            g.setLineDash([]);
-          }
-
-          // 画对象
-          for (const o of ordered) {
-            const layer = scene.layers.find((l) => l.id === o.layerId);
-            if (layer && !layer.visible) continue;
-            if (!o.visible) continue;
-            const pctx: any = {
-              zoom,
-              tileSize: tile,
-              showGrid: false,
-              showColliders: true,
-              showZones: true,
-              showNames: true,
-              time: performance.now(),
-              selectedIds: new Set<string>(),
-              overrides: new Map<string, { x: number; y: number }>(),
-              project,
-              ui: uiScene
-            };
-            paintObject(g, o, pctx, worldToScreen, zoom);
-          }
-        };
-
-        wrap.addEventListener("mousedown", (e) => {
-          if (e.button === 0 || e.button === 1 || e.button === 2) {
-            isPanning = true;
-            lastScreen = { x: e.clientX, y: e.clientY };
-            wrap.style.cursor = "grabbing";
-          }
-        });
-        window.addEventListener("mousemove", onMove);
-        window.addEventListener("mouseup", onUp);
-        wrap.addEventListener("wheel", (e) => {
-          e.preventDefault();
-          const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-          const rect = wrap.getBoundingClientRect();
-          const before = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-          const beforeWorld = { x: (before.x - cw / 2) / zoom + camX, y: (before.y - ch / 2) / zoom + camY };
-          zoom = Math.max(0.25, Math.min(3, zoom * factor));
-          const afterWorld = { x: (before.x - cw / 2) / zoom + camX, y: (before.y - ch / 2) / zoom + camY };
-          camX += beforeWorld.x - afterWorld.x;
-          camY += beforeWorld.y - afterWorld.y;
-          paintPreview?.();
-        }, { passive: false });
-
-        window.setTimeout(() => paintPreview?.(), 20);
-        return box;
-      },
-      actions: [{ label: "关闭", variant: "primary", onClick: (c) => c() }],
-      onClose: () => {
-        miniDispose?.();
-        miniDispose = null;
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-        previewWrap = null;
-      }
-    });
-    void close;
+    await openBwePackager();
   }
 
   // ==========================================================================
@@ -2348,13 +2351,26 @@ export class Editor {
 
   /**
    * 工程对象换了（不是字段变化，是整个对象被替换）就重置撤销历史与字符串池。
-   * 用对象引用而不是「内容不同」判断：同一次会话里编辑只是改字段，
-   * 只有打开/新建/载入示例会 new 一个工程对象。
+   *
+   * ⚠ 判据从「引用变了」收紧为「引用变了**且不是编辑器自己换的**」。
+   *
+   * 原来只看引用：而 `applyAiProject`（AI 改工程）走的正是 `replaceProjectData`
+   * ——它按事务性要求返回**新工程副本**，于是每次 AI 改完工程，这里都会把
+   * 刚压进栈的那一步**立刻清掉**。表现是「AI 说改好了，按 Ctrl+Z 什么也没发生」，
+   * 而且不报错、`undoStack` 看上去也正常（只是空的）。
+   *
+   * 用 `suppressHistoryReset` 这个一次性标志区分「谁换的引用」：
+   * 打开/新建/载入示例 = 用户主动换工程，历史该作废；
+   * AI 改工程 = 一次可撤销的编辑，历史必须保留。
    */
   private resetHistoryIfProjectReplaced(): void {
     const p = store.project;
     if (p === this.lastProjectRef) return;
     this.lastProjectRef = p;
+    if (this.suppressHistoryReset) {
+      // 编辑器自己换的引用（AI 改工程）：只更新基线引用，历史原样保留。
+      return;
+    }
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this.snapshotPool.clear();
@@ -2495,13 +2511,31 @@ export class Editor {
     try {
       const parsed = this.snapshotPool.parse(json);
       this.suppressSnapshot = true;
+      /**
+       * 撤销 / 重做本身也是「换一份工程引用」，必须挡住历史重置 ——
+       * 否则撤销一步之后，`resetHistoryIfProjectReplaced` 会把剩下所有步骤清空，
+       * 用户按第二次 Ctrl+Z 就没得撤了（表现为"只能撤销一步"）。
+       */
+      this.suppressHistoryReset = true;
       store.setProject(normalizeProject(parsed), store.fileName);
+      this.suppressHistoryReset = false;
       this.lastSnapshot = this.snapshot();
       this.refreshPanels();
+      /**
+       * 剧本编辑器必须跟着重建。
+       *
+       * 为什么：快照还原走的是 `store.setProject(新对象)` —— 整个工程的
+       * `scripts[name]` 都是**新引用**。而剧本编辑器持有的是旧 `script` 对象，
+       * 它自己的 textarea 里也还是撤销前的文本。不重建的后果很具体：
+       * Ctrl+Z 之后数据回退了、面板却还显示改后的内容，用户再敲一个字就把它写回去了。
+       * （端到端验收里抓到过：替换后按 Ctrl+Z，textarea 仍是替换后的样子。）
+       */
+      window.dispatchEvent(new CustomEvent("bwe:refresh-script-ui"));
     } catch (e) {
       error(`撤销失败：${(e as Error).message}`);
     } finally {
       this.suppressSnapshot = false;
+      this.suppressHistoryReset = false;
     }
   }
 

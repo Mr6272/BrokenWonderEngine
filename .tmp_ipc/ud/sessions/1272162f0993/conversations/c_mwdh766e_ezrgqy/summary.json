@@ -1,0 +1,14 @@
+{
+  "text": "",
+  "coveredMessages": 0,
+  "usage": {
+    "inputTokens": 40,
+    "cacheReadTokens": 1650,
+    "cacheWriteTokens": 0,
+    "outputTokens": 47,
+    "calls": 0,
+    "reason": "mock",
+    "totalInput": 1690
+  },
+  "updatedAt": "2026-11-12T11:39:54.381Z"
+}

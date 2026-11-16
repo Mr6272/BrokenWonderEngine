@@ -108,8 +108,14 @@ label = |sum| = √n
 ## 10. 验收
 
 - `ComplexRules.label` / `ComplexRules.ratioOk` 行为与本文件第 2、4 节完全一致，
-  由三方独立交叉验证：`python tools/gen-complexweeper-fixtures.py` 生成 `test/fixtures/complexweeper.json`；
-  `ComplexMineRulesTest`（Java）与 `web/tools/verify-complexweeper.mjs`（Node）各自读同一份 fixtures 断言。
+  由两方独立交叉验证：`python tools/gen-complexweeper-fixtures.py` 生成 `test/fixtures/complexweeper.json`；
+  `ComplexMineRulesTest`（Java）读这份 fixtures 断言。
 - 构建/自检全绿：`bwe.ps1 build`、`check-java8`、`typecheck`、`check-scripts`、`verify-apidocs`（不出现新的编造/未实现）。
 - 引擎实跑：`bwe.ps1 offscreen <boot.json>` 出图，普通与复雷两模式都能画出来且互不串味。
-- 浏览器试玩（`web/src/app/minigames.ts`）同样支持两模式，规则与 Java 侧一致。
+- 玩法由**试跑**验证（本机 Java 窗口真跑 `scripts/minesweeper.js`），与 Java 侧同一份规则。
+
+> 历史说明：编辑器内「预览」弹窗里曾有一份 `web/src/app/minigames.ts` 的简化实现，
+> 与该 Node 侧脚本一起构成"三方"验证。v4 废掉「预览」（静态画布不跑脚本，反而容易
+> 让人把摆位当成跑起来的样子），那份 TS 实现与它的 Node 验证脚本一并删除 ——
+> 现在规则只有 Java 一份真实现，扫雷玩法统一走「试跑」。
+

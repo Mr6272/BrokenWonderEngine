@@ -1,0 +1,24 @@
+{
+  "before": {
+    "chip": "本地演示 flash · 本地演示",
+    "sel": "本地演示 flash"
+  },
+  "filled": {
+    "provider": true,
+    "baseUrl": true,
+    "model": true,
+    "label": true,
+    "key": true
+  },
+  "modalOpen": true,
+  "after": {
+    "chip": "UI路径验证模型 · 已配置测试连接",
+    "sel": "UI路径验证模型"
+  },
+  "settled": {
+    "chip": "UI路径验证模型 · 已配置测试连接",
+    "sel": "UI路径验证模型"
+  },
+  "chipChanged": true,
+  "selChanged": true
+}

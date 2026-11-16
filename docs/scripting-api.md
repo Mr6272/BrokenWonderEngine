@@ -397,6 +397,144 @@ bwe.spawner.stop(sp)
 - 场景设置里 `onStartScript` 可选任意脚本（Yarn 或 JS，按后缀/语言区分）。
 - 顶部/打包面板加 **「试跑」**：调本地服务 `/api/quick-run`，2~3 秒起 Java 窗口（不走 jpackage）。
 
+### 5.1 JS 编辑器的代码智能（2026-11-13）
+
+编辑器不再是"带行号的 textarea"，而是一套轻量 IDE。**五个能力共用同一套语言服务**
+（`web/tools/script-language.mjs`，网页版走 `/api/*`、桌面版走 `bwe:api` → 同一份 `api-core`），
+所以两边结果永远一致：
+
+| 能力 | 快捷键 | 端点 | 说明 |
+|---|---|---|---|
+| 补全 | `Ctrl+Space`（`bwe.` 链上自动弹） | `POST /api/script-complete` | 由 `bwe.d.ts` 推导，含签名与中文注释 |
+| 悬浮提示 | 鼠标悬停 300ms | `POST /api/script-quickinfo` | `info: null` 是正常结果（空白处没有符号） |
+| 跳转定义 | `F12` | `POST /api/script-definition` | 跨脚本；内置 API 命中 `bwe.d.ts` 时 `name="__bwe_dts__"` |
+| 查找引用 | `Shift+F12` | `POST /api/script-references` | 跨脚本；服务不可用时降级为**本文件**文本搜索并在标题里说明 |
+| 编译 | `Ctrl+B` | `POST /api/js-check` | 诊断 + 降级到 ES5 产物（与打包时同一套动作） |
+
+编辑器内还包含（纯前端，无后端依赖）：
+
+- **语法着色**：见 §5.3。注释 / 字符串 / 数字 / 关键字 / `bwe.*` / JS 内置 API 六个类别各一色，
+  三套主题各有一组配色；右上角有开关（状态记在 `localStorage`）。
+- **查找 / 替换** `Ctrl+F` / `Ctrl+H`：区分大小写、全词、正则三开关；命中由覆盖层加底色（`.js-mark`），
+  替换是一次可撤销编辑（走 `bwe:commit`）。
+- **大纲** 与 **括号配对高亮**、**整行上移/下移**（`Alt+↑/↓`）。
+- 下部辅助区是可折叠 / 可拖分割的五页签（检查 / 大纲 / 引用 / 编译 / API 速查），
+  由 `F12`、`Shift+F12`、`Ctrl+B` 触发时**自动展开**（折叠着等于按了没反应）。
+
+**契约与验收锚点**（改这些类的样式或结构前先跑一遍验收）：
+
+- 类名：`.js-findbar` `.js-findbar-row` `.js-edit` `.js-hl` `.js-hl-inner` `.js-mark` `.js-hover`
+  `.js-tools` `.js-tab` `.js-tabpane` `.js-ref-row` `.js-compile-out`（样式在 `web/styles/js-editor.css`）。
+- ⚠ **`.js-hl` 的排版度量与 `.js-source` 硬耦合**：`padding 8px 10px / font-size 12px /
+  line-height 19px / white-space pre / tab-size 2` 必须逐项一致，否则整篇文字错位。
+  改 `app.css` 的 `.js-source` 时必须同步改 `js-editor.css` 的 `.js-hl`。
+- ⚠ **`.js-hl-inner` 绝不能加 `position: absolute`**：滚动平移靠 `transform`（对 static 块元素同样生效），
+  而 `.js-hl` 的 `padding` 只在正常流子元素上才推得动内容。改成 absolute 后包含块变成 padding box，
+  padding 立即失效、文字整体左上偏 8/10px —— 而"6 项属性全同"的断言**依然是绿的**。
+- 验收：`npm run verify:script-references`（73 条，语言服务）、
+  `npm run verify:js-editor`（82 条，编辑器纯逻辑）、
+  `npm run verify:js-tokenizer`（43 条，着色令牌器）、
+  `npm run verify:js-editor-ui`（57 条，真 Electron 端到端）、
+  `npm run verify:syntax-pixels`（11 条，**像素级**：截图后在已知词的矩形里采样，
+  证明颜色真的上屏而不只是 computed style 对）。
+
+### 5.3 语法着色（2026-11-13）
+
+**结构**：`textarea` 只负责输入与光标（文字透明、`caret-color` 可见），
+`.js-hl` 覆盖层显示**全部彩色文字**。两者是同一个 `.js-edit` 的子项，保证同原点。
+
+```
+.js-code
+├─ .js-gutter                       行号栏
+└─ .js-edit                        （position:relative，textarea 与覆盖层同原点）
+   ├─ textarea.js-source            输入层（文字透明）
+   └─ .js-hl                       显示层（彩色文字 + 命中底色 + 括号 + 当前行）
+      └─ .js-hl-inner              只做 transform 滚动平移（绝不能 absolute）
+```
+
+**六个类别**（令牌器在 `web/src/panels/jsTokenizer.ts`，纯逻辑、43 条断言）：
+
+| 类名 | 内容 | 说明 |
+|---|---|---|
+| `tk-comment` | `// …` 与 `/* … */` | 未闭合时按"到行尾/到文件尾"染色，不抛错（用户是在打字） |
+| `tk-string` | `'…'` `"…"` `` `…` `` | 转义引号不提前结束；模板字符串可跨行 |
+| `tk-number` | `123` `1.5` `0x1f` `0b101` `1e-3` `1_000` `.5` | |
+| `tk-keyword` | `var` `function` `return` `if` … | 刻意不含 `get`/`set`/`from`（常作普通变量名） |
+| `tk-bwe` | `bwe`、`bwe.world` 这级命名空间、生命周期钩子 `onStart` 等 | 与"语言标准"对照的**自研 API** 色 |
+| `tk-global` | `Math` `JSON` `Object` `Array` `Date` `console` `parseInt` … | **JS 内置 API**。刻意不含 `window`/`document`/`require`/`process`/`setTimeout`（运行时没有它们） |
+
+**配色令牌**：`--js-comment` / `--js-string` / `--js-number` / `--js-keyword` / `--js-bwe` / `--js-global`。
+三套主题各一组，规则层只写 `var()`（换主题不改一行 TS、不重建 DOM）。
+对比度：奶油 ≥4.8:1、深夜 ≥4.9:1、高对比 ≥7.3:1。
+
+**三条必须知道的坑**：
+
+1. **输入法组字期间必须切回 textarea 显示文字**。中文输入法打拼音时组字串在 `textarea` 里，
+   而它的字被设成透明 —— 不处理就是"打拼音时屏幕一片空白"。
+   所以 `compositionstart/end` 给 `.js-edit` 加/去 `composing` 类：
+   textarea 显示文字 + 覆盖层 `visibility:hidden`（两者必须成对，只改一边会重影或全消失）。
+2. **着色开关关掉后覆盖层仍要显示文字**（整段当 plain 处理）。只停着色而不显示文字 = 全白。
+3. **`bwe` 命名空间表是手工同步的**（`BWE_NAMESPACES`）。新增命名空间时要回来补，
+   漏了只是"不着色"，不会错色；也不用运行时反射（TS 语言服务 40~150ms，逐键调用会卡）。
+
+
+### 5.2 撤销：`bwe:commit` 的语义
+
+面板改数据后广播 `window.dispatchEvent(new CustomEvent("bwe:commit", { detail }))`，
+由编辑器统一入撤销栈（`editor.ts` 的 `bwe:commit` 监听器）。`detail` 两个字段：
+
+- `label`：动作名（只用于提示，进不进栈由事件本身决定）。
+- `immediate: true`：**离散动作**（查找替换、整行移动、AI 改写、载入 VS Code 改动）
+  必须传，让它当场入栈 —— 否则用户改完立刻 Ctrl+Z，320ms 防抖还没到点，
+  表现为"撤销什么都没发生"。连续拖动/连续调参不要传（合并成一步，省撤销额度）。
+
+## 5.4 AI 改工程的能力面（`ApplyProjectOps`，2026-11-13 全量）
+
+给 AI 的唯一「改工程」通道是 `ApplyProjectOps`（27 个 op，纯函数在 `web/src/core/projectOps.ts`，
+契约在 `docs/_fragments/project-ops-extension-spec.md`）。**任何一条非法都会整批拒绝、工程一字节不变。**
+
+| 范围 | 能改的 |
+|---|---|
+| 工程 | `name / author / tileSize / gridW / gridH / masterVolume / orientation`（`updateProject`） |
+| 场景 | 新建 / 改名 / 改尺寸 / `originX/originY` / `onStartScript` / `bgmAssetId` / UI 开关与设计分辨率 / 删除 / 重排 |
+| 图层 | 新增 / 改名 / `visible` / `locked` / `order` / 删除（删空与"层上还有对象"都拒） |
+| 对象 | 增 / 删 / 改**全部字段**（含 `rotation / scale / z / animMode / animFps / parentId / prefabId / tags / props / layerId / assetId`）/ 重排（写回 z） |
+| 预制体 | 定义 / **改全部字段**（含 `spawnJitter / script / blurb / z / layer / anim*`）/ 删除 |
+| 模块 | 挂 / 卸 / **`patchModules`（只改给出的参数，其余保持）** |
+| 素材 | 改 `name / group / note / url / 图集 / 序列帧` / 删除（被引用则拒，hint 列出引用方） |
+| 规则包 | 定义 / 改 / 删 / **套到对象上**（拼接语义与手动拖包一致） |
+| 脚本 | 写（带 `lang` 推断）/ **删**（被引用则拒） |
+| 变量 | 设置 |
+
+**`dryRun: true`** 会跑完所有校验并返回「这批会做什么」，但工程不变、也不产生撤销点 ——
+大改前先试运行一遍。
+
+### 5.4.1 三条设计纪律（都在测试里钉住）
+
+1. **看不见就改不动**：`ProjectDigest` 必须把每个可改字段都列出来。扩展前它只给
+   对象名/kind/坐标/模块 id，所以 `rotation`、`parentId`、`animMode`、图层 `visible`、
+   场景 `onStartScript`、预制体全部外观字段、素材 `group`、规则包 —— AI 一样都改不了，
+   因为它不知道这些东西存在。同时对象仍限流 `maxObjects`（默认 40），否则上下文爆掉。
+2. **删除必须查引用**：素材被对象/预制体/场景 bgm 引用、脚本被场景入口或 `script.js` 模块引用时，
+   一律拒绝并在 hint 里**列出引用方**（"哪个场景的哪个对象"），否则模型只能重新扫全工程。
+   **不提供 force**：强删会留下悬空引用，运行期静默空转，而编辑器里看不出来。
+3. **改动必须可撤销**：AI 的每次改动走 `applyAiProject` → `commit` 入栈。
+   ⚠ 这里踩过一个静默 bug：`resetHistoryIfProjectReplaced` 按「工程对象引用变了」就清空撤销栈，
+   而 AI 改工程恰好换引用 → **每次 AI 改完，刚入栈的那一步立刻被清掉**，
+   表现为「AI 说改好了，按 Ctrl+Z 什么也没发生」，且不报错。现在用 `suppressHistoryReset`
+   区分"用户换工程"与"AI 改工程 / 撤销本身"。
+
+### 5.4.2 验收
+
+```bash
+npm run verify:project-ops        # 339 条：既有基础契约（事务性 / 参数越界 / 离线规划器）
+npm run verify:project-ops-ext    # 263 条：27 个 op 全量 + 每条删除保护 + digest 字段覆盖
+npm run verify:agent-project-ops  # 35 条：真 Electron 端到端（接线 / store 落地 / 多步撤销 / dryRun）
+```
+
+三条缺一不可：纯函数测试证明"规则对"，端到端证明"接线通"。本次两个真 bug
+（撤销被清空、`dryRun` 声明未实现）**只有端到端能抓到**。
+
 ## 6. 导出格式
 
 `boot.json` 新增：

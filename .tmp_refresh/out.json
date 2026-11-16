@@ -1,0 +1,18 @@
+{
+  "before": {
+    "chip": "本地演示 flash · 本地演示",
+    "sel": "mock-flash"
+  },
+  "afterAdd": {
+    "chip": "本地演示 flash · 本地演示",
+    "sel": "mock-flash"
+  },
+  "settled": {
+    "chip": "本地演示 flash · 本地演示",
+    "sel": "mock-flash"
+  },
+  "addedOk": true,
+  "addedActive": "manual:deepseek:deepseek-chat-refresh-test",
+  "chipChangedWithoutReswitch": false,
+  "selChangedWithoutReswitch": false
+}

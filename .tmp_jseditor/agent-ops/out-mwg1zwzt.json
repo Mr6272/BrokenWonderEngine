@@ -1,0 +1,69 @@
+{
+  "steps": [],
+  "hasBridge": true,
+  "hasRunTool": true,
+  "hasEditor": true,
+  "hasLoadDemo": true,
+  "projectName": "俯视角JS示例",
+  "scenes": 1,
+  "digestOk": true,
+  "digestHead": "工程「俯视角JS示例」　作者 BWE Studio　格子 40x30　tileSize 32　音量 0.8　方向 自动\n脚本 6 个，预制体 0 个，规则包 5 个，素材 6 个，变量 4 个\n\n== 场景 ==\n荒原哨站 (id=scene-topdown-js)　40x30 格　对象 164\n  场景脚本 system　无 bgm\n  图层：地形(id=layer-terrain)　物件(id=layer-prop)　角色(id=layer-actor)\n  （只列前 40 个，共 164 个；用 maxObjects 调大或按 scene 过滤）\n  - 地面 (id=obj-ground) PROP @640,480 素材asset-ground 层layer-terrain 标签[地面] 动画默认@8fps props{w=1280,h=960}\n  - 墙体 0,0 (id=obj-wall-001) TILE @16,16 z1 碰撞16x16 素材asset-wall 层layer-terrain 标签[墙体] 动画默认@8fps\n  - 墙体 0,29 (id=obj-wall-002) TILE @16,944 z1 碰撞16x16 素材asset-wall 层layer-terrain 标签[墙体] 动画默认@8fps\n  - 墙体 1,0 (id=obj-wall-003) TILE @48,16 z1 碰撞16x16 素材asset-wall 层layer-terrain 标签[墙体] 动画默认@8fps\n  - 墙体 1,29 (id=obj-wall-004) TILE @48,944 z1 碰撞16x16 素材asset-wall 层layer-terrain 标签[墙体] 动画默认@8fps\n  - 墙体 2,0 (id=obj-wall-005) TILE @80,16 z1 碰撞16x16 素材asset-wall 层layer-terrain 标签[墙体] 动画默认@8fps\n  - 墙体 2,29 (id=obj-wall-00",
+  "digestHas": {
+    "tileSize": true,
+    "masterVolume": true,
+    "orientation": true,
+    "layersVisible": true,
+    "sceneScript": true,
+    "packs": true,
+    "animMode": true
+  },
+  "apply1Text": "已应用 1 处改动：\n- 改工程设置：name、tileSize、masterVolume、orientation",
+  "apply1Error": null,
+  "storeName": "端到端改名",
+  "storeTileSize": 48,
+  "storeVolume": 0.5,
+  "storeOrientation": "portrait",
+  "projectRefChanged": true,
+  "beforeName": "俯视角JS示例",
+  "canvasExists": false,
+  "apply2Text": "已应用 2 处改动：\n- 改场景「荒原哨站」：widthTiles、heightTiles、originX\n- 在「荒原哨站」新增 1 个对象：AI 放的箱子",
+  "sceneWidth": 44,
+  "sceneHeight": 33,
+  "sceneOriginX": 5,
+  "objCountBefore": 164,
+  "objCountAfter": 165,
+  "newObjAnim": {
+    "name": "AI 放的箱子",
+    "animMode": "loop",
+    "animFps": 6
+  },
+  "sceneNameUnchanged": true,
+  "hasUndo": true,
+  "undoStackDepth": 2,
+  "undoOnce": {
+    "before": {
+      "name": "端到端改名",
+      "width": 44,
+      "objs": 165
+    },
+    "after": {
+      "name": "端到端改名",
+      "width": 40,
+      "objs": 164
+    }
+  },
+  "undoRevertedScene": true,
+  "undoTwiceName": "俯视角JS示例",
+  "undoWorked": true,
+  "multiStepUndo": true,
+  "dryRunText": "试运行通过（工程未改动）：这批操作会做 1 处改动：\n- 改工程设置：name\n确认无误后去掉 dryRun 再调一次即可真正生效。",
+  "dryRunChangedStore": false,
+  "dryRunName": "俯视角JS示例",
+  "dryRunSaysTrial": true,
+  "badRejected": true,
+  "badText": "整批被拒，工程未改动。\n- 第 2 条（updateProject）：tileSize 的值 0 超出范围 1..512　提示：俯视角常用 16 / 32 / 48",
+  "badBatchUnchanged": true,
+  "lastSceneRejected": true,
+  "lastSceneText": "整批被拒，工程未改动。\n- 第 1 条（deleteScene）：不能删除最后一个场景（工程至少要有一个场景）　提示：需要换关卡就先 createScene 建好新的，再删旧的",
+  "assetsInProject": 6
+}

@@ -30,6 +30,18 @@ interface Hit {
 
 let query = "";
 
+/**
+ * 从别处（JS 编辑器的「工程内」按钮）带一个查询词进搜索面板。
+ *
+ * 为什么要有它：搜索词是模块级状态，面板一渲染就 `box.focus()`。如果由编辑器
+ * 直接 import 并调用渲染函数，用户会看到「焦点跳到搜索框 → 面板又被重建 → 焦点丢失」。
+ * 所以这里只**写入查询词**，由外壳决定什么时候切页、什么时候渲染，
+ * 顺序是「先切页 → 再渲染」，焦点只被抢一次。
+ */
+export function setSearchQuery(q: string): void {
+  query = String(q ?? "");
+}
+
 export function renderSearchPanel(host: HTMLElement): void {
   host.replaceChildren();
   const wrap = el("div", { class: "col" });

@@ -28,6 +28,20 @@ import {
 } from "../core/model.ts";
 import { API_DOCS, apiDocsByGroup, searchApiDocs, type ApiDoc } from "../data/apiDocs.ts";
 import { attachScriptComplete } from "./scriptComplete.ts";
+import {
+  bracketPairAt,
+  extractOutline,
+  findMatches,
+  moveLine,
+  offsetOfLine,
+  pointToOffset,
+  wordAt,
+  type Match
+} from "./jsEditorLogic.ts";
+import { createHighlightOverlay, measureCharWidth } from "./jsOverlay.ts";
+import { createFindBar } from "./jsFindBar.ts";
+import { createJsTools } from "./jsToolsPanel.ts";
+import { requestCompile, requestDefinition, requestQuickInfo, requestReferences } from "./jsCodeIntel.ts";
 
 // ============================================================================
 // 「用 VS Code 打开」：脚本存在 .bwproj 里，服务端把它镜像成真实文件再拉起编辑器
@@ -438,18 +452,34 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
   const edHead = el("div", { class: "row script-ed-head" });
   edHead.appendChild(el("div", { class: "group-label" }, "源码 JavaScript"));
   edHead.appendChild(el("div", { class: "spacer" }));
-  edHead.appendChild(el("span", { class: "hint" }, "Tab 缩进 · Ctrl+S 保存 · Ctrl+Space 补全"));
+  edHead.appendChild(
+    el("span", { class: "hint" }, "Ctrl+F 查找 · Ctrl+B 编译 · F12 定义 · Shift+F12 引用 · Ctrl+Space 补全")
+  );
+  // 语法着色开关：放在标题行右侧（不占额外高度）。为什么不放辅助区页签里：
+  // 它是"看代码"时的即时偏好，不是"查资料"时的功能，放远了每次都要两层点击。
+  const syntaxBtn = button("", () => {}, {
+    size: "sm",
+    variant: "ghost",
+    title: "语法着色开关（记住状态）：关掉后所有文字同色，便于专注读结构"
+  });
+  syntaxBtn.dataset.jsSyntax = "1";
+  edHead.appendChild(syntaxBtn);
   wrap.appendChild(edHead);
 
   const bench = el("div", { class: "js-workbench" });
   const main = el("div", { class: "js-main" });
 
   // ---- 带行号栏的编辑器 ----
+  //
+  // 结构（见 jsOverlay.ts 顶部注释）：行号栏是 .js-code 的直接子项，
+  // 而 textarea 与覆盖层共享一个 .js-edit 容器 —— 只有这样才能保证两者**同原点**。
+  // 上一版把覆盖层直接挂 .js-code、与 textarea 跨行号栏做兄弟，实测偏 40px。
   const codeBox = el("div", { class: "js-code" });
   const gutter = el("div", { class: "js-gutter", title: "行号" });
   const gutterInner = el("div", { class: "js-gutter-inner" }, "1");
   gutter.appendChild(gutterInner);
 
+  const editBox = el("div", { class: "js-edit" });
   const ta = el("textarea", {
     class: "js-source",
     spellcheck: "false",
@@ -461,14 +491,29 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
   // 未聚焦时不伪造"光标在第 N 行"：textarea 赋 value 后 selectionStart 默认是末尾，
   // 状态栏会显示成最后一行，看着像光标真的跑过去了。置零后重新渲染就是「第 1 行」。
   ta.setSelectionRange(0, 0);
+  editBox.appendChild(ta);
   codeBox.appendChild(gutter);
-  codeBox.appendChild(ta);
+  codeBox.appendChild(editBox);
   main.appendChild(codeBox);
+
+  // 覆盖层：现在由它显示**所有文字**（彩色），textarea 的文字是透明的。
+  const overlay = createHighlightOverlay(editBox);
+
+  // 语法着色开关（默认开，状态记在 localStorage）
+  const SYNTAX_KEY = "bwe.script.syntax";
+  let syntaxOn = (() => {
+    try {
+      const v = localStorage.getItem(SYNTAX_KEY);
+      return v === null ? true : v === "1";
+    } catch {
+      return true;
+    }
+  })();
 
   // 行高：行号栏与正文必须用同一个值，否则行号会逐行偏移（样式表里两者显式写成一样）
   const lineHeight = (): number => {
     const lh = parseFloat(getComputedStyle(ta).lineHeight);
-    return Number.isFinite(lh) && lh > 0 ? lh : 20;
+    return Number.isFinite(lh) && lh > 0 ? lh : 19;
   };
 
   let gutterCount = -1;
@@ -481,6 +526,7 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
   };
   const syncScroll = (): void => {
     gutterInner.style.transform = `translateY(${-ta.scrollTop}px)`;
+    overlay.syncScroll(ta.scrollTop, ta.scrollLeft);
   };
 
   // 光标位置与规模
@@ -491,23 +537,379 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
     const before = v.slice(0, pos);
     const line = (before.match(/\n/g) ?? []).length + 1;
     const col = pos - before.lastIndexOf("\n");
-    stats.textContent = `第 ${line} 行 第 ${col} 列　·　${v.split("\n").length} 行　·　${v.length} 字符`;
+    const sel = ta.selectionEnd - ta.selectionStart;
+    stats.textContent =
+      `第 ${line} 行 第 ${col} 列　·　${v.split("\n").length} 行　·　${v.length} 字符`
+      + (sel > 0 ? `　·　选中 ${sel}` : "");
   };
 
-  const afterEdit = (): void => {
+  // ==========================================================================
+  // 编辑器动作：跳行 / 整段替换 / 编译 / 引用 / 定义
+  // ==========================================================================
+
+  /** 跳到一个行列（1 起）。col 省略时选中整行（与「问题」面板的语义一致）。 */
+  function jumpToLine(line: number, col?: number): void {
+    const src = ta.value;
+    const lines = src.split("\n");
+    const target = Math.max(1, Math.min(lines.length, Math.round(line) || 1));
+    const start = offsetOfLine(src, target);
+    ta.focus();
+    if (col && col > 0) {
+      const pos = Math.min(src.length, start + Math.round(col) - 1);
+      ta.setSelectionRange(pos, pos);
+    } else {
+      ta.setSelectionRange(start, start + (lines[target - 1]?.length ?? 0));
+    }
+    const lh = lineHeight();
+    ta.scrollTop = Math.max(0, (target - 1) * lh - ta.clientHeight / 2 + lh / 2);
+    syncScroll();
+    updateStats();
+  }
+
+  jumpToLineHook = (line: number) => jumpToLine(line);
+
+  /**
+   * 整段替换。查找替换、移行、VS Code 回写都走这一条路 —— 「改源码」只允许有一个入口。
+   *
+   * @param label 撤销栈里的动作名。**离散动作（替换/移行/回写）必须传**，
+   *              它们要能被 Ctrl+Z 一次撤销；`label` 为空表示这是连续输入的一部分，
+   *              交给浏览器原生的 textarea 撤销即可（每一击键压一条应用级快照会
+   *              把 80 步撤销额度几秒钟就吃光，那比"不能撤销"更让人困惑）。
+   */
+  function applySource(next: string, label = ""): void {
+    if (next === ta.value) return;
+    ta.value = next;
+    afterEdit();
+    // immediate：离散动作要当场进撤销栈（见 editor.ts 里 bwe:commit 的注释）
+    if (label) window.dispatchEvent(new CustomEvent("bwe:commit", { detail: { label, immediate: true } }));
+  }
+
+  /** 全工程的 JS 脚本快照：跨脚本的引用/定义必须以整份工程为上下文。 */
+  function jsScriptFiles(): Record<string, string> {
+    const out: Record<string, string> = {};
+    const p = store.project;
+    if (!p) return out;
+    const self = script.name || currentScript;
+    for (const [name, entry] of Object.entries(p.scripts ?? {})) {
+      if (!entry) continue;
+      if (scriptLang(entry) !== "js") continue;
+      // 当前脚本用编辑器里的**最新**文本：script.source 是同步更新的，但 users 可能刚敲完还没防抖检查
+      out[name] = name === self ? ta.value : entry.source ?? "";
+    }
+    return out;
+  }
+
+  // ---- 悬浮提示 ----
+  const hoverEl = el("div", { class: "js-hover" });
+  hoverEl.style.display = "none";
+  codeBox.appendChild(hoverEl);
+  let hoverTimer = 0;
+  /** 每次发起悬停请求时自增：光盘异步返回时用它判断"用户已经移开了" */
+  let hoverSeq = 0;
+
+  const hideHover = (): void => {
+    window.clearTimeout(hoverTimer);
+    hoverSeq++;
+    hoverEl.style.display = "none";
+  };
+
+  /** 悬浮提示：鼠标在一个标识符上停 300ms 才问语言服务（逐像素问会把主线程打满）。 */
+  function scheduleHover(e: MouseEvent): void {
+    window.clearTimeout(hoverTimer);
+    const rect = ta.getBoundingClientRect();
+    const cs = getComputedStyle(ta);
+    // 传**相对 textarea 边框盒**的坐标 + 真实的 padding：换算函数自己扣 padding，
+    // 调用方少做一次减法就少一处符号写反的机会（这类错只表现为"提示总是慢半行"）。
+    const offset = pointToOffset(ta.value, e.clientX - rect.left, e.clientY - rect.top, {
+      lineHeight: lineHeight(),
+      charWidth: measureCharWidth(ta),
+      padTop: parseFloat(cs.paddingTop) || 0,
+      padLeft: parseFloat(cs.paddingLeft) || 0,
+      scrollTop: ta.scrollTop,
+      scrollLeft: ta.scrollLeft
+    });
+    const w = wordAt(ta.value, offset);
+    if (!w) {
+      hideHover();
+      return;
+    }
+    const my = ++hoverSeq;
+    hoverTimer = window.setTimeout(async () => {
+      const info = await requestQuickInfo(ta.value, w.start + 1);
+      // 用户已经移开/继续打字了：丢掉这次结果，否则提示框会闪回上一个词的类型
+      if (my !== hoverSeq) return;
+      if (!info || !info.display) return;
+      hoverEl.replaceChildren();
+      hoverEl.appendChild(el("div", { class: "js-hover-code" }, info.display));
+      if (info.docs) hoverEl.appendChild(el("div", { class: "js-hover-doc" }, info.docs));
+      const boxRect = codeBox.getBoundingClientRect();
+      const left = Math.max(4, Math.min(e.clientX - boxRect.left + 14, Math.max(4, codeBox.clientWidth - 330)));
+      const top = Math.max(4, Math.min(e.clientY - boxRect.top + 20, Math.max(4, codeBox.clientHeight - 60)));
+      hoverEl.style.left = `${Math.round(left)}px`;
+      hoverEl.style.top = `${Math.round(top)}px`;
+      hoverEl.style.display = "";
+    }, 300);
+  }
+
+  /** 跳到**另一个**脚本的某一行：先切脚本，再等面板重建后发跳行事件。 */
+  function jumpToOtherScript(name: string, line: number): void {
+    if (!store.project?.scripts[name]) return;
+    requestOpenScriptPanel("js", name);
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("bwe:script-goto-line", { detail: { line } }));
+    }, 90);
+  }
+
+  /** 查找引用。语言服务不可用时降级为「本文件内文本搜索」，并在标题里说明降级来源。 */
+  async function findReferencesAt(offset: number): Promise<void> {
+    const active = script.name || currentScript;
+    const w = wordAt(ta.value, offset);
+    tools.showTab("refs");
+    expandAux();
+    if (!w) {
+      tools.setRefs("查找引用", [], "把光标放在一个函数名或变量名上再按 Shift+F12。");
+      return;
+    }
+    tools.setRefs(`正在查找「${w.word}」的引用…`, [], "");
+    const res = await requestReferences(jsScriptFiles(), active, w.start + 1);
+    if (!res.ok) {
+      const lines = ta.value.split("\n");
+      const inside = findMatches(ta.value, w.word, { wholeWord: true }).map((m) => {
+        const line = ta.value.slice(0, m.start).split("\n").length;
+        return {
+          name: active,
+          line,
+          col: m.start - offsetOfLine(ta.value, line) + 1,
+          text: (lines[line - 1] ?? "").trim().slice(0, 120),
+          isDefinition: false
+        };
+      });
+      tools.setRefs(
+        `「${w.word}」· 本地文本搜索（语言服务不可用）`,
+        inside,
+        "语言服务不可用，只在这个脚本里按文本找了一遍。跑 npm run serve（或桌面版主进程）后可以跨脚本查引用。"
+      );
+      return;
+    }
+    /**
+     * 空结果有两种完全不同的含义，必须分开说 —— 混在一起会让人以为搜索坏了：
+     *   ① 工程里真的没有别处引用它（用户自己写的函数）；
+     *   ② 它是**标准库成员**（`Math.max` / `arr.push`）：后端按「不是用户代码」
+     *      把 lib.es*.d.ts 的命中滤掉了，所以结果必然是空的。
+     * 判据不看结果（结果就是空），而是把这个词在**全工程源码**里的出现次数
+     * 与结果条数对比：出现次数 > 0 而结果为空，就说明命中的全是库声明。
+     */
+    let hint = `工程里没有别处引用「${w.word}」。`;
+    if (!res.refs.length) {
+      const files = jsScriptFiles();
+      let occurrences = 0;
+      for (const src of Object.values(files)) {
+        occurrences += findMatches(src, w.word, { wholeWord: true }).length;
+      }
+      if (occurrences > 0) {
+        hint =
+          `「${w.word}」在脚本里出现 ${occurrences} 次，但没有跨脚本引用 —— `
+          + "如果它是 Math / Array 这类标准库成员，后端会过滤掉库内部的命中，这是正常的。";
+      }
+    }
+    // 同名生命周期（每个脚本都有自己的 onStart）会被 TS 合并成一组，
+    // 两条都标「定义」。这不是 bug，但需要在标题里说清，否则用户会以为列表搞错了。
+    const defCount = res.refs.filter((r) => r.isDefinition).length;
+    const title =
+      defCount > 1
+        ? `「${w.word}」的引用（${defCount} 处定义：每个脚本都可以有自己的「${w.word}」）`
+        : `「${w.word}」的引用`;
+    tools.setRefs(title, res.refs, hint);
+  }
+
+  /** 跳转定义（F12）。工程内定义直接跳；内置 API 只展示 bwe.d.ts 里的声明。 */
+  async function gotoDefinitionAt(offset: number): Promise<void> {
+    const active = script.name || currentScript;
+    const w = wordAt(ta.value, offset);
+    if (!w) return;
+    const res = await requestDefinition(jsScriptFiles(), active, w.start + 1);
+    tools.showTab("refs");
+    expandAux();
+    const first = res.defs.find((d) => d.name !== "__bwe_dts__");
+    tools.setRefs(`「${w.word}」的定义`, res.defs, res.ok
+      ? "这个词没有工程内的定义（可能是内置 API 或运行时变量）。内置 API 的完整签名见「API 速查」页签。"
+      : "语言服务不可用，查不了定义。跑 npm run serve（或桌面版主进程）后可以按 F12 跳转。");
+    if (!first) return;
+    if (first.name === active) jumpToLine(first.line, first.col);
+    else jumpToOtherScript(first.name, first.line);
+  }
+
+  // ---- 编译（语法检查 + 降级 ES5）----
+  let compiling = false;
+  async function compile(): Promise<void> {
+    if (compiling) return;
+    compiling = true;
+    tools.showTab("build");
+    expandAux();
+    try {
+      const res = await requestCompile(ta.value, script.name || currentScript);
+      if (!res) {
+        tools.setCompile(null);
+        warn("编译需要本地服务（网页版 npm run serve / 桌面版主进程），现在不可用");
+        return;
+      }
+      tools.setCompile(res);
+      publishScriptProblems("js", script.name || currentScript, res.diagnostics);
+      const errors = res.diagnostics.filter((d) => d.severity === "error").length;
+      if (errors) warn(`编译有 ${errors} 个错误（在「编译」页签里点一条能跳到那一行）`);
+      else ok("编译通过，产物已降级为 ES5");
+    } finally {
+      compiling = false;
+    }
+  }
+
+  // ==========================================================================
+  // 工具面板（检查 / 大纲 / 引用 / 编译 / API 速查）
+  // ==========================================================================
+  /**
+   * 辅助区的「展开」入口。辅助区在 tools 之后才创建（它要把 tools.root 塞进去），
+   * 但引用/编译这两个动作在 tools 之前就定义好了 —— 用一个可变持有者接起来，
+   * 避免为了顺序把函数定义搬到后面（那会让「动作 → 面板」的阅读顺序变反）。
+   */
+  let expandAux: () => void = () => {};
+
+  const tools = createJsTools({
+    jumpTo: (name, line, col) => {
+      if (!name || name === (script.name || currentScript)) jumpToLine(line, col);
+      else jumpToOtherScript(name, line);
+    },
+    recheck: () => void runCheck(true),
+    compile: () => void compile()
+  });
+  tools.setOutline(extractOutline(ta.value));
+
+  // ---- 查找 / 替换 ----
+  const findbar = createFindBar(codeBox, {
+    getText: () => ta.value,
+    getSelection: () => ({ start: ta.selectionStart, end: ta.selectionEnd }),
+    goto: (m, focusEditor) => {
+      if (focusEditor) ta.focus();
+      ta.setSelectionRange(m.start, m.end);
+      const lh = lineHeight();
+      const line = ta.value.slice(0, m.start).split("\n").length;
+      ta.scrollTop = Math.max(0, (line - 1) * lh - ta.clientHeight / 2 + lh / 2);
+      syncScroll();
+      updateStats();
+      refreshHighlights();
+    },
+    applyReplace: (next, label) => applySource(next, label),
+    searchProject: (q) => {
+      window.dispatchEvent(new CustomEvent("bwe:search-project", { detail: { query: q } }));
+    }
+  });
+
+  /** 当前光标处的括号配对（覆盖层用）。 */
+  const bracketOf = (offset: number): Match[] => {
+    const pair = bracketPairAt(ta.value, offset);
+    return pair ? [pair.open, pair.close] : [];
+  };
+
+  /** 光标所在行（0 起）。「当前行底色」与状态栏「第 N 行」共用同一个换算。 */
+  function caretLine(): number {
+    const before = ta.value.slice(0, ta.selectionStart);
+    return before.split("\n").length - 1;
+  }
+
+  /** 同步开关按钮的外观（折叠/展开状态与 aria）。 */
+  function paintSyntaxBtn(): void {
+    syntaxBtn.textContent = syntaxOn ? "着色 开" : "着色 关";
+    syntaxBtn.classList.toggle("on", syntaxOn);
+    syntaxBtn.setAttribute("aria-pressed", String(syntaxOn));
+  }
+  syntaxBtn.addEventListener("click", () => {
+    syntaxOn = !syntaxOn;
+    try {
+      localStorage.setItem(SYNTAX_KEY, syntaxOn ? "1" : "0");
+    } catch {
+      /* 隐私模式忽略：只在本次会话生效 */
+    }
+    paintSyntaxBtn();
+    // 关掉着色后覆盖层仍然要显示文字（否则整篇看不见）—— overlay 内部把整段当 plain 处理
+    overlay.update({
+      text: ta.value,
+      matches: findbar.isOpen() ? findbar.state().matches : [],
+      currentIndex: findbar.isOpen() ? findbar.state().currentIndex : -1,
+      bracket: bracketOf(ta.selectionStart),
+      activeLine: -1,
+      syntax: syntaxOn
+    });
+    refreshHighlights();
+  });
+
+  /** 把「语法着色 + 搜索命中 + 括号配对 + 当前行」推给覆盖层。 */
+  function refreshHighlights(): void {
+    const state = findbar.isOpen()
+      ? findbar.state()
+      : { matches: [] as Match[], currentIndex: -1 };
+    overlay.update({
+      text: ta.value,
+      matches: state.matches,
+      currentIndex: state.currentIndex,
+      bracket: bracketOf(ta.selectionStart),
+      activeLine: ta === document.activeElement ? caretLine() : -1,
+      syntax: syntaxOn
+    });
+  }
+
+  function afterEdit(): void {
     script.source = ta.value;
     store.markDirty();
     refreshGutter();
     syncScroll();
     updateStats();
     scheduleCheck();
-  };
+    tools.setOutline(extractOutline(ta.value));
+    if (findbar.isOpen()) findbar.refresh();
+    refreshHighlights();
+  }
 
   ta.addEventListener("input", afterEdit);
-  ta.addEventListener("scroll", syncScroll);
-  ta.addEventListener("click", updateStats);
-  ta.addEventListener("keyup", updateStats);
-  ta.addEventListener("select", updateStats);
+  ta.addEventListener("scroll", () => {
+    syncScroll();
+    hideHover();
+  });
+
+  /**
+   * 输入法组字期间必须切回「textarea 显示文字」。
+   *
+   * 为什么：文字由覆盖层显示、textarea 的字是透明的。而中文输入法打拼音时，
+   * **组字串在 textarea 里**（不是 input 事件，覆盖层还没更新）——
+   * 此时若 textarea 的字是透明的，用户就看不见自己正在打什么。
+   * 所以 compositionstart 时给 `.js-edit` 加 `composing` 类：
+   * 该类的样式让 textarea 显示文字、同时把覆盖层 `visibility:hidden`（避免重影）。
+   * compositionend 时去掉，覆盖层接管。这是"textarea + overlay 着色"方案的必备补丁。
+   */
+  ta.addEventListener("compositionstart", () => editBox.classList.add("composing"));
+  ta.addEventListener("compositionend", () => {
+    editBox.classList.remove("composing");
+    // 组字结束后一次 input 事件会到，但顺序不保证（Chromium 是先 compositionend 再 input，
+    // 部分输入法相反）。这里主动刷一次，保证覆盖层立刻显示最终文本。
+    refreshHighlights();
+  });
+
+  // 失焦时撤掉「当前行」底色（它只在编辑时有意义，失焦后留着像一条选中条）
+  ta.addEventListener("blur", () => {
+    editBox.classList.remove("composing");
+    refreshHighlights();
+  });
+  const onCursor = (): void => {
+    updateStats();
+    findbar.syncSelection();
+    refreshHighlights();
+    hideHover();
+  };
+  ta.addEventListener("click", onCursor);
+  ta.addEventListener("keyup", onCursor);
+  ta.addEventListener("select", onCursor);
+
+  // 悬浮提示：只认鼠标，不打断键盘
+  ta.addEventListener("mousemove", (e) => scheduleHover(e as MouseEvent));
+  ta.addEventListener("mouseleave", hideHover);
 
   // 按需补全（挂在 codeBox 上，弹层相对它定位）。
   // 失败静默降级：只在「输出」面板留首次一次痕，绝不打断打字。
@@ -520,21 +922,72 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
     "js",
     () => ta.value,
     (text) => {
-      ta.value = text;
-      script.source = text;
-      store.markDirty();
-      refreshGutter();
-      syncScroll();
-      updateStats();
-      scheduleCheck();
+      applySource(text, "载入 VS Code 改动");
     }
   );
 
+  // ---- 键盘 ----
+  //
+  // 顺序纪律：**先处理我们自己定义的组合键，再放行给浏览器与补全弹层**。
+  // attachScriptComplete 的监听器注册在捕获阶段，所以补全弹层开着时
+  // 它的 Enter/Esc/↑↓ 会先拿到事件；这里只处理它不管的键，两者不抢键。
   ta.addEventListener("keydown", (e) => {
+    const ctrl = e.ctrlKey || e.metaKey;
     // Ctrl/Cmd+S：保存整个工程（全局快捷键对 textarea 是放行的，这里必须自己接住）
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+    if (ctrl && e.key.toLowerCase() === "s") {
       e.preventDefault();
       window.dispatchEvent(new CustomEvent("bwe:save"));
+      return;
+    }
+    if (ctrl && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      findbar.show("find");
+      refreshHighlights();
+      return;
+    }
+    if (ctrl && e.key.toLowerCase() === "h") {
+      e.preventDefault();
+      findbar.show("replace");
+      refreshHighlights();
+      return;
+    }
+    if (ctrl && e.key.toLowerCase() === "b") {
+      e.preventDefault();
+      void compile();
+      return;
+    }
+    // F12 / Shift+F12：定义与引用（VS Code 同款）
+    if (e.key === "F12") {
+      e.preventDefault();
+      hideHover();
+      if (e.shiftKey) void findReferencesAt(ta.selectionStart);
+      else void gotoDefinitionAt(ta.selectionStart);
+      return;
+    }
+    if (e.key === "F3") {
+      e.preventDefault();
+      if (!findbar.isOpen()) findbar.show("find");
+      else findbar.next(!e.shiftKey);
+      return;
+    }
+    if (e.key === "Escape") {
+      if (findbar.isOpen()) {
+        e.preventDefault();
+        findbar.hide();
+        refreshHighlights();
+      }
+      hideHover();
+      return;
+    }
+    // Alt+↑/↓：整行上移/下移（调整脚本顺序时比剪切粘贴稳，且不破坏缩进）
+    if (e.altKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      const moved = moveLine(ta.value, ta.selectionStart, e.key === "ArrowUp" ? -1 : 1);
+      if (moved) {
+        applySource(moved.text, "移动行");
+        ta.setSelectionRange(moved.caret, moved.caret);
+        updateStats();
+      }
       return;
     }
     if (e.key === "Tab") {
@@ -560,24 +1013,7 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
     }
   });
 
-  // 统计与检查区不再直接挂到 main 上：它们归下部辅助区（可折叠/可拖分割），
-  // 见 buildAuxSection。这里只创建元素。
-  // ---- 诊断区 ----
-  const checkHead = el("div", { class: "row tight js-check-head" });
-  checkHead.appendChild(el("div", { class: "group-label" }, "检查 Check"));
-  checkHead.appendChild(el("div", { class: "spacer" }));
-  const checkState = el("span", { class: "hint js-check-state" }, "待检查");
-  checkHead.appendChild(checkState);
-  checkHead.appendChild(
-    button("重新检查", () => void runCheck(true), {
-      size: "sm",
-      variant: "ghost",
-      title: "重新请求本地服务的 /api/js-check"
-    })
-  );
-  const diagBox = el("div", { class: "js-diag-list" });
-
-  // ---- 检查：服务器优先 + 本地兜底 ----
+  // ---- 诊断（检查）----
   let seq = 0;
   let timer = 0;
 
@@ -591,66 +1027,24 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
     if (!store.project || store.project.scripts[script.name] !== script) return;
     const my = ++seq;
     const src = script.source;
+    const name = script.name || currentScript;
     if (!src.trim()) {
-      checkState.textContent = "空脚本，没有可检查的内容";
-      diagBox.replaceChildren();
-      clearProblems(`js:${script.name || currentScript}`);
+      tools.setCheck([], false);
+      clearProblems(`js:${name}`);
+      dispatchDiagCount(0, 0);
       return;
     }
-    checkState.textContent = "检查中…";
-    const remote = await requestServerCheck(script.name, src, force);
+    const remote = await requestServerCheck(name, src, force);
     if (my !== seq) return; // 又有新的检查发起了，丢掉旧结果
-    if (remote) renderDiags(remote, true);
-    else renderDiags(localCheck(src), false);
-  }
-
-  function renderDiags(diags: Diag[], fromServer: boolean): void {
+    const diags = remote ?? localCheck(src);
+    tools.setCheck(diags, remote !== null);
     // 同步进「问题」面板：底部面板统一展示所有来源，用户不用为每条诊断
     // 在左栏和底部之间来回找。key 用 语言:脚本名 固定，重复检查不会堆叠。
-    publishScriptProblems("js", script.name || currentScript, diags);
-    diagBox.replaceChildren();
-    const errors = diags.filter((d) => d.severity === "error").length;
-    const warns = diags.filter((d) => d.severity === "warn").length;
-    checkState.textContent = fromServer
-      ? `服务器诊断 · ${errors} 错误 ${warns} 警告`
-      : `本地语法兜底 · ${errors} 错误（/api/js-check 未就绪）`;
-    if (!diags.length) {
-      diagBox.appendChild(
-        el(
-          "div",
-          { class: "hint js-diag-ok" },
-          fromServer
-            ? "没有发现问题，可以保存了。"
-            : "语法没问题。类型与 API 用法要等本地服务提供 /api/js-check 才能查（不阻断保存和运行）。"
-        )
-      );
-      return;
-    }
-    for (const d of diags) {
-      const row = el("div", {
-        class: `js-diag ${d.severity}`,
-        title: d.col ? `第 ${d.line} 行 第 ${d.col} 列 · 点击跳到这一行` : `第 ${d.line} 行 · 点击跳到这一行`
-      });
-      row.appendChild(el("span", { class: "js-diag-where" }, `第 ${d.line} 行`));
-      row.appendChild(el("span", { class: "js-diag-msg" }, d.message));
-      row.addEventListener("click", () => jumpToLine(d.line));
-      diagBox.appendChild(row);
-    }
-  }
-
-  jumpToLineHook = (line: number) => jumpToLine(line);
-
-  function jumpToLine(line: number): void {
-    const src = ta.value;
-    const lines = src.split("\n");
-    const target = Math.max(1, Math.min(lines.length, Math.round(line) || 1));
-    const start = lineOffset(src, target);
-    ta.focus();
-    ta.setSelectionRange(start, start + lines[target - 1].length);
-    const lh = lineHeight();
-    ta.scrollTop = Math.max(0, (target - 1) * lh - ta.clientHeight / 2 + lh / 2);
-    syncScroll();
-    updateStats();
+    publishScriptProblems("js", name, diags);
+    dispatchDiagCount(
+      diags.filter((d) => d.severity === "error").length,
+      diags.filter((d) => d.severity === "warn").length
+    );
   }
 
   // ---- 布局：代码区吃满高度，辅助区可折叠 + 可拖分割 ----
@@ -659,24 +1053,41 @@ function renderJsEditor(wrap: HTMLElement, script: ScriptEntry, rerender: () => 
   //   1. .js-code 写死 height:320px —— 1400+ 高的编辑区里代码只占三分之一；
   //   2. API 速查栏横向并排（flex: 0 1 190px），把代码又挤窄一半（实测仅 283px 宽）。
   // 改法：两者都不再并排。代码吃满整行宽度与剩余高度；
-  // 辅助区（检查结果 / 统计 / API 速查）收进下部面板，可折叠、可拖分割。
+  // 辅助区（页签：检查 / 大纲 / 引用 / 编译 / API 速查）收进下部面板，可折叠、可拖分割。
   const apiPane = buildApiPane(ta, afterEdit);
-  apiPane.classList.add("js-aux");
-  const aux = buildAuxSection(main, diagBox, stats, checkHead, apiPane);
+  tools.mountApiPane(apiPane);
+  const aux = buildAuxSection(main, el("div"), stats, el("div"), tools.root);
+  // buildAuxSection 会把 body 拼成「checkHead + diagBox + stats + apiPane」，
+  // 这里只有两块内容（统计 + 工具面板），所以清掉占位、直接铺进去。
+  const auxBody = aux.box.querySelector(".js-aux-body");
+  if (auxBody) auxBody.replaceChildren(stats, tools.root);
+  const auxTitle = aux.box.querySelector(".js-aux-title");
+  if (auxTitle) auxTitle.textContent = "辅助：检查 / 大纲 / 引用 / 编译 / API 速查";
   bench.appendChild(main);
   bench.appendChild(aux.resizer);
   bench.appendChild(aux.box);
   wrap.appendChild(bench);
   aux.restore();
+  expandAux = () => aux.expand();
+  tools.showTab("check");
 
-  // 首帧：补行号、对齐滚动、跑一次检查
+  // 首帧：补行号、对齐滚动、着色、跑一次检查
+  paintSyntaxBtn();
   refreshGutter();
   updateStats();
+  refreshHighlights();
   window.setTimeout(() => {
     refreshGutter();
     syncScroll();
+    // 字体/布局在这一帧才真正落定，覆盖层的字符宽度测量依赖它们 —— 再刷一次
+    refreshHighlights();
     void runCheck(false);
   }, 20);
+}
+
+/** 告诉辅助区标题条「现在还剩下几个错」（折叠状态下也要能看见）。 */
+function dispatchDiagCount(errors: number, warns: number): void {
+  window.dispatchEvent(new CustomEvent("bwe:script-diag-count", { detail: { errors, warns } }));
 }
 
 // ---------------- 缩进 ----------------
@@ -936,7 +1347,7 @@ function readAuxCollapsed(): boolean {
 }
 
 /**
- * 组装辅助区。返回 { box, resizer, restore }。
+ * 组装辅助区。返回 { box, resizer, expand, restore }。
  *
  * @param main     代码列容器（辅助区从它手里"拿走"高度）
  * @param diagBox 检查结果
@@ -952,7 +1363,7 @@ function buildAuxSection(
   apiPane: HTMLElement,
   /** 存储命名空间：JS 与 Yarn 的辅助内容不同，共用 key 会互相影响折叠状态 */
   ns = ""
-): { box: HTMLElement; resizer: HTMLElement; restore: () => void } {
+): { box: HTMLElement; resizer: HTMLElement; expand: () => void; restore: () => void } {
   const heightKey = AUX_HEIGHT_KEY + (ns ? "." + ns : "");
   const collapseKey = AUX_COLLAPSE_KEY + (ns ? "." + ns : "");
   const readCollapsed = (): boolean => {
@@ -1093,6 +1504,18 @@ function buildAuxSection(
   return {
     box,
     resizer,
+    /**
+     * 强制展开（折叠 -> 展开）。
+     *
+     * 为什么需要：辅助区**默认折叠**（把高度先给代码）。但「查找引用 / 编译」
+     * 这类**用户主动按快捷键触发**的动作，结果是唯一的反馈 —— 折叠着就等于
+     * 「按了 F12 什么也没发生」。所以结果到达时自动展开一次；
+     * 用户再手动折叠，状态照旧被他自己的选择覆盖（不在这里强制改写 localStorage）。
+     */
+    expand: () => {
+      if (!collapsed) return;
+      collapseState(false);
+    },
     restore: () => {
       // 首次挂载：按持久化状态铺好
       box.style.flex = collapsed ? `0 0 ${AUX_HEAD_H}px` : `0 0 ${height}px`;

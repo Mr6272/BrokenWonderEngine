@@ -1026,3 +1026,407 @@ button:focus:not(:focus-visible) {
   background-clip: content-box;
   border-radius: 3px;
 }
+
+/* ==========================================================================
+   AI 界面 —— 视觉层（hero / Agent 行为区 / 聊天区 / 输入卡）
+   --------------------------------------------------------------------------
+   只做观感，颜色全部取令牌（--surface-2 / --surface-3 / --sunken / --line /
+   --line-soft / --text / --text-2 / --text-3 / --accent / --accent-soft /
+   --ok / --danger / --r-sm / --r-md / --r-lg / --mono），**不写死色值** ——
+   这样 html.theme-midnight 与 html.theme-high-contrast 换一套令牌就整体生效，
+   不用为每个主题再补一份规则。
+   几何在 app.css 的「AI 界面 —— 布局几何」一节，两节按 CSS 属性分工。
+   ========================================================================== */
+
+/* ---------- 1. 空闲态 hero：标题 / 说明 / 建议行 ---------- */
+.ai-panel .ai-hero-title,
+.ai-panel .ai-hero > h1,
+.ai-panel .ai-hero > h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.2px;
+}
+
+.ai-panel .ai-hero-sub,
+.ai-panel .ai-hero > p {
+  margin: 0;
+  max-width: 54ch;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+/* 建议行：浅底圆角小卡。
+   hover 只换底色 + 边框色，**不加粗、不改尺寸** —— 描边一变粗整行会抖 1px。 */
+.ai-panel .ai-hero-suggests {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  max-width: 100%;
+}
+
+.ai-panel .ai-hero-suggest,
+.ai-panel .ai-hero > button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 7px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-panel .ai-hero-suggest:hover,
+.ai-panel .ai-hero > button:hover {
+  background: var(--surface-3);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  color: var(--text);
+}
+
+.ai-panel .ai-hero-suggest:focus-visible,
+.ai-panel .ai-hero > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ai-panel .ai-hero-suggest,
+  .ai-panel .ai-hero > button {
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+  }
+}
+
+/* ---------- 2. 行为摘要条（v3：原来整块的「Agent 行为区」缩成一行） ----------
+ * 两区时代这里是一块沉底的面（背景 sunken + 边框），占走半屏。
+ * 现在行为块直接进聊天轨，只剩这一行摘要条：给状态点、标题、步数、徽标，
+ * 高度 22px，不参与滚动，也不再有底色 —— 它是一条状态行，不是一块面板。
+ */
+.ai-panel .ai-agent-head {
+  color: var(--text-2);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}
+
+/* 状态点：一枚小圆点比一整行文字更快被扫到 ——「它现在在不在干活」是一眼问题 */
+.ai-panel .ai-agent-head::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--text-3);
+}
+
+.ai-panel .ai-agent-head[data-state="running"]::before {
+  background: var(--accent);
+}
+
+.ai-panel .ai-agent-head[data-state="done"]::before {
+  background: var(--ok);
+}
+
+.ai-panel .ai-agent-head[data-state="failed"]::before {
+  background: var(--danger);
+}
+
+.ai-panel .ai-agent-head > .ai-agent-title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ai-panel .ai-agent-head > .ai-agent-count {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 状态徽标（DOM 里若给了 .ai-agent-badge）：胶囊小标，不抢标题 */
+.ai-panel .ai-agent-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* 执行中：状态点呼吸。只在用户没有关掉动画时启用（prefers-reduced-motion 下不加新动画） */
+@media (prefers-reduced-motion: no-preference) {
+  .ai-panel[data-busy="1"] .ai-agent-head[data-state="running"]::before {
+    animation: ai-agent-breathe 1.2s ease-in-out infinite;
+  }
+
+  @keyframes ai-agent-breathe {
+    0%, 100% { opacity: 0.4; transform: scale(0.85); }
+    50%      { opacity: 1;   transform: scale(1.15); }
+  }
+}
+
+/* ---------- 3. 行为块在聊天轨里：紧凑但不糊 ---------- */
+/* 只动观感（圆角/字号），高度由 app.css 的 min-height:34px 与 flex:0 0 auto 保证。
+   v3 起工具块住在 .ai-thread（不再是 .ai-agent-list），选择器跟着改 ——
+   写错这里的代价是「工具块变回默认大字号、和消息混在一起分不清」。 */
+.ai-panel .ai-thread .ai-tool {
+  border-radius: var(--r-sm);
+  font-size: 11.5px;
+}
+
+.ai-panel .ai-thread .ai-thinking {
+  border-radius: var(--r-sm);
+}
+
+/* ---------- 4. 聊天区：和日志区之间有一条明确的「换了一种信息」的分界 ---------- */
+.ai-panel .ai-chat {
+  color: var(--text);
+}
+
+.ai-panel .ai-chat > .ai-thread {
+  gap: 8px;
+}
+
+/* ---------- 5. 输入卡：AI 面板里是一条圆角卡片，不是横贯全宽的灰条 ---------- */
+.app-root.ai-mode .ai-panel .ai-compose {
+  /* 卡片内边距压紧一点：1280x720 下两区（120+110）刚好放下，
+     这里省下的 ~8px 是给它们的安全余量（差 0.6px 就会跳出滚动条）。 */
+  padding: 8px 10px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg, 10px);
+  background: var(--surface-2);
+}
+
+/* 输入卡得到焦点时整张卡亮一下（焦点在 textarea 上，语义上属于这张卡） */
+.app-root.ai-mode .ai-panel .ai-compose:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.app-root.ai-mode .ai-panel .ai-compose .ai-quick {
+  margin-bottom: 6px;
+}
+
+.app-root.ai-mode .ai-panel .ai-compose .ai-quick .btn {
+  border-radius: 999px;
+}
+
+.app-root.ai-mode .ai-panel .ai-compose .ai-input {
+  min-height: 38px;
+  max-height: 168px;
+  padding: 9px 12px;
+  border-color: var(--line-soft);
+  background: var(--surface);
+  font-size: 12.5px;
+}
+
+.app-root.ai-mode .ai-panel .ai-compose .ai-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* 空态：输入卡就是主角，稍微抬一档（字号/内高），别让它看起来像附属控件。
+   选择器比上面那条 ai-mode 规则多一个类，确保空态下 42 不会被 38 盖掉。 */
+.app-root.ai-mode .ai-panel.is-idle .ai-compose .ai-input,
+.ai-panel.is-idle .ai-compose .ai-input {
+  min-height: 42px;
+  font-size: 13px;
+}
+
+/* 用量条在卡片里不要再画一条横贯全宽的分隔线，改成卡片内的细虚线 */
+.app-root.ai-mode .ai-panel .ai-compose .ai-meter {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--line-soft);
+}
+
+/* ==========================================================================
+   AI 界面 v2（二轮）—— 视觉层：左侧会话历史栏
+   --------------------------------------------------------------------------
+   几何在 app.css 的「AI 界面 v2」一节，本节只做观感；颜色全部取令牌
+   （--surface / --surface-2 / --surface-3 / --line / --line-soft / --text /
+   --text-2 / --text-3 / --accent / --accent-soft / --r-sm），不写死色值 ——
+   theme-midnight / theme-high-contrast 换一套令牌就自然跟随，不用另写覆盖。
+
+   观感对齐既有浮层 `.ai-sessions-pop`：同一组类名、同一档字号权重、同一种
+   「默认不出现、hover 才出现的删除按钮」。区别只在：浮层是 300px 一次性列表，
+   历史栏是常驻窄列，所以多了栏头/栏尾与选中行的主色条。
+   ========================================================================== */
+
+/* ---------- 1. 栏头 / 栏尾 ---------- */
+.ai-panel[data-ai-layout="page"] .ai-history {
+  color: var(--text);
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-head {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+/* 新建按钮：右对齐小胶囊。
+   不做满宽 —— 260px 的栏里一条满宽按钮压住标题，扫视时「历史」两个字反而看不见。 */
+.ai-panel[data-ai-layout="page"] .ai-history-head > [data-ai-session-new] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-head > [data-ai-session-new]:hover {
+  background: var(--surface-3);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--text);
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-head > [data-ai-session-new]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-foot {
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 2. 会话行 ---------- */
+/* 底：栏底是 --surface-2，行默认透明（= 栏底），hover 抬到 --surface-3。
+   选中行用 --accent-soft —— 只靠底色在奶油/高对比主题里区分度不够，
+   所以 app.css 还给了左侧 2px 条，这里只负责把那条染成主色。 */
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row {
+  background: transparent;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row:hover {
+  background: var(--surface-3);
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row.active {
+  background: var(--accent-soft);
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row.active::before {
+  background: var(--accent);
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main {
+  color: var(--text);
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main .ai-session-title {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+/* 副标题比标题弱两档：看得见「什么时候 / 多少条」，但不会和标题抢注意力 */
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main .ai-session-sub {
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 「当前」胶囊：在浮层里它是蓝色小字，在常驻栏里做成小胶囊更好扫 ——
+   一行里只有它是彩色块时，眼睛不用读字就知道哪条在跑。 */
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-main .ai-session-now {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* 删除按钮：默认透明，行 hover / 行内聚焦时才出现（沿用浮层做法：
+   列表里一片叉号很吓人，但完全藏起来又没法删） */
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-del {
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row:hover .ai-session-del,
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row:focus-within .ai-session-del,
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-del:focus-visible {
+  opacity: 1;
+}
+
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-del:hover {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--danger);
+}
+
+/* 触摸/键盘优先的环境没有 hover：直接常显，别让「删不掉」成为死路 */
+@media (hover: none) {
+  .ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-del {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row {
+    transition: background-color 120ms ease;
+  }
+
+  .ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-del {
+    transition: opacity 120ms ease, color 120ms ease;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row,
+  .ai-panel[data-ai-layout="page"] .ai-history-list .ai-session-row .ai-session-del {
+    transition: none;
+  }
+}
+
+/* ---------- 3. 历史栏为空 ---------- */
+.ai-panel[data-ai-layout="page"] .ai-history-list .ai-sessions-empty {
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* ---------- 4. page 布局的输入卡：卡内留白跟内容列对齐 ----------
+   几何（width / max-width / margin-inline）在 app.css；这里只调**卡片内边距**。
+   必须抬到 (0,6,0)：上面 `.app-root.ai-mode .ai-panel .ai-compose` 的
+   `padding: 8px 10px` 是 (0,4,0)，否则卡片内边距停在 10px、和 24px 的内容列错位。 */
+.app-root.ai-mode .ai-panel[data-ai-layout="page"] .ai-main .ai-compose {
+  padding-inline: 24px;
+}
+
+@media (max-width: 1000px) {
+  .app-root.ai-mode .ai-panel[data-ai-layout="page"] .ai-main .ai-compose {
+    padding-inline: 16px;
+  }
+}

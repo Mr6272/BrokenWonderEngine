@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "active": "c_mwdh766e_ezrgqy",
+  "sessions": [
+    {
+      "id": "c_mwdh766e_ezrgqy",
+      "title": "帮我重构玩家移动逻辑",
+      "createdAt": "2026-11-12T11:39:53.222Z",
+      "updatedAt": "2026-11-12T11:39:54.387Z",
+      "messageCount": 2,
+      "modelId": ""
+    },
+    {
+      "id": "c_mwdh767p_9q8148",
+      "title": "新对话",
+      "createdAt": "2026-11-12T11:39:53.269Z",
+      "updatedAt": "2026-11-12T11:39:53.269Z",
+      "messageCount": 0,
+      "modelId": ""
+    }
+  ]
+}

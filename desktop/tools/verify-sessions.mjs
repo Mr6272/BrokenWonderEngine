@@ -162,12 +162,12 @@ async function seedConversations(userDataDir) {
  * 点的是**非 active** 的 A —— 只有切到非当前会话，才能证明"切换真的换了内容"。
  */
 const TAP_SEQ = [
-  // ① 打开 AI 面板（会话按钮在 AI 面板里）
+  // ① 打开 AI 面板 = 进入 AI 界面（二轮起 AI 是独立工作面，不是右侧窄栏）
   "click:[data-panel-tab=ai]",
-  "wait:400",
-  // ② 打开会话历史浮层
-  "click:[data-ai-sessions]",
-  "wait:400",
+  // ② 等历史栏把会话列表拉回来。
+  //    二轮把会话历史从浮层升级成**左侧常驻栏**，所以这里不再需要点 [data-ai-sessions]：
+  //    点了反而会去点一个 page 布局下不存在的按钮。等它异步 load 完即可。
+  "wait:900",
   // ③ 读列表：行 / 标题 / 副标题都读**全部**匹配项（`*`），顺序可断言
   "probe:.ai-session-row*,.ai-session-title*,.ai-session-sub*",
   // ④ 点 A 那一行（用 A 的 id 精确点，不靠"第几个"这种位置假设）
@@ -336,7 +336,7 @@ async function finish(runDir, failures, warnings) {
     for (const f of failures) console.error(`  · ${f}`);
     console.error(
       "\n  最可能的原因：\n"
-      + "    1. 会话入口锚点不是 [data-ai-sessions] → 看 aiSessions.ts\n"
+      + "    1. 历史栏没渲染或没自动加载（data-ai-history / .ai-history-list .ai-session-row）→ 看 aiSessions.ts 的 renderSessionSidebar\n"
       + "    2. 会话行锚点不是 [data-ai-session-pick=<id>] / 行类名不是 .ai-session-row\n"
       + "    3. 列表未按 updatedAt 降序（主进程应发毫秒数字，见 toEpochMs）\n"
       + "    4. 副标题格式不是「N 条 · 时间」（见 sessionSubtitle）\n"

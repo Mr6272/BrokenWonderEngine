@@ -19,6 +19,12 @@
  * ⚠ 一个容易误解的点：`createdAt/updatedAt` 是**毫秒时间戳（number）**，
  *   不是 ISO 字符串。门面里是 `Number(s.createdAt)` —— 若哪天主进程改成 ISO，
  *   这里会静默变成 NaN（时间显示成空）。所以 `relativeTime` 对 NaN 有兜底。
+ *
+ * 两套外观，一套语义（v2 起）：
+ *   · `renderSessionSidebar()` —— AI 界面 page 布局的**左侧常驻栏**（历史升级为常驻）；
+ *   · `renderSessionSwitcher()` —— dock 布局顶部那条上的**浮层**（保留，宽度窄时用）。
+ *   两者的排序 / 切换 / 新建 / 删除都走下面同一组 `store*` 函数与 `sessionRow()`，
+ *   不复制第二份 —— 两份实现必然在"删除当前会话""aborted 提示"这类分支上漂移。
  */
 
 import { el, clear, button } from "../core/dom.ts";
@@ -104,7 +110,7 @@ export function abortedNotice(
 }
 
 // ============================================================================
-// UI
+// UI：两套外观共用的状态与动作
 // ============================================================================
 
 export interface SessionPanelHooks {
@@ -117,6 +123,294 @@ export interface SessionPanelHooks {
 }
 
 /**
+ * 会话列表的运行时状态。
+ *
+ * 为什么抽出来：浮层与左栏是**同一份数据、同一套动作**，只是画法不同。
+ * 各自持有一份 `sessions/active/busy` 的结果是：删了当前会话后一边重新加载、
+ * 另一边还显示旧 id，点下去静默失败（两个入口都开着时必现）。
+ */
+interface SessionStore {
+  sessions: AiSessionEntry[];
+  active: string;
+  busy: boolean;
+}
+
+function newStore(): SessionStore {
+  return { sessions: [], active: "", busy: false };
+}
+
+/** 拉一次列表（门面永不抛错，所以没有 try/catch）。 */
+async function loadInto(st: SessionStore): Promise<void> {
+  const r = await aiSessionsList();
+  st.sessions = r.sessions;
+  st.active = r.active;   // 以返回值为准
+  if (r.error) warn(`会话列表读取失败：${r.error}`);
+}
+
+/**
+ * 切到某个会话。
+ * @returns true = 状态已变（或本来就停在那条上，无需动作）；false = 失败/正忙。
+ *   调用方据此决定要不要收起浮层、要不要重画 —— 早期版本把重画写在函数内部，
+ *   浮层与左栏的收尾动作不一样，硬塞进去就会有一边不刷新。
+ */
+async function storeSwitch(
+  st: SessionStore,
+  hooks: SessionPanelHooks,
+  id: string
+): Promise<boolean> {
+  if (st.busy) return false;
+  if (id === st.active) return true;
+  st.busy = true;
+  try {
+    const r = await aiSessionSwitch(id);
+    if (r.ok === false) {
+      warn(`切换会话失败：${r.error || "未知原因"}`);
+      return false;
+    }
+    st.active = r.active || id;         // ⚠ 以返回值为准
+    st.sessions = r.sessions;
+    // ⚠ messages 已由门面过滤/规范化，直接渲染，不再二次过滤
+    hooks.renderMessages(r.messages ?? []);
+    const notice = abortedNotice(r.aborted, "switch");
+    if (notice) warn(notice);
+    hooks.refreshBar();
+    return true;
+  } finally {
+    st.busy = false;
+  }
+}
+
+/** 新建会话；成功返回 true。当前会话保留（不删）。 */
+async function storeNew(st: SessionStore, hooks: SessionPanelHooks): Promise<boolean> {
+  if (st.busy) return false;
+  st.busy = true;
+  try {
+    const r = await aiSessionNew();
+    if (r.ok === false) {
+      warn(`新建会话失败：${r.error || "未知原因"}`);
+      return false;
+    }
+    st.active = r.active || "";
+    st.sessions = r.sessions;
+    hooks.clearMessages();
+    const notice = abortedNotice(r.aborted, "new");
+    if (notice) warn(notice);
+    hooks.refreshBar();
+    return true;
+  } finally {
+    st.busy = false;
+  }
+}
+
+/**
+ * 删除会话（含二次确认与"删的是当前会话"的善后）。
+ *
+ * **二次确认必须**：会话不可恢复（本地文件删了就没了），而列表里每项都有
+ * 删除按钮、又挨得近，误点代价很大。用原生 confirm：破坏性且低频的操作，
+ * "必须打断你"这件事上它比自绘弹窗更有效（自绘容易被手快跳过）。
+ *
+ * 为什么善后必须在这里做：`aiSessionDelete` 之后后端已经落到另一个 active，
+ * 若 UI 还显示已删会话的消息，后续 `aiChat` 会写进不存在的目录。
+ */
+async function storeDelete(
+  st: SessionStore,
+  hooks: SessionPanelHooks,
+  s: AiSessionEntry
+): Promise<void> {
+  if (st.busy) return;
+  const name = s.title || "未命名会话";
+  const okDel = window.confirm(
+    `删除会话「${name}」？\n\n这会永久删除这条对话的历史（${s.messageCount} 条消息），无法恢复。`
+  );
+  if (!okDel) return;
+  st.busy = true;
+  try {
+    const r = await aiSessionDelete(s.id);
+    if (r.ok === false) {
+      warn(`删除会话失败：${r.error || "未知原因"}`);
+      return;
+    }
+    // ⚠ active 以返回值为准：删的可能是当前会话，后端已落到另一个
+    const wasActive = s.id === st.active;
+    st.active = r.active;
+    st.sessions = r.sessions;
+    const notice = abortedNotice(r.aborted, "delete");
+    if (notice) warn(notice);
+    if (wasActive) {
+      // 删掉了当前会话：对话区必须换成新 active 的内容
+      const sw = await aiSessionSwitch(st.active);
+      if (sw.ok !== false) {
+        if (sw.sessions.length) st.sessions = sw.sessions;
+        hooks.renderMessages(sw.messages ?? []);
+      } else {
+        hooks.clearMessages();
+      }
+    }
+    hooks.refreshBar();
+  } finally {
+    st.busy = false;
+  }
+}
+
+/** 一行会话说要的点击行为（浮层与左栏各自的收尾动作从这里注入）。 */
+interface SessionRowHandlers {
+  active: string;
+  onPick(id: string): void;
+  onDelete(entry: AiSessionEntry): void;
+}
+
+/**
+ * 会话行（**唯一构造点**，浮层与左栏共用）。
+ *
+ * ⚠ 类名与 data 锚点是对外契约：`desktop/tools/verify-sessions.mjs`、
+ *   `web/tools/ui-checks/README.md`、Lead 的验收命令都按它们定位。
+ *   改名/改层级不会报错，只会让那些验收从此量到 0 个元素（静默失效）。
+ */
+function sessionRow(s: AiSessionEntry, h: SessionRowHandlers): HTMLElement {
+  const row = el("div", { class: "ai-session-row" + (s.id === h.active ? " active" : "") });
+  row.dataset.aiSessionItem = "1";
+  row.dataset.sessionId = s.id;
+
+  const main = el("button", { type: "button", class: "ai-session-main" });
+  // 稳定锚点：验收脚本按 id 精确点某一条。
+  // **绝不能用 nth-of-type** —— 列表按 updatedAt 动态排序，位置会变。
+  main.dataset.aiSessionPick = s.id;
+  main.appendChild(el("span", { class: "ai-session-title" }, s.title || "未命名会话"));
+  main.appendChild(el("span", { class: "ai-session-sub" }, sessionSubtitle(s, Date.now())));
+  if (s.id === h.active) main.appendChild(el("span", { class: "ai-session-now" }, "当前"));
+  main.addEventListener("click", () => h.onPick(s.id));
+  row.appendChild(main);
+
+  // 删除按钮：默认隐藏，悬停/聚焦时出现（避免列表里一片红色叉号）
+  const del = button("×", () => h.onDelete(s), {
+    size: "sm",
+    variant: "ghost",
+    title: `删除「${s.title || "未命名会话"}」`
+  });
+  del.dataset.aiSessionDelete = "1";
+  del.dataset.sessionId = s.id;
+  del.classList.add("ai-session-del");
+  row.appendChild(del);
+  return row;
+}
+
+/** 左栏历史栏的返回句柄（不需要的话可以直接忽略返回值）。 */
+export interface SessionSidebar {
+  /** 历史栏根节点 `.ai-history[data-ai-history]` */
+  root: HTMLElement;
+  /** 重新拉一次列表并局部重画（外部改动过会话时用） */
+  refresh(): Promise<void>;
+}
+
+// ============================================================================
+// UI：左栏常驻历史（page 布局）
+// ============================================================================
+
+/**
+ * 渲染**常驻左栏**的会话历史。
+ *
+ * 与浮层版的差别只有"画法"，语义完全一致（同一组 `store*` 函数）。
+ * 之所以要常驻：历史是 AI 界面里最常回访的东西（"刚才那个对话"），
+ * 藏在浮层里意味着每次都要先点一次按钮 —— 参考布局里它是整列常驻的。
+ *
+ * 刷新策略：**进入即加载一次**（不等用户点开），之后切换/新建/删除只重画
+ * `.ai-history-list` 与底部计数，不整块重建 —— 整块重建会让滚动位置归零、
+ * 行高闪一下，看着像列表"跳了"。
+ *
+ * 网页版没有会话能力时返回 null，调用方据此跳过（左栏整个消失，主区照常）。
+ */
+export function renderSessionSidebar(
+  host: HTMLElement,
+  hooks: SessionPanelHooks
+): SessionSidebar | null {
+  if (!sessionsAvailable()) return null;
+
+  const st = newStore();
+  let loaded = false;
+
+  const root = el("div", { class: "ai-history" });
+  root.dataset.aiHistory = "1";
+
+  const head = el("div", { class: "ai-history-head" });
+  head.appendChild(el("span", { class: "ai-history-title" }, "历史"));
+
+  // 折叠**不在这里做按钮**：样式表把 `[data-collapsed="1"]` 处理成 display:none，
+  // 按钮本身在栏内 —— 点下去整栏（含按钮）一起消失，用户就再也点不回来了。
+  // 手动折叠要等一个**栏外**的展开入口（活动栏 / 主区头部），本轮不做。
+  // 属性本身仍然被支持：外壳按窗口宽度直接写 `data-collapsed` 即可。
+  const newBtn = button("+ 新建", () => void createNew(), {
+    size: "sm",
+    variant: "ghost",
+    iconPath: I.plus,
+    title: "开一个新对话（当前会话会保留）"
+  });
+  newBtn.dataset.aiSessionNew = "1";
+  head.appendChild(newBtn);
+
+  const list = el("div", { class: "ai-history-list" });
+  list.dataset.aiHistoryList = "1";
+
+  const foot = el("div", { class: "ai-history-foot" });
+
+  root.appendChild(head);
+  root.appendChild(list);
+  root.appendChild(foot);
+  host.appendChild(root);
+
+  function renderRows(): void {
+    clear(list);
+    const sorted = sortSessions(st.sessions);
+    foot.textContent = sorted.length ? `共 ${sorted.length} 个会话` : "";
+    // 首次加载完成前什么都不画：先画「还没有会话记录」再被真实列表替换掉，
+    // 等于每次进入 AI 界面都闪一下"你没有历史"。
+    if (!loaded) return;
+    if (!sorted.length) {
+      list.appendChild(el("div", { class: "hint ai-sessions-empty" }, "还没有会话记录"));
+      return;
+    }
+    for (const s of sorted) {
+      list.appendChild(
+        sessionRow(s, {
+          active: st.active,
+          onPick: (id) => void switchTo(id),
+          onDelete: (entry) => void confirmDelete(entry)
+        })
+      );
+    }
+  }
+
+  async function refresh(): Promise<void> {
+    await loadInto(st);
+    loaded = true;
+    renderRows();
+  }
+
+  async function switchTo(id: string): Promise<void> {
+    await storeSwitch(st, hooks, id);
+    renderRows();
+  }
+
+  async function createNew(): Promise<void> {
+    await storeNew(st, hooks);
+    renderRows();
+  }
+
+  async function confirmDelete(s: AiSessionEntry): Promise<void> {
+    await storeDelete(st, hooks, s);
+    renderRows();
+  }
+
+  // 进入 AI 界面即加载：用户下一眼就要看到历史，不该等一次点击。
+  void refresh();
+
+  return { root, refresh };
+}
+
+// ============================================================================
+// UI：顶部条浮层（dock 布局）
+// ============================================================================
+
+/**
  * 渲染会话切换器（挂在 AI 面板顶部条里）。
  * 网页版没有会话能力时返回 null，调用方据此跳过（入口整个消失）。
  */
@@ -127,10 +421,8 @@ export function renderSessionSwitcher(
 ): HTMLElement | null {
   if (!sessionsAvailable()) return null;
 
-  let sessions: AiSessionEntry[] = [];
-  let active = "";
+  const st = newStore();
   let open = false;
-  let busy = false;
 
   const btn = button("历史", () => void toggle(), {
     size: "sm",
@@ -143,14 +435,6 @@ export function renderSessionSwitcher(
   const pop = el("div", { class: "ai-sessions-pop" });
   pop.dataset.aiSessionsPop = "1";
   pop.style.display = "none";
-
-  async function load(): Promise<void> {
-    // 门面永不抛错，所以这里不需要 try/catch
-    const r = await aiSessionsList();
-    sessions = r.sessions;
-    active = r.active;   // 以返回值为准
-    if (r.error) warn(`会话列表读取失败：${r.error}`);
-  }
 
   /** 把浮层放到按钮下方（按钮位置随窗口宽度变，每次打开都重算） */
   function placePop(): void {
@@ -166,11 +450,11 @@ export function renderSessionSwitcher(
   }
 
   async function toggle(): Promise<void> {
-    if (busy) return;
+    if (st.busy) return;
     open = !open;
     pop.style.display = open ? "" : "none";
     if (open) {
-      await load();
+      await loadInto(st);
       renderList();
       placePop();
     }
@@ -178,36 +462,18 @@ export function renderSessionSwitcher(
 
   function renderList(): void {
     clear(pop);
-    const sorted = sortSessions(sessions);
+    const sorted = sortSessions(st.sessions);
     if (!sorted.length) {
       pop.appendChild(el("div", { class: "hint ai-sessions-empty" }, "还没有会话记录"));
     }
     for (const s of sorted) {
-      const row = el("div", { class: "ai-session-row" + (s.id === active ? " active" : "") });
-      row.dataset.aiSessionItem = "1";
-      row.dataset.sessionId = s.id;
-
-      const main = el("button", { type: "button", class: "ai-session-main" });
-      // 稳定锚点：验收脚本按 id 精确点某一条。
-      // **绝不能用 nth-of-type** —— 列表按 updatedAt 动态排序，位置会变。
-      main.dataset.aiSessionPick = s.id;
-      main.appendChild(el("span", { class: "ai-session-title" }, s.title || "未命名会话"));
-      main.appendChild(el("span", { class: "ai-session-sub" }, sessionSubtitle(s, Date.now())));
-      if (s.id === active) main.appendChild(el("span", { class: "ai-session-now" }, "当前"));
-      main.addEventListener("click", () => void switchTo(s.id));
-      row.appendChild(main);
-
-      // 删除按钮：默认隐藏，悬停/聚焦时出现（避免列表里一片红色叉号）
-      const del = button("×", () => void confirmDelete(s), {
-        size: "sm",
-        variant: "ghost",
-        title: `删除「${s.title || "未命名会话"}」`
-      });
-      del.dataset.aiSessionDelete = "1";
-      del.dataset.sessionId = s.id;
-      del.classList.add("ai-session-del");
-      row.appendChild(del);
-      pop.appendChild(row);
+      pop.appendChild(
+        sessionRow(s, {
+          active: st.active,
+          onPick: (id) => void switchTo(id),
+          onDelete: (entry) => void confirmDelete(entry)
+        })
+      );
     }
 
     const newRow = el("div", { class: "ai-sessions-foot" });
@@ -229,96 +495,24 @@ export function renderSessionSwitcher(
   }
 
   async function switchTo(id: string): Promise<void> {
-    if (busy || id === active) {
-      closePop();
-      return;
-    }
-    busy = true;
-    try {
-      const r = await aiSessionSwitch(id);
-      if (r.ok === false) {
-        warn(`切换会话失败：${r.error || "未知原因"}`);
-        return;
-      }
-      active = r.active || id;         // ⚠ 以返回值为准
-      sessions = r.sessions;
-      // ⚠ messages 已由门面过滤/规范化，直接渲染，不再二次过滤
-      hooks.renderMessages(r.messages ?? []);
-      const notice = abortedNotice(r.aborted, "switch");
-      if (notice) warn(notice);
-      hooks.refreshBar();
-      closePop();
-    } finally {
-      busy = false;
-      renderList();
-    }
+    if (st.busy) return;
+    const ok = await storeSwitch(st, hooks, id);
+    renderList();
+    // 失败时浮层保持打开：用户要能立刻换一条重试，而不是先重新点开
+    if (ok) closePop();
   }
 
   async function createNew(): Promise<void> {
-    if (busy) return;
-    busy = true;
-    try {
-      const r = await aiSessionNew();
-      if (r.ok === false) {
-        warn(`新建会话失败：${r.error || "未知原因"}`);
-        return;
-      }
-      active = r.active || "";
-      sessions = r.sessions;
-      hooks.clearMessages();
-      const notice = abortedNotice(r.aborted, "new");
-      if (notice) warn(notice);
-      hooks.refreshBar();
-      closePop();
-    } finally {
-      busy = false;
-      renderList();
-    }
+    if (st.busy) return;
+    const ok = await storeNew(st, hooks);
+    renderList();
+    if (ok) closePop();
   }
 
-  /**
-   * 删除会话。
-   *
-   * **二次确认必须**：会话不可恢复（本地文件删了就没了），而列表里每项都有
-   * 删除按钮、又挨得近，误点代价很大。用原生 confirm：破坏性且低频的操作，
-   * "必须打断你"这件事上它比自绘弹窗更有效（自绘容易被手快跳过）。
-   */
   async function confirmDelete(s: AiSessionEntry): Promise<void> {
-    if (busy) return;
-    const name = s.title || "未命名会话";
-    const okDel = window.confirm(
-      `删除会话「${name}」？\n\n这会永久删除这条对话的历史（${s.messageCount} 条消息），无法恢复。`
-    );
-    if (!okDel) return;
-    busy = true;
-    try {
-      const r = await aiSessionDelete(s.id);
-      if (r.ok === false) {
-        warn(`删除会话失败：${r.error || "未知原因"}`);
-        return;
-      }
-      // ⚠ active 以返回值为准：删的可能是当前会话，后端已落到另一个
-      const wasActive = s.id === active;
-      active = r.active;
-      sessions = r.sessions;
-      const notice = abortedNotice(r.aborted, "delete");
-      if (notice) warn(notice);
-      if (wasActive) {
-        // 删掉了当前会话：对话区必须换成新 active 的内容，
-        // 否则 UI 还显示已删会话的消息（后续 aiChat 也会写到不存在的目录）
-        const sw = await aiSessionSwitch(active);
-        if (sw.ok !== false) {
-          if (sw.sessions.length) sessions = sw.sessions;
-          hooks.renderMessages(sw.messages ?? []);
-        } else {
-          hooks.clearMessages();
-        }
-      }
-      hooks.refreshBar();
-      renderList();
-    } finally {
-      busy = false;
-    }
+    if (st.busy) return;
+    await storeDelete(st, hooks, s);
+    renderList();
   }
 
   // 点外面收起（浮层不该挡住整个面板）

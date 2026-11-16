@@ -1,0 +1,14 @@
+{
+  "toolbarButtons": [
+    "保存",
+    "试跑",
+    "更多"
+  ],
+  "playtestButtons": [
+    "试跑"
+  ],
+  "hasPreviewButton": false,
+  "hasPlaytestButton": true,
+  "cmdHasPlaytest": "no-api",
+  "cmdHasPreview": "no-api"
+}

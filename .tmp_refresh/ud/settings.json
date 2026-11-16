@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "ai": {
+    "provider": "mock",
+    "baseUrl": "",
+    "apiKey": "",
+    "modelFlash": "",
+    "modelPro": "",
+    "autoRoute": true,
+    "manualModel": "",
+    "activeModelId": "manual:deepseek:deepseek-chat-refresh-test",
+    "models": [
+      {
+        "id": "manual:deepseek:deepseek-chat-refresh-test",
+        "label": "刷新验证 DeepSeek",
+        "provider": "deepseek",
+        "baseUrl": "https://api.deepseek.com",
+        "model": "deepseek-chat-refresh-test",
+        "apiKey": "",
+        "apiKeyRef": "",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "notes": "",
+        "source": "manual",
+        "needsKey": true,
+        "encryptedApiKey": "djEwihPMXcRCHtF43t1WhlnzpqtvUE+to773eufLFel/Yusk7KsBAcEUiXn9MejIGMzEq58bng=="
+      }
+    ],
+    "contextWindow": 128000,
+    "maxTokens": 16384
+  },
+  "editor": {
+    "theme": "cream",
+    "uiScale": 1,
+    "autoSave": true
+  },
+  "insecure": false,
+  "keyUndecryptable": false,
+  "keyUndecryptableEntries": [],
+  "keyPlaintextFallback": false,
+  "encryptedApiKey": ""
+}

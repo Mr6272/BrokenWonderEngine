@@ -42,7 +42,7 @@ const fake = [
   { id: "view.commandPalette", title: "命令面板", key: "Ctrl+Shift+P", group: "视图", run() {} },
   { id: "project.settings", title: "工程设置", group: "工程", run() {} },
   { id: "project.package", title: "打包到 BWE（Windows EXE）…", group: "工程", run() {} },
-  { id: "project.preview", title: "在编辑器内预览场景", group: "工程", run() {} },
+  { id: "project.playtest", title: "试跑当前工程", group: "工程", run() {} },
   { id: "project.exportWeb", title: "导出 Web 游戏包", group: "工程", enabled: () => false, run() {} },
   { id: "edit.prefabs", title: "预制体面板…", group: "工程", run() {} },
   { id: "project.newExample", title: "新建示例工程", group: "工程", run() {} },

@@ -77,6 +77,16 @@ export class Shell {
   private sbWidth = 264;
   private panelHeight = 220;
   private activeActivity = "explorer";
+  /** 上一个活动栏条目（点「AI 助手」后要靠它把高亮还回去） */
+  private prevActivity = "explorer";
+  /**
+   * 进入 AI 界面前的工作区快照（三处折叠态 + AI 栏宽度）。
+   *
+   * 为什么必须记而不是"退出时一律展开"：用户进 AI 界面前可能本来就折着侧边栏、
+   * 折着底部面板、AI 栏拖到了 380 —— 这三个值都是他显式表达过的意图。
+   * 一律展开等于替他改了工作区，退出后还得手动调回来。
+   */
+  private aiModeSnapshot: { sidebar: boolean; panel: boolean; ai: boolean; aiWidth: number } | null = null;
 
   constructor() {
     this.root = el("div", { class: "app-root" });
@@ -193,10 +203,19 @@ export class Shell {
   }
 
   setActiveActivity(id: string): void {
+    // 记上一个条目：点「AI 助手」时点击本身已经把高亮改成 ai 了，
+    // 等 onActivity 被调用时已经问不出"用户原来在看什么" —— 只能在这里留痕。
+    // 退出 AI 界面要把高亮还回去，否则用户退出后停在一个没有高亮的空壳上。
+    if (this.activeActivity && this.activeActivity !== id) this.prevActivity = this.activeActivity;
     this.activeActivity = id;
     for (const [key, btn] of this.activityHosts) {
       btn.classList.toggle("active", key === id);
     }
+  }
+
+  /** 上一个活动栏条目（进入 AI 界面前用户所在的视图）。 */
+  previousActivity(): string {
+    return this.prevActivity || "explorer";
   }
 
   currentActivity(): string {
@@ -326,6 +345,74 @@ export class Shell {
 
   getAiPanelWidth(): number {
     return this.aiWidth;
+  }
+
+  // ---------------- AI 界面（AI 工作面） ----------------
+
+  /** 当前是否处于 AI 界面。状态只认 .app-root 上的类，不另存一份布尔值。 */
+  aiModeOn(): boolean {
+    return this.root.classList.contains("ai-mode");
+  }
+
+  /**
+   * 进入 / 退出 AI 界面。
+   *
+   * 进入 = 切 `.ai-mode` 类（其余界面由样式表退场）+ 把三处折叠态摆成"AI 独占"：
+   * 侧边栏折、底部面板折、AI 栏展开、AI 手柄隐藏。
+   * 退出 = 逐项还原进入前的快照（不是一律展开，见 aiModeSnapshot 的注释）。
+   */
+  setAiMode(on: boolean): void {
+    if (on === this.aiModeOn()) return;
+    if (on) {
+      this.aiModeSnapshot = {
+        sidebar: this.sidebarCollapsed(),
+        panel: this.panelCollapsed(),
+        ai: this.aiPanelCollapsed(),
+        aiWidth: this.getAiPanelWidth()
+      };
+      // 先加类再改折叠态：折叠那几步会 emitLayout → Editor 的
+      // syncLayoutAffordances 会读 aiModeOn()，类后加会让它看到"还没进 AI 界面"。
+      this.root.classList.add("ai-mode");
+      this.toggleSidebar(true);
+      this.togglePanel(true);
+      this.toggleAiPanel(false);
+      /**
+       * ⚠ 必须在 toggleAiPanel(false) **之后**清内联 flex / width。
+       *
+       * 顺序写反等于没写：展开那一步会调 setAiPanelWidth，把内联
+       * `flex: 0 0 460px` 重新写回去；内联样式优先级高于样式表，于是契约里
+       * `.app-root.ai-mode .ai-dock { flex: 1 1 auto; width: auto }` 被压过去 ——
+       * 类在了、状态看着对，宽度却还是 460（toggleAiPanel 折叠时踩的是同一个坑）。
+       */
+      this.aiPanel.style.flex = "";
+      this.aiPanel.style.width = "";
+      // AI 手柄在 AI 界面里没有意义（宽度由 CSS 定），留着还会浮一条可拖的假手柄
+      this.aiResizer.style.display = "none";
+    } else {
+      const s = this.aiModeSnapshot;
+      this.root.classList.remove("ai-mode");
+      if (s) {
+        this.toggleSidebar(s.sidebar);
+        this.togglePanel(s.panel);
+        if (s.ai) {
+          // 原来就是折的：折叠时 toggleAiPanel 会把内联宽度与手柄一起收掉
+          this.toggleAiPanel(true);
+        } else {
+          this.toggleAiPanel(false);
+          // 展开后又补一次宽度：折叠/展开过程中窗口可能被缩窄，
+          // setAiPanelWidth 会按当前窗口重新钳上限，这里以快照值为准。
+          this.setAiPanelWidth(s.aiWidth);
+          this.aiResizer.style.display = "";
+        }
+      } else {
+        // 没有快照（例如外部直接操作了类名）：退回到"展开右侧栏"这个合理默认
+        this.toggleAiPanel(false);
+      }
+      this.aiModeSnapshot = null;
+    }
+    // 两种切换都要重画：画布在 AI 界面里被隐藏，但退出时它要按新尺寸重算缩放
+    this.requestRepaint();
+    this.emitLayout();
   }
 
   // ---------------- 底部面板 ----------------
@@ -494,6 +581,20 @@ export class Shell {
     // 初始宽度要显式设一次：CSS 里的 flex-basis 只是兜底，
     // 用户拖过之后宽度由这里接管（双击手柄可恢复默认）。
     this.setAiPanelWidth(this.aiWidth);
+
+    /**
+     * 启动即收起 AI 栏（二轮改动：用户反馈「刚启动还有个小的 AI 窗口，很不对劲」）。
+     *
+     * 为什么：AI 已经是**独立工作面**（活动栏「AI 助手」= 进入 AI 界面，占满主区），
+     * 右侧再常驻一条 460px 窄栏就是两个入口、两套形态 —— 启动第一眼看到的是那个窄栏，
+     * 用户会以为「AI 界面」没生效。所以默认宽度 0：`editor.renderAiDock()` 在折叠态早退，
+     * DOM 里连 `.ai-panel` 都不建（不是 display:none，是根本没有）。
+     *
+     * 为什么保留窄栏能力而不是拆掉整段：`desktop/tools/verify-ai-dock-layout.mjs`
+     * 仍在量「展开后与辅助栏同高 / 折叠后宽度归零 / 拖宽上限跟窗口走」这些几何回归，
+     * `aiWidth` 也仍是退出 AI 界面时要还原的快照值。收起 ≠ 拆掉。
+     */
+    this.toggleAiPanel(true);
 
     // ResizeObserver 兜住所有几何变化（含窗口缩放与折叠），比逐处手动 requestRepaint 可靠
     try {

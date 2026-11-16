@@ -258,6 +258,20 @@ export const IPC_CONTRACT = {
       + " 或被用户手填（本会生成 manual:...），按 id 判重会变成两条。命中时就地更新并保留原 id/source。"
       + " 未知 provider 会回落 openai-compatible 并在 warning 里说明。"
   },
+  "bwe:ai-remove-model": {
+    preload: "aiRemoveModel",
+    kind: "invoke",
+    params: "{ id }",
+    returns: ["ok", "models", "active", "ready", "message", "removed"],
+    returnsOnError: ["ok", "error", "models", "active"],
+    notes:
+      "删一条模型（用户配错了 / 想清掉用不上的供应商）。两条硬约束："
+      + " ① **不许删到清单为空** —— 空了 AI 面板会变成「没有可用模型」的死状态，"
+      + " 用户本想清一条却再也发不出请求；宁可 ok:false 并说明。"
+      + " ② 删的若是当前 active，**active 必须落到剩下的第一条**，"
+      + " 否则 settings.activeModelId 指向不存在的 id，下一轮对话直接失败"
+      + " （provider.mjs 会报「模型不在清单里」）—— 与删当前会话是同一类坑。"
+  },
   "bwe:ai-probe-model": {
     preload: "probeModel",
     kind: "invoke",
