@@ -73,6 +73,8 @@ export class CanvasView {
   private moved = false;
   /** 本轮拖动画笔是否实际写入过（决定松手时要不要记一条撤销） */
   private brushPainted = false;
+  /** 笔刷上一格（格坐标）。快速拖动时用它做格间插值，避免漏格画出虚线 */
+  private brushLastCell: { gx: number; gy: number } | null = null;
   private spaceDown = false;
   private scaleHandle = -1;
   private pressSize = { w: 0, h: 0 };
@@ -627,6 +629,7 @@ export class CanvasView {
         this.brushPainted = true;
         this.requestPaint();
       }
+      this.brushLastCell = null;
       this.mode = "erase";
       return;
     }
@@ -640,7 +643,8 @@ export class CanvasView {
     if (store.tool === "brush") {
       // 按下即铺设第一块，然后进入 brush 模式让拖动继续铺。
       // silent=true：拖动过程里不逐块记撤销，松手时统一记一条。
-      this.placeAt(this.pressWorld, false, true);
+      this.brushLastCell = null;
+      this.paintStrokeTo(this.pressWorld);
       this.mode = "brush";
       this.brushPainted = true;
       this.requestPaint();
@@ -745,7 +749,7 @@ export class CanvasView {
 
     // 拖动画笔：移动经过的每一格都落一块，持久化由松手时统一提交。
     if (this.mode === "brush") {
-      this.placeAt(world, false, true);
+      this.paintStrokeTo(world);
       this.brushPainted = true;
       this.requestPaint();
       return;
@@ -754,7 +758,9 @@ export class CanvasView {
     // 拖动擦除：移动经过的每一格都擦掉。
     if (this.mode === "erase") {
       const hit = this.pick(world);
-      if (hit && !hit.locked) {
+      // 与单击擦除保持完全一致的行为（不额外加 locked 限制），
+      // 拖动擦除就是"等于连续点击"，不该偷偷改变语义。
+      if (hit) {
         const sc = store.scene;
         if (sc) {
           sc.objects = sc.objects.filter((o) => o !== hit);
@@ -948,6 +954,7 @@ export class CanvasView {
           this.cb.onCommit?.(wasMode === "brush" ? "铺设地块" : "擦除地块");
         }
         this.brushPainted = false;
+        this.brushLastCell = null;
         this.mode = "none";
         break;
       }
@@ -1380,6 +1387,49 @@ export class CanvasView {
     store.markDirty();
     if (!silent) this.cb.onCommit?.("铺设地块");
     if (!keepTool) this.requestPaint();
+  }
+
+  /**
+   * 沿上一点到当前点的整条格子路径落笔。
+   *
+   * 为什么不能只 paintAt(当前点)：mousemove 的采样频率跟不上手的移动速度，
+   * 快速拖一笔时相邻两次事件可能隔了好几格，只按采样点落子会画成一串虚线。
+   * 这里用 Bresenham 补齐格间路径，让"拖动画一条"在物理上真的是一条。
+   */
+  private paintStrokeTo(world: Point2): void {
+    const t = this.tileSize();
+    const gx = Math.floor(world.x / t);
+    const gy = Math.floor(world.y / t);
+    const from = this.brushLastCell;
+    if (!from) {
+      this.placeAt(world, false, true);
+      this.brushLastCell = { gx, gy };
+      return;
+    }
+    if (from.gx === gx && from.gy === gy) return;
+
+    // Bresenham 走格
+    let x0 = from.gx;
+    let y0 = from.gy;
+    const dx = Math.abs(gx - x0);
+    const dy = Math.abs(gy - y0);
+    const sx = x0 < gx ? 1 : -1;
+    const sy = y0 < gy ? 1 : -1;
+    let err = dx - dy;
+    for (;;) {
+      this.placeAt({ x: x0 * t + t / 2, y: y0 * t + t / 2 }, false, true);
+      if (x0 === gx && y0 === gy) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) {
+        err -= dy;
+        x0 += sx;
+      }
+      if (e2 < dx) {
+        err += dx;
+        y0 += sy;
+      }
+    }
+    this.brushLastCell = { gx, gy };
   }
 
   private onWheel(e: WheelEvent): void {
