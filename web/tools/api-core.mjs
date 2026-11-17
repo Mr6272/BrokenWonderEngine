@@ -511,6 +511,9 @@ export function createApiCore(options = {}) {
     const args = [
       "-cp", classpath,
       `-Djava.library.path=${libRoot}`,
+      // 试跑默认开热重载：这是调试场景，改脚本要立刻看到效果。
+      // 正式打包不会带这个参数。
+      "-Dbwe.hotreload=1",
       // 与 jpackage 的 --java-options 完全一致：JOGL 2.1 缺少这几个 flag 时
       // WGL 配置枚举报 ArrayIndexOutOfBoundsException → 窗口能开但 GL/脚本永不启动。
       "--enable-native-access=ALL-UNNAMED",
