@@ -25,7 +25,7 @@ import { loadFrame } from "../data/assets.ts";
 import { sizeOf, boundsOf, paintObject, paintGrid, paintUiFrame, paintLightingPreview, type PaintCtx } from "./painter.ts";
 import { collectSceneLighting } from "./lightMath.ts";
 
-type Mode = "none" | "move" | "marquee" | "pan" | "zone" | "scale";
+type Mode = "none" | "move" | "marquee" | "pan" | "zone" | "scale" | "brush" | "erase";
 
 /**
  * 预制体拖放的 MIME。
@@ -71,6 +71,8 @@ export class CanvasView {
   private pressStartWorld: Point2 = { x: 0, y: 0 };
   private lastScreen: Point2 = { x: 0, y: 0 };
   private moved = false;
+  /** 本轮拖动画笔是否实际写入过（决定松手时要不要记一条撤销） */
+  private brushPainted = false;
   private spaceDown = false;
   private scaleHandle = -1;
   private pressSize = { w: 0, h: 0 };
@@ -616,15 +618,16 @@ export class CanvasView {
     if (e.button !== 0) return;
 
     if (store.tool === "erase") {
+      // 拖动连续擦除：按下擦一个，进入 erase 模式后移动继续擦，松手记一条撤销。
       const hit = this.pick(this.pressWorld);
       if (hit) {
         scene.objects = scene.objects.filter((o) => o !== hit);
         store.forget(hit);
         store.markDirty();
-        this.cb.onCommit?.("删除对象");
+        this.brushPainted = true;
         this.requestPaint();
       }
-      this.mode = "none";
+      this.mode = "erase";
       return;
     }
 
@@ -635,8 +638,12 @@ export class CanvasView {
     }
 
     if (store.tool === "brush") {
-      this.placeAt(this.pressWorld, e.shiftKey);
-      this.mode = "none";
+      // 按下即铺设第一块，然后进入 brush 模式让拖动继续铺。
+      // silent=true：拖动过程里不逐块记撤销，松手时统一记一条。
+      this.placeAt(this.pressWorld, false, true);
+      this.mode = "brush";
+      this.brushPainted = true;
+      this.requestPaint();
       return;
     }
 
@@ -734,6 +741,30 @@ export class CanvasView {
 
     if (Math.abs(e.clientX - this.pressScreen.x) > 3 || Math.abs(e.clientY - this.pressScreen.y) > 3) {
       this.moved = true;
+    }
+
+    // 拖动画笔：移动经过的每一格都落一块，持久化由松手时统一提交。
+    if (this.mode === "brush") {
+      this.placeAt(world, false, true);
+      this.brushPainted = true;
+      this.requestPaint();
+      return;
+    }
+
+    // 拖动擦除：移动经过的每一格都擦掉。
+    if (this.mode === "erase") {
+      const hit = this.pick(world);
+      if (hit && !hit.locked) {
+        const sc = store.scene;
+        if (sc) {
+          sc.objects = sc.objects.filter((o) => o !== hit);
+          store.forget(hit);
+          store.markDirty();
+          this.brushPainted = true;
+          this.requestPaint();
+        }
+      }
+      return;
     }
 
     switch (this.mode) {
@@ -909,6 +940,18 @@ export class CanvasView {
     const world = this.screenToWorld(local);
 
     switch (wasMode) {
+      case "brush":
+      case "erase": {
+        // 拖动期间用 silent 落子，松手时统一记一条撤销，避免整条笔画刷出几十条历史。
+        if (this.brushPainted) {
+          store.markDirty();
+          this.cb.onCommit?.(wasMode === "brush" ? "铺设地块" : "擦除地块");
+        }
+        this.brushPainted = false;
+        this.mode = "none";
+        break;
+      }
+
       case "move": {
         // 没有真正移动 → 这是一次点击，不是拖动。
         // 关键：不能把 overrides 里的 0 位移提交上去，否则"点一下"也会写脏数据 + 记一次撤销。
@@ -1293,7 +1336,7 @@ export class CanvasView {
     this.requestPaint();
   }
 
-  private placeAt(world: Point2, keepTool: boolean): void {
+  private placeAt(world: Point2, keepTool: boolean, silent = false): void {
     if (!store.scene) return;
     const asset = store.findAsset(store.paintAssetId);
     if (!asset) {
@@ -1335,7 +1378,7 @@ export class CanvasView {
       parentId: null
     });
     store.markDirty();
-    this.cb.onCommit?.("铺设地块");
+    if (!silent) this.cb.onCommit?.("铺设地块");
     if (!keepTool) this.requestPaint();
   }
 
