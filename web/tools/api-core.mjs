@@ -22,7 +22,7 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module";
 import { dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { findRuntimeJdk, packageAndroid, packageBwe, writeQuickBuild } from "./package-bwe.mjs";
+import { findRuntimeJdk, packageAndroid, packageBwe, packageWeb, writeQuickBuild } from "./package-bwe.mjs";
 import { createScriptLanguageFromDisk } from "./script-language.mjs";
 
 const defaultWebRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -626,7 +626,15 @@ export function createApiCore(options = {}) {
   async function runJob(job, body) {
     try {
       const platform = String(job.platform ?? body.platform ?? "windows").toLowerCase();
-      if (platform === "android") {
+      if (platform === "web") {
+        const result = await packageWeb(body.project, body.assets ?? [], {
+          jobId: job.id, name: body.name || body.project.name, version: body.version || "1.0.0"
+        }, (message) => pushLog(job, message));
+        job.result = { platform: "web", ...result };
+        job.status = "done";
+        job.finishedAt = new Date().toISOString();
+        pushLog(job, `Web 导出完成，文件：${result.zipPath}`);
+      } else if (platform === "android") {
         const result = await packageAndroid(
           body.project,
           body.assets ?? [],

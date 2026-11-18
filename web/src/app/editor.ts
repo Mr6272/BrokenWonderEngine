@@ -751,7 +751,7 @@ export class Editor {
         { label: "打开模块编辑器", key: "M", onClick: () => this.openModuleEditorForSelection() },
         { divider: true },
         { label: "打包到 BWE", onClick: () => void openBwePackager() },
-        { label: "导出 Web 游戏包", disabled: true, hint: "下一步实现", onClick: () => this.exportWeb() }
+        { label: "导出 Web 游戏包", onClick: () => this.exportWeb() }
       ]);
     }, {
       size: "sm",
@@ -1634,7 +1634,7 @@ export class Editor {
       { id: "project.settings", title: "工程设置", group: "工程", icon: "settings", run: () => { this.shell.toggleSidebar(false); this.showSidebarView("settings"); } },
       { id: "project.package", title: "打包到 BWE（Windows EXE）…", group: "工程", icon: "packageBox", hint: "需要本地服务（网页版）或桌面客户端", run: () => void openBwePackager() },
       { id: "project.playtest", title: "试跑当前工程", group: "工程", icon: "play", key: "F6", hint: "在本机起 Java 窗口真跑：先做 JS 诊断，通过才启动", run: () => void this.openPlaytest() },
-      { id: "project.exportWeb", title: "导出 Web 游戏包", group: "工程", icon: "exportImg", enabled: () => false, run: () => this.exportWeb() },
+      { id: "project.exportWeb", title: "导出 Web 游戏包", group: "工程", icon: "exportImg", enabled: () => Boolean(store.project), run: () => this.exportWeb() },
       { id: "edit.prefabs", title: "预制体面板…", group: "工程", icon: "pack", run: () => { this.shell.toggleSidebar(false); this.showSidebarView("explorer"); this.explorerTab.focus("prefabs"); } },
       { id: "project.newExample", title: "新建示例工程", group: "工程", icon: "newFile", hint: "内置主角、敌人、箱子、触发区，直接可用", run: () => this.newExampleProject() },
       { id: "project.example.minesweeper", title: "扫雷示例（.bwproj）", group: "工程", icon: "module", run: () => this.newBuiltinExample("minesweeper") },
@@ -2319,7 +2319,7 @@ export class Editor {
   }
 
   private exportWeb(): void {
-    info("Web 游戏包导出正在开发中");
+    void openBwePackager("web");
   }
 
   /**
