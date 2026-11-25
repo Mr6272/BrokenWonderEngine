@@ -34,6 +34,14 @@ let filterKind: "all" | "IMAGE" | "SEQUENCE" | "ATLAS" | "AUDIO" = "all";
 let searchText = "";
 let selectedAssetId = "";
 
+/**
+ * 上一轮往（常驻的）面板 host 上注册的拖放监听器的撤销句柄。
+ *
+ * 面板 host 是 Tabbed 里那个**不销毁**的节点，而 renderAssetPanel 会被反复调用。
+ * 不撤销旧监听就会出现「拖一次素材 → 导入 N 份」的累积效应（见 renderAssetPanel 里的注释）。
+ */
+let dropAbort: AbortController | null = null;
+
 export function renderAssetPanel(host: HTMLElement): void {
   host.replaceChildren();
 
@@ -138,22 +146,42 @@ export function renderAssetPanel(host: HTMLElement): void {
   host.appendChild(seqPicker);
 
   // 从资源管理器拖文件进面板
+  //
+  // ⚠ 这里必须**每次渲染前先摘掉上一轮的监听器**。
+  //   `host` 是 Tabbed 里那个常驻的 host 节点（面板重画只换子节点、host 本身不销毁），
+  //   而 renderAssetPanel 会被反复调用（切标签、bwe:refresh、导入完成后触发刷新…）。
+  //   旧写法每次渲染都往同一个 host 上 addEventListener，监听器只增不减：
+  //     首次进入 1 个 → 导入后触发 refresh → 2 个 → 3 个 …
+  //   于是「拖一组素材进去」会被同一次 drop 处理 N 次，一次性写出 N 组重复素材；
+  //   而每次导入又会再触发一次刷新，N 接着变大 —— 用户看到的就是「拖一次变三组、
+  //   越拖越多，指数级膨胀」（实测 3 → 7 → 16，见 .tmp_ui/probe-listeners.json）。
+  //   用 AbortController 一次性撤销上一轮注册的三类监听，成对登记、成对撤销。
+  dropAbort?.abort();
+  const abort = new AbortController();
+  dropAbort = abort;
+  const sig = { signal: abort.signal };
   host.addEventListener("dragover", (e) => {
     e.preventDefault();
     host.style.outline = "2px dashed var(--accent)";
-  });
+  }, sig);
   host.addEventListener("dragleave", () => {
     host.style.outline = "";
-  });
+  }, sig);
   host.addEventListener("drop", async (e) => {
     e.preventDefault();
     host.style.outline = "";
+    // 同一次 drop 只处理一次：监听器已经用 AbortController 一对一收敛，
+    // 这里再打一道标记 —— 万一将来又有人在祖先节点上挂 drop（事件会冒泡），
+    // 语义仍然是「一次拖放 = 一次导入」，而不是「拖一次进两份」。
+    const mark = e as DragEvent & { __bweImportDone?: boolean };
+    if (mark.__bweImportDone) return;
+    mark.__bweImportDone = true;
     const files = Array.from((e as DragEvent).dataTransfer?.files ?? []);
     if (!files.length || !store.project) return;
     // 一次拖多张时按"序列帧"处理更符合直觉（用户通常一次拖一整组图）
     const res = files.length > 1 ? await importSequenceSet(store.project, files) : await importFiles(store.project, files);
     afterImport(res.added, res.skipped, res.message);
-  });
+  }, sig);
 
   renderGrid(grid);
 }

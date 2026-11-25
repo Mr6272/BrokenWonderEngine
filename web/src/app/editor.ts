@@ -167,10 +167,22 @@ export class Editor {
     // 为什么走事件而不是让面板持有 canvas：面板不该知道画布存在（它们分属两侧 UI）；
     // 事件让"谁想定位"与"怎么定位"解耦，画布也能换成另一个实现。
     window.addEventListener("bwe:focus-object", (e) => {
-      const d = (e as CustomEvent).detail as { id?: string; x?: number; y?: number } | undefined;
+      const d = (e as CustomEvent).detail as { id?: string; x?: number; y?: number; zoom?: boolean } | undefined;
       if (!d) return;
       const obj = store.scene?.objects.find((o) => o.id === d.id);
       if (obj) store.select(obj);
+      /**
+       * 带 zoom=true 时按对象矩形聚焦（框住 + 合适缩放），否则只居中。
+       *
+       * 两种语义都要保留：光源清单那种「列表里点一行」只需要把视野挪过去
+       * （用户自己在看大图，不希望缩放被改）；而「定位这个对象」按钮/双击
+       * 是真的要看清楚它，必须连缩放一起调。
+       */
+      if (obj && d.zoom === true) {
+        this.canvas.focusObject(obj);
+        this.canvas.requestPaint();
+        return;
+      }
       const x = typeof d.x === "number" ? d.x : obj?.x;
       const y = typeof d.y === "number" ? d.y : obj?.y;
       if (typeof x === "number" && typeof y === "number") this.canvas.centerOn(x, y);
@@ -706,6 +718,8 @@ export class Editor {
     toggles.appendChild(toggleIcon(I.snap, "吸附到网格 Snap", () => store.snapToGrid, (v) => { store.snapToGrid = v; this.hint(v ? "吸附已开启" : "吸附已关闭，可以自由摆放"); }));
     toggles.appendChild(toggleIcon(I.bounds, "显示碰撞体 Collider", () => store.showColliders, (v) => { store.showColliders = v; this.canvas.requestPaint(); }));
     toggles.appendChild(toggleIcon(I.zone, "显示触发区 Trigger", () => store.showZones, (v) => { store.showZones = v; this.canvas.requestPaint(); }));
+    // 运行时视口取景框：用户在一张大图上摆东西时，唯一的「画面边界」参照。
+    toggles.appendChild(toggleIcon(I.scene, "显示运行时视口（1280×720 窗口范围）", () => store.showViewport, (v) => { store.showViewport = v; this.canvas.requestPaint(); }));
     bar.appendChild(toggles);
     bar.appendChild(el("div", { class: "sep" }));
 
@@ -718,7 +732,8 @@ export class Editor {
     this.zoomLabel.style.fontSize = "12px";
     zoomGroup.appendChild(this.zoomLabel);
     zoomGroup.appendChild(iconButton(I.zoomIn, "放大", () => this.canvas.setZoom(this.canvas.getZoom() * 1.2)));
-    zoomGroup.appendChild(iconButton(I.fit, "缩放到整张地图（F）", () => this.canvas.zoomToFit()));
+    zoomGroup.appendChild(iconButton(I.fit, "聚焦选中对象 / 缩放到整张地图（F）", () => this.canvas.fitOrFocus()));
+    zoomGroup.appendChild(iconButton(I.target, "缩放到整张地图", () => this.canvas.zoomToFit()));
     bar.appendChild(zoomGroup);
 
     bar.appendChild(el("div", { class: "spacer" }));
@@ -1607,7 +1622,10 @@ export class Editor {
       { id: "edit.moduleEditor", title: "打开模块编辑器", key: "M", group: "编辑", icon: "module", hint: "对单选中的对象打开独立模块编辑器", run: () => this.openModuleEditorForSelection() },
 
       // ---------------- 视图 ----------------
-      { id: "view.fit", title: "缩放到整张地图", key: "F", group: "视图", icon: "fit", run: () => this.canvas.zoomToFit() },
+      // F：有选中 → 聚焦选中对象；没选中 → 缩放到整张地图（见 CanvasView.fitOrFocus）
+      { id: "view.fit", title: "聚焦选中对象 / 缩放到整张地图", key: "F", group: "视图", icon: "fit", hint: "有选中时框住它；没选中时看全图", run: () => this.canvas.fitOrFocus() },
+      { id: "view.fitAll", title: "缩放到整张地图（忽略选中）", group: "视图", icon: "target", run: () => this.canvas.zoomToFit() },
+      { id: "view.toggleViewport", title: "切换运行时视口框显示", group: "视图", icon: "scene", hint: "画出打包后 1280×720 窗口看到的那块范围", run: () => { store.showViewport = !store.showViewport; this.canvas.requestPaint(); } },
       { id: "view.zoom100", title: "缩放 100%", group: "视图", icon: "zoomIn", run: () => this.canvas.setZoom(1) },
       { id: "view.toggleGrid", title: "切换网格显示", group: "视图", icon: "grid", run: () => { store.showGrid = !store.showGrid; this.canvas.requestPaint(); } },
       { id: "view.toggleColliders", title: "切换碰撞体显示", group: "视图", icon: "bounds", run: () => { store.showColliders = !store.showColliders; this.canvas.requestPaint(); } },
@@ -2109,8 +2127,12 @@ export class Editor {
         showQuickStart();
         return;
       }
+      // F = 聚焦：有选中就框住选中对象，没选中才缩放到整张地图。
+      // 用户原话「点击物体不能切换到聚焦，太难受了」——原来的 F 永远跳回全图，
+      // 选中的小物件反而"越按越看不见"。
       if (e.key === "f" || e.key === "F") {
-        this.canvas.zoomToFit();
+        e.preventDefault();
+        this.canvas.fitOrFocus();
         return;
       }
       if ((e.key === "m" || e.key === "M") && !ctrl) {

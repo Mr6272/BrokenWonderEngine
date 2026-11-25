@@ -1,0 +1,14 @@
+﻿const fs=require("fs");
+const out=[];
+const A=fs.readFileSync("web/tools/api-core.mjs","utf8").split(/\r?\n/);
+out.push("== api-core imports ==");
+A.forEach((l,i)=>{ if(/^import/.test(l)) out.push((i+1)+": "+l.trim()); });
+out.push("== api-core package routes ==");
+A.forEach((l,i)=>{ if(/package-bwe/.test(l)) out.push((i+1)+": "+l.trim().slice(0,120)); });
+const P=fs.readFileSync("web/tools/package-bwe.mjs","utf8").split(/\r?\n/);
+out.push("== package-bwe exports ==");
+P.forEach((l,i)=>{ if(/^export /.test(l)) out.push((i+1)+": "+l.trim().slice(0,120)); });
+out.push("== package-bwe zip refs ==");
+P.forEach((l,i)=>{ if(/zip/i.test(l)) out.push((i+1)+": "+l.trim().slice(0,120)); });
+fs.writeFileSync(".tmp_rep.txt", out.join("\n"), "utf8");
+console.log(out.join("\n"));

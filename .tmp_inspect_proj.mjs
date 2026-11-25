@@ -1,0 +1,11 @@
+﻿import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const dir = "web/examples";
+const files = readdirSync(dir).filter((f) => f.endsWith(".bwproj"));
+const target = files.find((f) => f === "\u626b\u96f7.bwproj");
+console.log("all:", files.map((f) => JSON.stringify(f)).join(", "));
+console.log("target:", JSON.stringify(target));
+const proj = JSON.parse(readFileSync(join(dir, target), "utf8"));
+console.log("name:", proj.name, "scenes:", proj.scenes?.length, "scene0 objects:", proj.scenes?.[0]?.objects?.length);
+console.log("assets:", Array.isArray(proj.assets) ? proj.assets.length : (proj.assets && Object.keys(proj.assets).length));
+console.log("scripts:", JSON.stringify((proj.scripts || []).map?.((s) => s.name || s.file) ?? Object.keys(proj.scripts || {})));

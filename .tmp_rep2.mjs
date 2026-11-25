@@ -1,0 +1,13 @@
+﻿import { readFileSync, writeFileSync } from "node:fs";
+const r = JSON.parse(readFileSync(".tmp_webverify.json", "utf8"));
+const out = [];
+out.push("STEPS:");
+for (const [k, v] of Object.entries(r.steps || {})) out.push("  " + k + " = " + JSON.stringify(v).slice(0, 300));
+out.push("CONSOLE (" + (r.console||[]).length + "):");
+for (const c of (r.console||[])) out.push("  [" + c.t + "] " + String(c.s).slice(0, 220));
+out.push("EXCEPTIONS (" + (r.exceptions||[]).length + "):");
+for (const e of (r.exceptions||[])) out.push("  " + String(e).slice(0, 260));
+out.push("HITS:");
+for (const h of (r.hits||[])) out.push("  " + h.s + " " + h.p + " " + (h.n ?? ""));
+writeFileSync(".tmp_rep.txt", out.join("\n"), "utf8");
+console.log(out.join("\n"));

@@ -463,6 +463,100 @@ function moduleJson(m, owner, assetNames, warnings) {
 
 const KNOWN_ANIM_MODES = new Set(["默认", "只显示首帧", "单次播放", "PLAY_ONCE"]);
 
+/**
+ * 去掉 JS 注释（行注释 + 块注释），保留字符串内容。
+ *
+ * 只给 {@link scriptParamKeys} 用：注释里的 `bwe.params({...})` 是**举例**，不是声明，
+ * 不去掉就会把示例字段当成真实字段，于是给用户报一条假警告。
+ */
+function stripJsComments(src) {
+  let out = "";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      out += c;
+      for (i++; i < src.length; i++) {
+        out += src[i];
+        if (src[i] === "\\") {
+          i++;
+          if (i < src.length) out += src[i];
+          continue;
+        }
+        if (src[i] === quote) break;
+      }
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+      if (i < src.length) out += "\n";
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i++;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * 从脚本源码里取出 `bwe.params({...})` 声明的**键名集合**（导出期的轻量体检用）。
+ *
+ * 为什么这里不引 `web/src/core/scriptParams.ts`：本文件是 node 侧 ESM，直接 import .ts 需要
+ * 额外走一遍 esbuild，而导出链路已经够长。这里的任务是**只为告警提供参照**，所以故意写得保守：
+ * 认不出（没有声明 / 括号不配平 / 有嵌套）就返回 null，调用方跳过检查 ——
+ * 宁可少说一句，也不能因为一个宽松正则给用户报假警告。
+ * 真正的解析权威仍然是 `web/src/core/scriptParams.ts`（编辑器面板用它渲染控件）。
+ */
+function scriptParamKeys(source) {
+  const src = stripJsComments(typeof source === "string" ? source : "");
+  if (!src) return null;
+  const at = src.search(/\bbwe\s*\.\s*params\s*\(\s*\{/);
+  if (at < 0) return null;
+  const open = src.indexOf("{", at);
+  let depth = 0;
+  let end = -1;
+  // 花括号配平（跳过字符串，避免 `}` 出现在默认值文本里被当成闭合）
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      for (i++; i < src.length; i++) {
+        if (src[i] === "\\") i++;
+        else if (src[i] === quote) break;
+      }
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) return null;
+  const body = src.slice(open + 1, end);
+  // 值里出现花括号/方括号 = 有嵌套对象或数组 —— 不在本检查的覆盖面内，保守放弃。
+  // 顶层对象字面量里出现 `{`/`[` 只可能是嵌套值（键与字符串已在上面被跳过），
+  // 所以直接判存在即可，不用再猜"它是不是值的一部分"。
+  if (/[{}[\]]/.test(body.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""'))) {
+    return null;
+  }
+  const keys = new Set();
+  const re = /(?:^|,)\s*(?:([A-Za-z_$][\w$]*)|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*:/g;
+  let m;
+  while ((m = re.exec(body))) {
+    keys.add(m[1] ?? m[2] ?? m[3]);
+  }
+  return keys.size ? keys : null;
+}
+
 function objectJson(o, layerIndex, layerVisible, runtimeAssets, assetEntry, assetNames, warnings) {
   const owner = String(o?.name || o?.id || "未命名对象");
   const modules = (o?.modules ?? []).map((m) => moduleJson(m, owner, assetNames, warnings)).filter(Boolean);
@@ -1009,6 +1103,47 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
             warnings,
             `${label}：cellH×rows = ${Math.round(cellH * rows)}，图片高 ${Math.round(imageH)}；运行时会按 ${rows} 等分整图切片，与编辑器的 cellH 切片错位`
           );
+        }
+      }
+    }
+  }
+
+  // ---------- 脚本公开字段：覆盖值体检 ----------
+  //
+  // 编辑器把「用户改过的脚本字段」存在对象 script.js 模块的 `values.params`（JSON 文本，
+  // 只含改过的项）里，moduleJson 会把它原样搬进 boot.json 的 `params.params`，
+  // 运行时（ScriptParams）按这个键读覆盖值。原样搬的风险是：
+  //   - 手改过的工程文件里 JSON 坏了 / 不是对象 → 运行时**静默**退回默认值；
+  //   - 脚本后来删掉了某个字段，工程里还留着那条覆盖 → 运行时忽略，但作者以为还在生效。
+  // 两种都在这里说一句。只告警不阻断：参数坏了不该让整个包打不出来。
+  for (const scene of project.scenes ?? []) {
+    for (const obj of scene.objects ?? []) {
+      const owner = `场景「${scene?.name ?? ""}」里的对象「${obj?.name || obj?.id || "未命名"}」`;
+      for (const m of obj?.modules ?? []) {
+        if (String(m?.defId ?? "") !== "script.js") continue;
+        const overrideText = m?.values?.params;
+        if (typeof overrideText !== "string" || !overrideText.trim()) continue;
+        let parsed = null;
+        try {
+          parsed = JSON.parse(overrideText);
+        } catch {
+          warnOnce(warnings, `${owner} 的脚本公开字段覆盖值不是合法 JSON，运行时会把它们全部当成未设置`);
+          continue;
+        }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          warnOnce(warnings, `${owner} 的脚本公开字段覆盖值不是对象，运行时会把它们全部当成未设置`);
+          continue;
+        }
+        const scriptKey = String(m?.values?.script ?? "");
+        const declared = scriptParamKeys(project.scripts?.[scriptKey]?.source);
+        if (!declared) continue; // 认不出声明就闭嘴，不报假警告
+        for (const k of Object.keys(parsed)) {
+          if (!declared.has(k)) {
+            warnOnce(
+              warnings,
+              `${owner} 的脚本公开字段覆盖值里有「${k}」，但脚本「${scriptKey}」没有声明它，运行时忽略`
+            );
+          }
         }
       }
     }
@@ -2189,4 +2324,6 @@ async function countFiles(dir) {
   return n;
 }
 
-export { safeSegment, safeVersion, extensionForAsset, writeBuild, decideOrientation };
+// scriptParamKeys 只给校验脚本用（verify-script-params 断言「残留键会告警」直接调它）；
+// 它不是导出契约的一部分，改签名不影响 boot.json。
+export { safeSegment, safeVersion, extensionForAsset, writeBuild, decideOrientation, scriptParamKeys };

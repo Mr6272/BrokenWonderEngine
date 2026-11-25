@@ -9,8 +9,17 @@
  * 挤在这里必然互相抢位置。右栏只保留"一眼看清挂了什么"，点一下打开宽屏工作台。
  */
 
-import type { SceneObject } from "../core/model.ts";
+import type { ModuleInstance, SceneObject } from "../core/model.ts";
 import { isUiScene, scriptLang, scriptNamesOfLang, findPrefabOf, resetObjectToPrefab, scenePixelSize } from "../core/model.ts";
+import {
+  parseScriptParams,
+  parseOverrides,
+  mergeParams,
+  serializeOverrides,
+  overridesLookStale,
+  type ScriptParamField,
+  type ScriptParamValue
+} from "../core/scriptParams.ts";
 import { moduleDef, categoryOf, moduleSummary, makeInstance } from "../data/modules.ts";
 import { store } from "../core/store.ts";
 import { el, input, button, select, switchToggle, fieldRow, numText, textarea } from "../core/dom.ts";
@@ -725,8 +734,9 @@ function lightCard(obj: SceneObject): HTMLElement {
   box.appendChild(
     button("在画布中定位这盏光", () => {
       store.select(obj);
-      window.dispatchEvent(new CustomEvent("bwe:focus-object", { detail: { id: obj.id, x: obj.x, y: obj.y } }));
-    }, { size: "sm", variant: "ghost", title: "选中它，并把画布视图移到它身上" })
+      // zoom: true = 连缩放一起调（这个按钮的名字就是「定位」，用户要看清它）
+      window.dispatchEvent(new CustomEvent("bwe:focus-object", { detail: { id: obj.id, x: obj.x, y: obj.y, zoom: true } }));
+    }, { size: "sm", variant: "ghost", title: "选中它，并把画布视图移到它身上（同时缩放以看清）" })
   );
 
   return cardBox("光源 Light 2D", box, I.light);
@@ -1094,6 +1104,10 @@ function scriptCard(obj: SceneObject): HTMLElement {
     }
     row.appendChild(btns);
     box.appendChild(row);
+    // ★ 公开字段：脚本里 bwe.params({...}) 声明的那些，每个对象各存一份覆盖值。
+    //   紧跟在这一行脚本下面 —— 用户点中对象想改的就是「这个脚本在这台怪身上的参数」。
+    const params = scriptParamsBlock(inst, cur);
+    if (params) box.appendChild(params);
   }
 
   box.appendChild(
@@ -1104,6 +1118,136 @@ function scriptCard(obj: SceneObject): HTMLElement {
     )
   );
   return cardBox("脚本 Script", box, I.script);
+}
+
+/**
+ * 脚本「公开字段」的编辑区（`bwe.params({...})` 声明的那些）。
+ *
+ * 数据落在哪：`script.js` 模块实例的 `values.params`（JSON 文本，只存**用户改过的**键）。
+ * 为什么不是每个字段一个 values 键：模块参数表是「def.params 里声明的键」的世界，
+ * 脚本字段是动态的、随脚本源码变的；塞进平铺键会和模块自己的参数抢名字，导出时也无法
+ * 一眼看出「这些是脚本字段」。一个 JSON 字符串把边界划清楚，运行时也只读这一处。
+ *
+ * 返回 null = 这个脚本没有声明公开字段，卡片里就什么都不加（不留空壳）。
+ */
+function scriptParamsBlock(inst: ModuleInstance, scriptName: string): HTMLElement | null {
+  if (!scriptName) return null;
+  const src = store.project?.scripts[scriptName]?.source ?? "";
+  const decl = parseScriptParams(src);
+  if (!decl.fields.length && !decl.error) return null;
+
+  const box = el("div", { class: "col" });
+  box.style.gap = "4px";
+  box.style.marginTop = "6px";
+
+  if (decl.error) {
+    // 解析失败：只给一行原因，面板其余部分照常工作（不弹窗、不崩、不清空数据）
+    box.appendChild(el("div", { class: "hint" }, scriptParamsHintOf(decl)));
+    return box;
+  }
+
+  const raw = inst.values["params"];
+  const overrides = parseOverrides(raw, decl.fields);
+  const effective = mergeParams(decl.fields, overrides);
+
+  const head = el("div", { class: "row tight" });
+  head.appendChild(el("span", { class: "hint" }, "公开字段 Params"));
+  head.appendChild(el("div", { class: "grow" }));
+  if (Object.keys(overrides).length) {
+    head.appendChild(
+      button("全部还原", () => {
+        // 「还原」= 删掉整个覆盖表，而不是逐项写回默认值：工程文件里不该留下"等于默认值"的键
+        delete inst.values["params"];
+        store.markDirty();
+        window.dispatchEvent(new CustomEvent("bwe:repaint"));
+        window.dispatchEvent(new CustomEvent("bwe:refresh"));
+        window.dispatchEvent(new CustomEvent("bwe:commit", { detail: { label: "还原脚本字段" } }));
+        ok("已还原为脚本里的默认值");
+      }, { size: "sm", variant: "ghost", title: "删掉这个对象的全部覆盖值，回到脚本里的默认值" })
+    );
+  }
+  box.appendChild(head);
+
+  for (const field of decl.fields) {
+    box.appendChild(scriptParamRow(inst, decl.fields, field, effective[field.key], overrides));
+  }
+
+  if (overridesLookStale(raw, decl.fields)) {
+    box.appendChild(
+      el("div", { class: "hint" }, `这个对象的参数覆盖里有脚本已经不认的键（或 JSON 坏了），运行时会被忽略；点「全部还原」清掉。`)
+    );
+  }
+  if (decl.calls > 1) {
+    box.appendChild(el("div", { class: "hint" }, scriptParamsHintOf(decl)));
+  }
+  return box;
+}
+
+/** 一个字段一行：按默认值类型选控件（数字框 / 文本框 / 开关）。 */
+function scriptParamRow(
+  inst: ModuleInstance,
+  fields: ScriptParamField[],
+  field: ScriptParamField,
+  current: ScriptParamValue,
+  overrides: Record<string, ScriptParamValue>
+): HTMLElement {
+  const dirty = Object.prototype.hasOwnProperty.call(overrides, field.key);
+  const label = dirty ? `${field.key} •` : field.key;
+  const hintText = [field.hint, `默认值：${displayValue(field)}`, dirty ? "（已改，存了这个对象的覆盖值）" : ""]
+    .filter(Boolean)
+    .join(" · ");
+
+  const write = (v: ScriptParamValue | undefined): void => {
+    // undefined / 与默认值相同 ⇒ 删掉覆盖（保持工程文件干净）
+    if (v === undefined || (field.type !== "null" && v === field.def)) {
+      delete overrides[field.key];
+    } else {
+      overrides[field.key] = v;
+    }
+    const text = serializeOverrides(overrides, fields);
+    if (text) inst.values["params"] = text;
+    else delete inst.values["params"];
+    store.markDirty();
+    window.dispatchEvent(new CustomEvent("bwe:refresh"));
+    window.dispatchEvent(new CustomEvent("bwe:commit", { detail: { label: "改脚本字段" } }));
+  };
+
+  let control: HTMLElement;
+  if (field.type === "bool") {
+    control = switchToggle(current === true, (v) => write(v), hintText);
+  } else if (field.type === "num") {
+    control = input(String(current ?? ""), {
+      numeric: true,
+      hint: hintText,
+      onChange: (v) => {
+        const n = Number(String(v).trim());
+        write(Number.isFinite(n) ? n : undefined);
+      }
+    });
+  } else if (field.type === "null") {
+    // null 默认值 = 这个字段就是「没有值」，没有可编辑的控件；给一行说明而不是一个假开关
+    control = el("span", { class: "hint" }, "固定为 null");
+  } else {
+    control = input(String(current ?? ""), {
+      hint: hintText,
+      onChange: (v) => write(String(v))
+    });
+  }
+  return fieldRow(label, control, hintText);
+}
+
+function displayValue(field: ScriptParamField): string {
+  if (field.type === "bool") return field.def === true ? "开" : "关";
+  if (field.type === "null") return "null";
+  if (field.type === "num") return numText(Number(field.def));
+  return `“${String(field.def)}”`;
+}
+
+/** 一行提示（错误优先，其次「多处声明」）。 */
+function scriptParamsHintOf(decl: ReturnType<typeof parseScriptParams>): string {
+  if (decl.error) return `公开字段解析失败：${decl.error}`;
+  if (decl.calls > 1) return `脚本里有 ${decl.calls} 处 bwe.params(...)，只读取了第一处`;
+  return "";
 }
 
 /** 选择脚本的弹出菜单（只列 JS；Yarn 需要从「对话」模块进入）。 */

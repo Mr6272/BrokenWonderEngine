@@ -356,6 +356,17 @@ final class ScriptApi {
     // ---------------- 根：log / 工具函数 / 全局事件 ----------------
 
     private void buildRootFns() {
+        /**
+         * {@code bwe.params({...})} —— 脚本「公开字段」的声明与取值入口。
+         *
+         * <p>一次调用干两件事，取决于时机：
+         * <ul>
+         *   <li>脚本<b>顶层</b>调它（最常见）→ 把对象字面量登记为该脚本的默认值表，返回一份拷贝；</li>
+         *   <li>对象脚本<b>回调里</b>调它 → 返回「默认值 ∪ 这个对象的覆盖值」。</li>
+         * </ul>
+         * 细节都收在 {@link ScriptParams} 里，这里只挂入口。
+         */
+        method(bwe, "params", (cx, thisObj, args) -> ScriptParams.call(engine, this, args));
         method(bwe, "log", (cx, thisObj, args) -> {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < args.length; i++) {
@@ -2865,6 +2876,14 @@ final class ScriptApi {
     Scriptable context(Actor self) {
         final ScriptJs.Flex c = obj();
         c.values.put("self", self == null ? null : entity(self));
+        /**
+         * {@code ctx.params}：这个对象的有效参数（默认值 ∪ 覆盖值）。
+         *
+         * <p>为什么挂在 ctx 而不是 bwe 上：ctx 是**每次回调新建**的，天然按对象作用域，
+         * 而 bwe 是全局共享的 —— 往 bwe 上写参数就是全局污染（十只小怪共用一份）。
+         * 惰性求值是刻意的：绝大多数回调根本不读参数，不该为每次回调都解析一遍 JSON。
+         */
+        c.getters.put("params", () -> self == null ? null : ScriptParams.contextParams(engine, this, self));
         c.values.put("world", worldObj);
         c.values.put("scene", ScriptJs.get(worldObj, "scene"));
         c.values.put("time", timeObj);

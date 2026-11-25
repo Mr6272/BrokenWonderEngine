@@ -156,9 +156,11 @@ function outlineItem(o: SceneObject): HTMLElement {
     window.dispatchEvent(new CustomEvent("bwe:open-modules"));
     info(`已选中「${o.name || o.kind}」`);
   });
+  // 双击 = 聚焦：在列表里找到对象之后，最想知道的就是「它在地图哪儿」。
+  // zoom:true 连缩放一起调 —— 地图缩到 46% 时只居中，用户还是看不清这个小物件。
   item.addEventListener("dblclick", () => {
     store.select(o);
-    // 切到左栏场景页（若不在）
+    window.dispatchEvent(new CustomEvent("bwe:focus-object", { detail: { id: o.id, zoom: true } }));
     window.dispatchEvent(new CustomEvent("bwe:refresh"));
   });
 

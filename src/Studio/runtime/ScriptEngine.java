@@ -244,6 +244,16 @@ final class ScriptEngine {
     // 错误去重
     private final Set<String> reportedErrors = new HashSet<String>();
     private String currentScript = "";
+    /**
+     * 当前正在执行回调的「对象」（对象脚本 / 对象事件）。
+     *
+     * <p>为什么引擎要记住它：脚本 scope 是**脚本级共享**的（一只 enemy.js 挂十只小怪共用一个
+     * scope），所以「这一只的参数」不能写进 scope。{@code bwe.params()} 需要在被调用的那一瞬间
+     * 知道"我是谁"——{@link #dispatchObject} 在调用前后保存/恢复这个字段，于是
+     * {@link ScriptParams} 能按对象作用域取覆盖值，用完即恢复，不会漏到别的对象/别的脚本。
+     * 场景脚本与全局钩子没有 self，这里保持 null。
+     */
+    private Actor currentSelf;
     private String lastErrorLine = "";
 
     /**
@@ -1171,7 +1181,11 @@ final class ScriptEngine {
         if (extra != null) {
             System.arraycopy(extra, 0, args, 1, extra.length);
         }
-        invoke(def, f, def.scope, args);
+        // ★ 必须走 invokeFor(self)：ctx 已经是这一只的，但脚本里 `bwe.params()` 靠的是
+        //   「调用期 currentSelf 指向谁」。用普通 invoke 会保持上一层的 self（通常是 null），
+        //   于是所有对象都读到默认值 —— 表现为「面板改了参数，运行时完全没变化」，
+        //   而任何一侧都不报错。这条是参数按对象作用域生效的唯一落点。
+        invokeFor(def, f, def.scope, args, a);
     }
 
     // ---------------- 计时器 ----------------
@@ -1298,6 +1312,16 @@ final class ScriptEngine {
         return currentScript == null ? "" : currentScript;
     }
 
+    /**
+     * 当前回调所属的对象（不是对象脚本回调时返回 null）。
+     *
+     * <p>给 {@link ScriptParams} 用：脚本公开字段必须**按对象作用域**生效，
+     * 而 scope 是脚本级共享的，只能靠"调用期的 this"来区分是哪一只。
+     */
+    Actor currentSelf() {
+        return currentSelf;
+    }
+
     /** 世界事件总线：bwe.world.on/off/emit。 */
     void addWorldHandler(String event, Function fn, ScriptDef def) {
         if (event == null || event.isEmpty() || fn == null) {
@@ -1412,6 +1436,17 @@ final class ScriptEngine {
      * 调用方必须已经进入 Rhino Context。
      */
     Object invoke(ScriptDef def, Function fn, Scriptable thisObj, Object[] args) {
+        return invokeFor(def, fn, thisObj, args, currentSelf);
+    }
+
+    /**
+     * 带「这次调用属于哪个对象」的 invoke。
+     *
+     * <p>对象脚本派发必须走这里（{@link #dispatchObject}）：脚本公开字段按对象作用域取覆盖值，
+     * 靠的就是调用期间 {@link #currentSelf} 指向这一只。非对象调用传 null，
+     * 于是脚本里的 {@code bwe.params()} 只能拿到默认值 —— 正是我们要的语义。
+     */
+    Object invokeFor(ScriptDef def, Function fn, Scriptable thisObj, Object[] args, Actor self) {
         if (fn == null) {
             return null;
         }
@@ -1421,9 +1456,11 @@ final class ScriptEngine {
         }
         Scriptable useThis = thisObj != null ? thisObj : (def != null && def.scope != null ? def.scope : shared);
         String prev = currentScript;
+        Actor prevSelf = currentSelf;
         if (def != null) {
             currentScript = def.name;
         }
+        currentSelf = self;
         long t0 = System.nanoTime();
         try {
             return fn.call(cx, useThis, useThis, args == null ? new Object[0] : args);
@@ -1432,6 +1469,7 @@ final class ScriptEngine {
             return null;
         } finally {
             currentScript = prev;
+            currentSelf = prevSelf;
             // 先算出耗时，再交给剖析/慢调用检查 —— 这样「记录本身」不会被算进样本
             // （否则剖析开销会随帧耗时一起反馈给自己，读数会虚高）。
             long elapsed = System.nanoTime() - t0;

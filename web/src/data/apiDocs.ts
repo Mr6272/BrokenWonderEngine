@@ -280,6 +280,8 @@ export const API_DOCS: ApiDoc[] = [
   d("bwe.clamp", "bwe.clamp(v, a, b) → number", "夹取到 [a, b]", "util"),
   d("bwe.lerp", "bwe.lerp(a, b, t) → number", "线性插值", "util"),
   d("bwe.dist", "bwe.dist(x1, y1, x2, y2) → number", "两点距离", "util"),
+  // 脚本公开字段：顶层声明默认值，回调里取「默认值 ∪ 本对象的覆盖值」（按对象作用域）
+  d("bwe.params", "bwe.params(defs?) → Record<string, unknown>", "声明/读取脚本公开字段：顶层 bwe.params({...}) 给默认值，回调里 bwe.params() 取本对象的有效值（等价 ctx.params）", "util"),
   d("bwe.log", "bwe.log(...args)", "写日志到 Build/bwe.log（带脚本名）", "util"),
   d("bwe.error", "bwe.error(...args)", "写错误日志", "util"),
   d("bwe.call", "bwe.call(scriptName, handlerName, ...args)", "调用另一个脚本里的具名函数", "util"),

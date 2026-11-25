@@ -4,7 +4,7 @@
  *
  * 覆盖从「生成器 → .bwproj → boot.json → Java 运行时 → 离屏 GL 真实像素」的完整链路：
  * <ol>
- *   <li>跑城市生成器，产出 `web/examples/开放世界城市.bwproj`</li>
+ *   <li>跑城市生成器，产出 `.tmp` 下的 `开放世界城市.bwproj`（不覆盖仓库示例，见步骤 1 的注释）</li>
  *   <li>打包到 `Build/boot.json` + `scene_0.json` + `Build/scripts/*.js`</li>
  *   <li>校验导出数据完整性（建筑 / 楼层 / 垂直连接 / 路网 / 脚本）</li>
  *   <li>用 `OffscreenFrameDump` 真实渲染 N 帧 → 断言帧错误 0 + 非背景像素达阈值</li>
@@ -111,10 +111,18 @@ function main() {
   ]);
   check("esbuild 编译生成器", gen.code === 0, `exit=${gen.code}`);
 
-  const genRun = run(process.execPath, ["web/.build/gen-city.mjs"]);
+  /**
+   * ⚠ 输出到 `.tmp`，不要覆盖仓库里被跟踪的 `web/examples/开放世界城市.bwproj`。
+   *
+   * 生成器给所有场景/图层/对象现生成 id，直接覆盖会让每跑一次 `verify:all`
+   * 都产生一份"5000 行 id churn、语义零变化"的脏文件 —— 开发者的 `git status`
+   * 因此永远是脏的，也没法用 diff 审真实改动。
+   * 验收要的是"生成器现在还能产出可用的工程"，落点在哪不影响任何断言。
+   */
+  const GEN_OUT = join(OUT, "开放世界城市.bwproj");
+  const genRun = run(process.execPath, ["web/.build/gen-city.mjs", "--out", GEN_OUT]);
   check("生成器执行成功", genRun.code === 0, `exit=${genRun.code}`);
-  const bwproj = join(ROOT, "web", "examples", "开放世界城市.bwproj");
-  check("产出 .bwproj", existsSync(bwproj), bwproj);
+  check("产出 .bwproj（落到 .tmp，不覆盖仓库示例）", existsSync(GEN_OUT), GEN_OUT);
 
   // ---------- 2) 打包 ----------
   console.log("[2/5] 打包为运行时格式");
@@ -122,7 +130,7 @@ function main() {
   // （传 OUT/Build 会变成 OUT/Build/Build/boot.json —— 这是第一版这里报错的真实原因）。
   const pack = run(process.execPath, [
     "web/tools/package-bwe.mjs",
-    bwproj,
+    GEN_OUT,
     "--build-only", OUT,
   ]);
   check("package-bwe 成功", pack.code === 0, `exit=${pack.code} ` +

@@ -1,0 +1,11 @@
+﻿import { readFileSync } from "node:fs";
+const M = readFileSync("src/Studio/runtime/Minesweeper.java", "utf8").split(/\r?\n/);
+const a = M.findIndex((l) => /boolean reveal\s*\(/.test(l));
+const b = M.findIndex((l) => /void toggleFlag\s*\(/.test(l));
+const c = M.findIndex((l) => /boolean checkWin|void checkWin|boolean winCheck/.test(l));
+console.log("reveal@" + (a+1) + " toggleFlag@" + (b+1) + " checkWin@" + (c+1));
+console.log(M.slice(a, a + 105).map((l, i) => (a + 1 + i) + "| " + l.replace(/\s+$/, "").slice(0, 170)).join("\n"));
+console.log("\n--- toggleFlag ---");
+console.log(M.slice(b, b + 45).map((l, i) => (b + 1 + i) + "| " + l.replace(/\s+$/, "").slice(0, 170)).join("\n"));
+console.log("\n--- checkWin ---");
+console.log(M.slice(c - 2, c + 40).map((l, i) => (c - 1 + i) + "| " + l.replace(/\s+$/, "").slice(0, 170)).join("\n"));

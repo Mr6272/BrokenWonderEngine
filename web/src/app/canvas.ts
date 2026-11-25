@@ -174,6 +174,18 @@ export class CanvasView {
   }
 
   /**
+   * F 键 / 工具条「缩放到整张地图」的落点。
+   *
+   * 语义分两档（这是修「点击物体不能切换到聚焦」的关键）：
+   *   - 有选中对象 → 聚焦到它（框住 + 合适缩放），用户按 F 想看的是"这个东西"；
+   *   - 没有选中     → 缩放到整张地图，保留原来的行为，不破坏肌肉记忆。
+   * 想无条件看全图仍有「缩放到整张地图」按钮/命令（走 zoomToFit 本体）。
+   */
+  fitOrFocus(): void {
+    this.focusSelection();
+  }
+
+  /**
    * 当前场景的像素尺寸。
    *
    * 世界场景 = 格数 × tileSize；UI 场景 = 设计分辨率（1280×720 之类）。
@@ -195,6 +207,72 @@ export class CanvasView {
     this.camX = x;
     this.camY = y;
     this.requestPaint();
+  }
+
+  /**
+   * 把一块世界矩形「框进视野」—— 焦点对齐（Unity/Godot 的 F 键行为）。
+   *
+   * 与 `centerOn` 的区别：那个只挪相机不动缩放，所以在地图 1% 缩放时
+   * 「定位」一个 32px 的小物件，用户看到的还是一个点和一片空白。
+   * 这里同时按矩形算出合适的 zoom，让目标真的占满视野（留 20% 边距，
+   * 免得选中框和缩放控制点贴到画布边缘去）。
+   *
+   * 上限 1.0：物件本来比画布还大时不要放大到 4 倍 —— 那会变成"看一个局部像素"。
+   * 下限沿用画布的 0.15。
+   */
+  focusRect(x: number, y: number, w: number, h: number): void {
+    const cw = this.canvas.clientWidth || 800;
+    const ch = this.canvas.clientHeight || 600;
+    const pad = 0.8;
+    const ww = Math.max(8, w);
+    const hh = Math.max(8, h);
+    this.zoom = clamp(Math.min((cw * pad) / ww, (ch * pad) / hh), 0.15, 1);
+    this.camX = x + ww / 2;
+    this.camY = y + hh / 2;
+    this.requestPaint();
+  }
+
+  /**
+   * 聚焦：有选中就框住选中对象（多个取并集），没有选中就缩放到整张地图。
+   *
+   * 这是 F 键与「双击画布上的对象」的共同实现 —— 两处行为必须一致，
+   * 否则用户按 F 和双击会看到两种不同的"聚焦"。
+   */
+  /**
+   * 聚焦单个对象（列表里点「定位」、双击画布对象、F 键共用同一套）。
+   *
+   * 用 `focusRect` 而不是 `centerOn`：只居中不缩放的话，在地图缩到 46% 时
+   * 「定位」一个 64px 的小物件，用户看到的仍然是一个点和一大片空白 ——
+   * 那不叫聚焦。这里按对象矩形算合适的 zoom，让它真的占满视野。
+   */
+  focusObject(o: SceneObject): void {
+    const project = store.project;
+    if (!project) return;
+    const b = boundsOf(o, project);
+    this.focusRect(b.x, b.y, b.w, b.h);
+  }
+
+  focusSelection(): boolean {
+    const sel = store.selection.filter((o) => o.visible);
+    if (!sel.length) {
+      this.zoomToFit();
+      return false;
+    }
+    const project = store.project;
+    if (!project) return false;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const o of sel) {
+      const b = boundsOf(o, project);
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.w);
+      maxY = Math.max(maxY, b.y + b.h);
+    }
+    this.focusRect(minX, minY, maxX - minX, maxY - minY);
+    return true;
   }
 
   /**
@@ -341,6 +419,7 @@ export class CanvasView {
       showColliders: store.showColliders,
       showZones: store.showZones,
       showNames: store.showNames,
+      showViewport: store.showViewport,
       time: performance.now(),
       selectedIds: new Set(store.selection.map((o) => o.id)),
       overrides: this.overrides,
@@ -521,12 +600,16 @@ export class CanvasView {
         const wx = cx + (dx * size.w) / 2;
         const wy = cy + (dy * size.h) / 2;
         const s = this.worldToScreen(wx, wy);
+        // 控制点要小一号、贴到选中框（painter 里选中框已外扩 1px）上再往外 1px，
+        // 免得把手柄盖住对象边缘的碰撞体虚线。视觉上"扣在角上"，语义不变。
+        const off = dx * 2;
+        const offY = dy * 2;
         g.save();
         g.fillStyle = "#ffffff";
         g.strokeStyle = "#4c8dff";
         g.lineWidth = 1.2;
-        g.fillRect(s.x - hs / 2, s.y - hs / 2, hs, hs);
-        g.strokeRect(s.x - hs / 2, s.y - hs / 2, hs, hs);
+        g.fillRect(s.x + off - hs / 2, s.y + offY - hs / 2, hs, hs);
+        g.strokeRect(s.x + off - hs / 2, s.y + offY - hs / 2, hs, hs);
         g.restore();
       }
     }
@@ -588,6 +671,22 @@ export class CanvasView {
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     });
     c.addEventListener("drop", (e) => this.onDrop(e));
+    // 双击对象 = 聚焦它（Unity 里双击 Hierarchy 项、Godot 里 F 键的同一语义）。
+    // 用户的原话是「点击物体不能切换到聚焦，太难受了」：在此之前双击没有任何反应，
+    // 想看清一个小物件只能滚轮慢慢放大再拖回来。
+    c.addEventListener("dblclick", (e) => {
+      const local = { x: e.clientX - this.rectLeft(), y: e.clientY - this.rectTop() };
+      const world = this.screenToWorld(local);
+      const hit = this.pick(world);
+      if (!hit) {
+        // 空白处双击 = 缩放到整张地图（和以前 F 键的行为一致，保留肌肉记忆）
+        this.zoomToFit();
+        return;
+      }
+      store.select(hit);
+      this.focusSelection();
+      this.flashHud(`已聚焦「${hit.name || hit.kind}」　按 F 也可聚焦选中对象`);
+    });
   }
 
   private updateCursorClass(): void {
@@ -814,53 +913,72 @@ export class CanvasView {
           let cy = base.y;
           let aligned = false;
 
-          // 对每个参照对象，检查边缘/中心对齐
+          /**
+           * 智能对齐。
+           *
+           * ⚠ 这里的几何必须按「对象坐标 = 中心」来算（`boundsOf` 就是这么定义的：
+           * x/y 是中心，left = x - w/2）。历史上这段把 `r.x` 直接当左边、把
+           * `r.x + rs.w` 当右边、把 `cx + size.w/2` 当对象中心 —— 三处都错半个身位。
+           * 表现是：拖动时吸附得莫名其妙，而更显眼的是那几条**黄色虚线参考线**
+           * 画到了对象右边半个身位之外，看起来就是「虚线位置不对」。
+           *
+           * 现在统一：左 = 中心 - w/2，右 = 中心 + w/2，中心 = 中心。
+           */
+          const oLeft = cx - size.w / 2;
+          const oRight = cx + size.w / 2;
+          const oTop = cy - size.h / 2;
+          const oBottom = cy + size.h / 2;
+          void oLeft; void oRight; void oTop; void oBottom;
+
+          const addV = (x: number) => this.alignmentLines.push({ x, y: -9999, w: 1, h: 9999, kind: "v" });
+          const addH = (y: number) => this.alignmentLines.push({ x: -9999, y, w: 9999, h: 1, kind: "h" });
+
           for (const r of refs) {
             const rs = sizeOf(r, project);
-            // 垂直对齐线（x 方向）：左-左、右-右、中心-中心
-            const rx = r.x;
-            const rRight = r.x + rs.w;
-            const rCx = r.x + rs.w / 2;
-            const oLeft = cx - size.w / 2;
-            const oRight = cx + size.w / 2;
-            const oCx = cx + size.w / 2;
+            const rLeft = r.x - rs.w / 2;
+            const rRight = r.x + rs.w / 2;
+            const rTop = r.y - rs.h / 2;
+            const rBottom = r.y + rs.h / 2;
 
-            const checkV = (lineX: number, label: string) => {
-              if (Math.abs(oLeft - lineX) <= ALIGN_TOL) { cx = lineX + size.w / 2; addV(lineX); aligned = true; this.snapHint = label; return true; }
-              if (Math.abs(oRight - lineX) <= ALIGN_TOL) { cx = lineX - size.w / 2; addV(lineX); aligned = true; this.snapHint = label; return true; }
-              if (Math.abs(oCx - lineX) <= ALIGN_TOL) { cx = lineX; addV(lineX); aligned = true; this.snapHint = label; return true; }
-              return false;
+            // 竖直参考线（x 对齐）：固定一个世界 x，把对象挪到让某条边/中心落在它上面
+            const alignV = (lineX: number, label: string): boolean => {
+              const curLeft = cx - size.w / 2;
+              const curRight = cx + size.w / 2;
+              if (Math.abs(curLeft - lineX) <= ALIGN_TOL) { cx = lineX + size.w / 2; }
+              else if (Math.abs(curRight - lineX) <= ALIGN_TOL) { cx = lineX - size.w / 2; }
+              else if (Math.abs(cx - lineX) <= ALIGN_TOL) { cx = lineX; }
+              else return false;
+              addV(lineX);
+              this.snapHint = label;
+              return true;
             };
 
-            // 水平对齐线（y 方向）：上-上、下-下、中心-中心
-            const ry = r.y;
-            const rBottom = r.y + rs.h;
-            const rCy = r.y + rs.h / 2;
-            const oTop = cy - size.h / 2;
-            const oBottom = cy + size.h / 2;
-            const oCy = cy + size.h / 2;
-
-            const checkH = (lineY: number, label: string) => {
-              if (Math.abs(oTop - lineY) <= ALIGN_TOL) { cy = lineY + size.h / 2; addH(lineY); aligned = true; this.snapHint = label; return true; }
-              if (Math.abs(oBottom - lineY) <= ALIGN_TOL) { cy = lineY - size.h / 2; addH(lineY); aligned = true; this.snapHint = label; return true; }
-              if (Math.abs(oCy - lineY) <= ALIGN_TOL) { cy = lineY; addH(lineY); aligned = true; this.snapHint = label; return true; }
-              return false;
+            // 水平参考线（y 对齐）
+            const alignH = (lineY: number, label: string): boolean => {
+              const curTop = cy - size.h / 2;
+              const curBottom = cy + size.h / 2;
+              if (Math.abs(curTop - lineY) <= ALIGN_TOL) { cy = lineY + size.h / 2; }
+              else if (Math.abs(curBottom - lineY) <= ALIGN_TOL) { cy = lineY - size.h / 2; }
+              else if (Math.abs(cy - lineY) <= ALIGN_TOL) { cy = lineY; }
+              else return false;
+              addH(lineY);
+              this.snapHint = label;
+              return true;
             };
 
-            const addV = (x: number) => this.alignmentLines.push({ x, y: -9999, w: 1, h: 9999, kind: "v" });
-            const addH = (y: number) => this.alignmentLines.push({ x: -9999, y, w: 9999, h: 1, kind: "h" });
-
-            // 尝试对齐（优先对齐最近的一个）
             if (!aligned) {
-              checkV(rx, `对齐「${r.name}」左边`);
-              checkV(rRight, `对齐「${r.name}」右边`);
-              checkV(rCx, `对齐「${r.name}」中心`);
+              aligned =
+                alignV(rLeft, `对齐「${r.name}」左边`) ||
+                alignV(rRight, `对齐「${r.name}」右边`) ||
+                alignV(r.x, `对齐「${r.name}」中心`);
             }
             if (!aligned) {
-              checkH(ry, `对齐「${r.name}」上边`);
-              checkH(rBottom, `对齐「${r.name}」下边`);
-              checkH(rCy, `对齐「${r.name}」中心`);
+              aligned =
+                alignH(rTop, `对齐「${r.name}」上边`) ||
+                alignH(rBottom, `对齐「${r.name}」下边`) ||
+                alignH(r.y, `对齐「${r.name}」中心`);
             }
+            if (aligned) break;
           }
 
           // 如果未对齐到任何对象，保留网格吸附位置
@@ -1503,6 +1621,19 @@ export class CanvasView {
 
   private onDrop(e: DragEvent): void {
     e.preventDefault();
+    /**
+     * 同一次拖放只处理一次。
+     *
+     * 拖放事件在真实浏览器里可能被多个祖先各收一次（冒泡），而且画布实例在
+     * 「切标签 → 重新挂载」时也不会重建监听器；历史上曾经因为面板重复挂监听
+     * 出现过「拖一次变三份、越拖越多」的复制膨胀（见 assetPanel 的注释）。
+     * 在事件对象上打一个标记，把「一次拖放 = 一次创建」变成结构上的保证，
+     * 而不是靠"监听器只挂一个"这种容易被后续改动破坏的约定。
+     */
+    const mark = e as DragEvent & { __bweDropDone?: boolean };
+    if (mark.__bweDropDone) return;
+    mark.__bweDropDone = true;
+
     const dt = e.dataTransfer;
     if (!dt || !store.scene) return;
     const local = { x: e.clientX - this.rectLeft(), y: e.clientY - this.rectTop() };

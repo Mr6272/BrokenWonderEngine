@@ -1,0 +1,11 @@
+﻿const fs=require("fs");
+const s=fs.readFileSync("web/tools/package-bwe.mjs","utf8");
+const i=s.indexOf("export async function packageWeb");
+const rest=s.slice(i);
+const j=rest.indexOf("\nexport ",10);
+const k=rest.indexOf("\n/**");
+let end = j>0?j:rest.length;
+if(k>0&&k<end) end=k;
+const fn=rest.slice(0,end);
+fs.writeFileSync(".tmp_pwfn.txt", fn.split(/\r?\n/).map((l,n)=>(n+1)+"| "+l.replace(/[^\x09\x0a\x20-\x7E]/g,".")).join("\n"),"utf8");
+console.log("fn lines:", fn.split(/\r?\n/).length);
