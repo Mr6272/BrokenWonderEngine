@@ -9,7 +9,7 @@
  */
 
 import type { AssetEntry, Project, SceneObject, SceneModel } from "../core/model.ts";
-import { scenePixelSize, totalFrames, uiSafeArea, visibleFrames } from "../core/model.ts";
+import { RUNTIME_VIEW_H, RUNTIME_VIEW_W, runtimeViewRect, scenePixelSize, totalFrames, uiSafeArea, visibleFrames } from "../core/model.ts";
 import { loadFrame } from "../data/assets.ts";
 import { canvasPalette } from "../ui/palette.ts";
 import type { LightSourceSpec } from "./lightMath.ts";
@@ -27,6 +27,13 @@ export interface PaintCtx {
   showGrid: boolean;
   showColliders: boolean;
   showZones: boolean;
+  /**
+   * 是否画「运行时视口取景框」（1280×720 窗口在编辑器里的位置）。
+   *
+   * 缺省 false（= 不画）：导出缩略图、小地图等复用本绘制器的地方不需要它；
+   * 只有画布会按工具条开关传 true。
+   */
+  showViewport?: boolean;
   showNames: boolean;
   time: number;
   selectedIds: Set<string>;
@@ -335,6 +342,93 @@ export function paintGrid(
   g.lineWidth = 1.5;
   g.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
   g.restore();
+
+  // 运行时视口取景框
+  if (pctx.showViewport) paintRuntimeViewport(g, scene, pctx, toScreen);
+}
+
+/**
+ * 运行时视口取景框（编辑器里那块「玩家眼前看到的画面」）。
+ *
+ * 为什么需要画：编辑器画布是**无限画布**，地图画得再大都能滚着看，
+ * 但打包后的游戏只开一个 1280×720 的窗口（`TopDownRuntime.viewW/viewH`）。
+ * 玩家挂了 `fx.cameraFollow` 时相机 1:1 跟人走，窗口里恒等于
+ * `1280 × 720` 世界单位的一块 —— 用户在编辑器里摆 HUD、提示、关键物件时
+ * 完全没有参照物判断「它在游戏里到底在不在画面里」，只能反复 试跑(F6) 看，
+ * 一次一个来回。这就是用户报的「视口的范围没显示到编辑器里面」。
+ *
+ * 几何：1:1 世界单位（不是按 fit 缩放后的矩形）。
+ *   - 选中一个对象时，框住它 —— 对应"玩家站在那儿时看到的范围"；
+ *   - 没选中时放在地图中心作静态参照。
+ * `wholeMapVisible` 为 true 时（地图本来就比窗口小、并且没有跟随相机时）
+ * 标签会换一句提示，避免用户以为"框外面那些内容会被裁掉"。
+ */
+export function paintRuntimeViewport(
+  g: CanvasRenderingContext2D,
+  scene: SceneModel,
+  pctx: PaintCtx,
+  toScreen: ToScreen
+): void {
+  const sel = pctx.selectedIds.size === 1
+    ? scene.objects.find((o) => pctx.selectedIds.has(o.id)) ?? null
+    : null;
+  const focus = sel ? { x: sel.x, y: sel.y } : null;
+  const rect = runtimeViewRect(scene, pctx.tileSize, focus);
+  const a = toScreen(rect.x, rect.y);
+  const b = toScreen(rect.x + rect.w, rect.y + rect.h);
+  const dash = 8;
+  g.save();
+  g.strokeStyle = "rgba(86,214,255,0.7)";
+  g.lineWidth = 1.5;
+  g.setLineDash([dash, dash * 0.6]);
+  g.strokeRect(Math.round(a.x) + 0.5, Math.round(a.y) + 0.5, Math.round(b.x - a.x), Math.round(b.y - a.y));
+  g.setLineDash([]);
+
+  // 四角短脚：虚线框在深色底图上容易被物件盖住，角标让它始终可辨识。
+  // 框比画布大时四角都在屏幕外 —— 跳过短脚（线还在，标签也钉在画布内说明尺寸）。
+  const cornersVisible = a.x > -20 && a.y > -20 && b.x < (g.canvas.clientWidth || 0) + 20
+    && b.y < (g.canvas.clientHeight || 0) + 20;
+  if (cornersVisible) {
+    const len = Math.min(18, Math.max(8, Math.min(b.x - a.x, b.y - a.y) * 0.08));
+    g.strokeStyle = "rgba(86,214,255,0.95)";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(a.x, a.y + len); g.lineTo(a.x, a.y); g.lineTo(a.x + len, a.y);
+    g.moveTo(b.x - len, a.y); g.lineTo(b.x, a.y); g.lineTo(b.x, a.y + len);
+    g.moveTo(b.x, b.y - len); g.lineTo(b.x, b.y); g.lineTo(b.x - len, b.y);
+    g.moveTo(a.x + len, b.y); g.lineTo(a.x, b.y); g.lineTo(a.x, b.y - len);
+    g.stroke();
+  }
+
+  // 标签。
+  //
+  // 把「载入时会不会整图缩到窗口里」也写出来：运行时的默认视角是
+  // `fitWholeMap()`（整图 contain），只有玩家挂了 `fx.cameraFollow` 才是 1:1 取景。
+  // 不说明这一点，用户看到框比地图大/小会以为画错了 —— 这类
+  // 「看起来像 bug 的正确行为」必须用文案消化掉。
+  const pct = Math.round(rect.fitZoom * 100);
+  const base = rect.wholeMapVisible
+    ? `${RUNTIME_VIEW_W} × ${RUNTIME_VIEW_H} 窗口 · 整图可见（${pct}%）`
+    : `${RUNTIME_VIEW_W} × ${RUNTIME_VIEW_H} 视口（1:1，跟随相机时可见范围）`;
+  // 放大到 1:1 看小物件时，1280×720 的视口框会比画布本身还大，四边都在屏外。
+  // 这时必须**说出来**：否则用户会以为"视口框又不见了"（这正是被报的那个 bug 的观感）。
+  const cw = g.canvas.clientWidth || 800;
+  const chh = g.canvas.clientHeight || 600;
+  const offCanvas = a.x < -2 || a.y < -2 || b.x > cw + 2 || b.y > chh + 2;
+  const label = offCanvas ? `${base} · 已超出当前视图（缩小可看全）` : base;
+  // 框的左上角跑到画布外时（放大到 100% 看小物件，1280×720 的框比画布还大），
+  // 标签不能跟着框一起飘出屏幕 —— 钉在画布内的可见位置，否则用户既看不到框
+  // 也看不到标签，等于这个图层消失了。这就是"放大之后视口框不见了"的实际原因。
+  const lx = Math.min(Math.max(a.x + 4, 6), Math.max(6, cw - 300));
+  const ly = Math.min(Math.max(a.y - 6, 18), Math.max(18, chh - 8));
+  g.font = '11px "Microsoft YaHei UI", sans-serif';
+  const tw = g.measureText(label).width;
+  g.fillStyle = "rgba(8,26,34,0.78)";
+  roundRect(g, lx - 3, ly - 11, tw + 7, 15, 4);
+  g.fill();
+  g.fillStyle = "rgba(120,224,255,0.98)";
+  g.fillText(label, lx, ly);
+  g.restore();
 }
 
 // ---------------- 对象 ----------------
@@ -399,16 +493,30 @@ export function paintObject(
     return;
   }
 
-  // 触发区 / 碰撞体：半透明底 + 虚线框
-  if (isZone || (o.halfW > 0 && o.halfH > 0 && pctx.showZones)) {
-    const color = isZone ? "#2ecc8f" : "#f0a92b";
-    g.fillStyle = hexA(color, 0.16);
+  /**
+   * 触发区 / 碰撞体。
+   *
+   * ⚠ 两个开关原来被混用了：非触发区对象的碰撞体也走 `pctx.showZones`，
+   * 于是工具条上「显示触发区」会连带把一切碰撞体藏起来，而「显示碰撞体」只对
+   * **选中**的那一个生效 —— 用户按哪个开关都得不到「显示/隐藏所有碰撞体」的效果。
+   * 现在分开：ZONE 是玩法数据（始终画），其余对象的 halfW/halfH 是碰撞体（跟 showColliders）。
+   *
+   * ⚠ 几何必须用 `centered ± size/2`：对象是围绕 (x, y) 居中的。历史实现里
+   * 选中时那一遍用 `toScreen(±halfW, ±halfH)` 算矩形，**丢掉了对象自己的 x/y**，
+   * 于是不管选中谁，黄色虚线都画在地图左上角 —— 这就是用户报的
+   * 「黄色虚线出现在错误的位置」。
+   *
+   * ⚠ 绘制顺序也是缺陷的一部分：半透明底必须在精灵**之下**（否则把美术盖住），
+   * 而虚线框必须在精灵**之上**（否则永远看不见）。所以这里只画底，
+   * 虚线框留到精灵与选中框之后（见本函数后半段的 `if (drawBody)`）。这也是原来
+   * 「碰撞体框只有选中才看得见」的观感来源 —— 那一遍恰好画在精灵之后。
+   */
+  const hasCollider = o.halfW > 0 && o.halfH > 0;
+  const drawBody = isZone || (hasCollider && pctx.showColliders);
+  const bodyColor = isZone ? "#2ecc8f" : "#f0a92b";
+  if (drawBody) {
+    g.fillStyle = hexA(bodyColor, 0.16);
     g.fillRect(left, top, w, h);
-    g.strokeStyle = hexA(color, 0.75);
-    g.lineWidth = 1.2;
-    g.setLineDash([4, 3]);
-    g.strokeRect(Math.round(left) + 0.5, Math.round(top) + 0.5, Math.round(w), Math.round(h));
-    g.setLineDash([]);
   }
 
   // 精灵本体
@@ -433,21 +541,40 @@ export function paintObject(
     paintMarker(g, o.kind, centered.x, centered.y, Math.max(w, h));
   }
 
-  // 选中框与缩放控制点
+  // 选中框与缩放控制点。
+  //
+  // 选中框往外让 1px：碰撞体虚线（下面那段）就画在对象**精确的**矩形上，
+  // 两条线如果完全重合，1.5px 的实线会把 1.2px 的虚线整条吃掉 —— 真机上
+  // 表现为"选中之后黄色虚线消失"（`getImageData` 取样 count=0 正是这个）。
+  // 选中框本来就是"高亮提示"，让出 1px 不影响任何语义，却让两种信息同时可读。
   if (selected) {
     g.strokeStyle = "#4c8dff";
     g.lineWidth = 1.5;
-    g.strokeRect(Math.round(left) + 0.5, Math.round(top) + 0.5, Math.round(w), Math.round(h));
+    g.strokeRect(Math.round(left) - 2.5, Math.round(top) - 2.5, Math.round(w) + 4, Math.round(h) + 4);
     g.fillStyle = "rgba(76,141,255,0.10)";
     g.fillRect(left, top, w, h);
-    if (pctx.showColliders && o.halfW > 0 && o.halfH > 0) {
-      const cs = toScreen(o.halfW, o.halfH);
-      const csx = toScreen(-o.halfW, -o.halfH);
-      g.strokeStyle = "rgba(240,169,43,0.9)";
-      g.setLineDash([3, 3]);
-      g.strokeRect(Math.round(csx.x) + 0.5, Math.round(csx.y) + 0.5, cs.x - csx.x, cs.y - csx.y);
-      g.setLineDash([]);
-    }
+  }
+
+  /**
+   * 触发区 / 碰撞体的虚线框 —— 画在精灵之上、对象**精确**矩形上。
+   *
+   * 三个历史缺陷都在这条绘制顺序上：
+   *   1. 原来这一段在精灵**之前**，于是它被美术盖住，只有选中时那一遍
+   *      （恰好画在精灵之后）才看得见 —— 「碰撞体框只有选中才出现」的观感来源；
+   *   2. 选中时那一遍用 `toScreen(±halfW, ±halfH)` 算矩形，**丢掉了对象自己的
+   *      x/y**，所以不管选中谁，黄色虚线都出现在地图左上角 —— 用户报的
+   *      「黄色虚线出现在错误的位置」；
+   *   3. 与选中框共用同一个矩形且先于它画时，实线会把虚线盖掉（见上）。
+   *
+   * 现在：单一来源（`left/top/w/h`，与精灵同一套几何）+ 精灵之后绘制 +
+   * 精确落在对象边界上（不再往外偏，否则看起来像"框比物件大一圈"）。
+   */
+  if (drawBody) {
+    g.strokeStyle = hexA(bodyColor, isZone ? 0.95 : 1);
+    g.lineWidth = 1.2;
+    g.setLineDash([4, 3]);
+    g.strokeRect(Math.round(left) + 0.5, Math.round(top) + 0.5, Math.round(w), Math.round(h));
+    g.setLineDash([]);
   }
 
   // 名称与模块数量角标

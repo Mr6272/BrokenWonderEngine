@@ -1134,6 +1134,27 @@ declare namespace bwe {
 
   /** 写一条日志到 Build/bwe.log（带脚本名） */
   function log(...args: unknown[]): void;
+
+  /**
+   * 声明 / 读取脚本的**公开字段**（契约 docs/scripting-api.md §1.4）。
+   *
+   * 两种调用时机，语义不同：
+   * - **脚本顶层**调 `bwe.params({...})`：这段字面量就是这个脚本的「字段 + 默认值」，
+   *   编辑器右栏 Inspector 会为每个挂着本脚本的对象渲染可编辑控件；返回值是默认值的拷贝。
+   * - **回调里**调 `bwe.params()`：返回「默认值 ∪ 当前对象的覆盖值」的新对象，
+   *   与 `ctx.params` 等价。**按对象作用域**生效（同一脚本挂多个对象各调各的）。
+   *
+   * 只支持字面量：number / string / true / false / null。键可以是标识符或中文字符串。
+   * 嵌套对象、数组、变量、函数调用一律不支持（面板要在不执行脚本的前提下画出控件）。
+   *
+   * ```js
+   * bwe.params({ speed: 100, hp: 3, label: "玩家", alive: true });
+   * function onUpdate(ctx, dt) {
+   *   ctx.self.x += ctx.params.speed * dt;   // 每个对象用自己的 speed
+   * }
+   * ```
+   */
+  function params(defs?: Record<string, unknown>): Record<string, unknown>;
   /** 写一条错误日志 */
   function error(...args: unknown[]): void;
 

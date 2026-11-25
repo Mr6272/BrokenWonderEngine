@@ -310,6 +310,20 @@ export interface ImportResult {
   message?: string;
 }
 
+/**
+ * 「正在导入中」的键表（跨调用共享）。
+ *
+ * 判重语句与真正写入之间有一串 await（IndexedDB 写入 + createImageBitmap），
+ * 而 `project.assets.push` 在这串 await 的最后。两次**并发**的导入于是都会
+ * 在看到 push 之前通过判重，各写一条同名素材 —— 这就是用户看到的
+ * 「拖一次变三份、越拖越多」。这张表把那段窗口占住：先登记，结束（成功/失败）再释放。
+ *
+ * 用模块级 Set 而不是 project 上的字段：它是**运行期状态**，不该被序列化进 .bwproj；
+ * 而且导入是编辑器的动作，与「哪个工程」无关（同名文件在不同工程里各自独立，
+ * 但并发窗口只可能发生在同一次交互里）。
+ */
+const inFlightImport = new Set<string>();
+
 /** 逐张导入：每张图一条素材。音频也能进。 */
 export async function importFiles(project: Project, files: File[], group = "未分组"): Promise<ImportResult> {
   const res: ImportResult = { added: 0, skipped: 0 };
@@ -320,41 +334,56 @@ export async function importFiles(project: Project, files: File[], group = "未�
       res.skipped++;
       continue;
     }
-    const dup = project.assets.find((a) => a.path === f.name && a.kind === (isAudio ? "AUDIO" : "IMAGE"));
-    if (dup) {
+    /**
+     * ⚠ 判重必须在**第一个 await 之前**做，并且同时占位。
+     *
+     * 这里是「同一个文件被导入 N 次」的真正机制：判重之后紧接着 `await idbPut(...)`，
+     * 而 `project.assets.push` 在整个 await 链的最后。若两次导入**并发**执行
+     * （一次 drop 被多个监听器/多条路径各处理一次，就是这种情况），
+     * 它们都会在 push 发生之前通过判重 → 各写一条 → 库里出现 N 份同名素材。
+     * 追加得越晚、并发越多，看起来就越像"指数级复制"。
+     * 用一张「正在导入」的键表把这段窗口堵死：先占位、结束（无论成功失败）再释放。
+     */
+    const key = `${isAudio ? "AUDIO" : "IMAGE"}\u0000${f.name}`;
+    if (project.assets.some((a) => a.path === f.name && a.kind === (isAudio ? "AUDIO" : "IMAGE")) || inFlightImport.has(key)) {
       res.skipped++;
       continue;
     }
-    const id = uid();
-    await idbPut(STORE_ASSET, id, { frames: [f], name: f.name });
-    let w = 0;
-    let h = 0;
-    if (isImage) {
-      try {
-        const bmp = await createImageBitmap(f);
-        w = bmp.width;
-        h = bmp.height;
-      } catch {
-        w = 0;
-        h = 0;
+    inFlightImport.add(key);
+    try {
+      const id = uid();
+      await idbPut(STORE_ASSET, id, { frames: [f], name: f.name });
+      let w = 0;
+      let h = 0;
+      if (isImage) {
+        try {
+          const bmp = await createImageBitmap(f);
+          w = bmp.width;
+          h = bmp.height;
+        } catch {
+          w = 0;
+          h = 0;
+        }
       }
+      const entry: AssetEntry = {
+        id,
+        name: stripExt(f.name),
+        kind: isAudio ? "AUDIO" : "IMAGE",
+        src: "blob",
+        path: f.name,
+        width: w,
+        height: h,
+        group: group === "未分组" && (f as File & { webkitRelativePath?: string }).webkitRelativePath
+          ? firstDir((f as File & { webkitRelativePath?: string }).webkitRelativePath as string) || "未分组"
+          : group,
+        hiddenFrames: [],
+        frameDurations: []
+      };
+      project.assets.push(entry);
+      res.added++;
+    } finally {
+      inFlightImport.delete(key);
     }
-    const entry: AssetEntry = {
-      id,
-      name: stripExt(f.name),
-      kind: isAudio ? "AUDIO" : "IMAGE",
-      src: "blob",
-      path: f.name,
-      width: w,
-      height: h,
-      group: group === "未分组" && (f as File & { webkitRelativePath?: string }).webkitRelativePath
-        ? firstDir((f as File & { webkitRelativePath?: string }).webkitRelativePath as string) || "未分组"
-        : group,
-      hiddenFrames: [],
-      frameDurations: []
-    };
-    project.assets.push(entry);
-    res.added++;
   }
   if (res.added === 0 && res.skipped > 0) res.message = "选中的文件已经在素材库里了";
   else if (res.added === 0) res.message = "这些文件里没有可用的图片或音频";
@@ -391,38 +420,61 @@ export async function importSequenceSet(project: Project, files: File[]): Promis
     arr.sort((a, b) => natCompare(a.name, b.name));
     const head = prefix || stripExt(arr[0].name);
     const folder = folderOf(arr[0]);
-    const dup = project.assets.find((a) => a.kind === "SEQUENCE" && a.headName === head && a.path === folder);
-    if (dup) {
+    /**
+     * 判重要按「名字前缀 + 目录」而不是按 kind。
+     *
+     * 原来只查 `kind === "SEQUENCE"`，而下面 push 的是
+     * `arr.length > 1 ? "SEQUENCE" : "IMAGE"` —— 于是**只拖一张图**时
+     * 存进去的是 IMAGE，判重却只认 SEQUENCE，同一张图会被无限重复导入。
+     * 现在两种 kind 都认，且单独拖图与成组拖图互不重复。
+     *
+     * ⚠ 同样要在 await 之前占位：并发处理同一次 drop 时会双双通过判重
+     * （详见 importFiles 里的解释）。`inFlightImport` 用前缀 key 一起堵住。
+     */
+    const folderKey = folder || "序列帧";
+    const key = `SEQ\u0000${head}\u0000${folderKey}`;
+    const dup = project.assets.some(
+      (a) =>
+        (a.kind === "SEQUENCE" || a.kind === "IMAGE") &&
+        a.headName === head &&
+        a.path === folderKey
+    );
+    if (dup || inFlightImport.has(key)) {
       res.skipped++;
       continue;
     }
-    const id = uid();
-    await idbPut(STORE_ASSET, id, { frames: arr, name: head });
-    let w = 0;
-    let h = 0;
+    inFlightImport.add(key);
     try {
-      const bmp = await createImageBitmap(arr[0]);
-      w = bmp.width;
-      h = bmp.height;
-    } catch {
-      w = 0;
-      h = 0;
+      const id = uid();
+      await idbPut(STORE_ASSET, id, { frames: arr, name: head });
+      let w = 0;
+      let h = 0;
+      try {
+        const bmp = await createImageBitmap(arr[0]);
+        w = bmp.width;
+        h = bmp.height;
+      } catch {
+        w = 0;
+        h = 0;
+      }
+      project.assets.push({
+        id,
+        name: arr.length > 1 ? `${head}（${arr.length} 帧）` : head,
+        kind: arr.length > 1 ? "SEQUENCE" : "IMAGE",
+        src: "blob",
+        path: folderKey,
+        headName: head,
+        frameCount: arr.length,
+        width: w,
+        height: h,
+        group: folderKey,
+        hiddenFrames: [],
+        frameDurations: []
+      });
+      res.added++;
+    } finally {
+      inFlightImport.delete(key);
     }
-    project.assets.push({
-      id,
-      name: arr.length > 1 ? `${head}（${arr.length} 帧）` : head,
-      kind: arr.length > 1 ? "SEQUENCE" : "IMAGE",
-      src: "blob",
-      path: folder || "序列帧",
-      headName: head,
-      frameCount: arr.length,
-      width: w,
-      height: h,
-      group: folder || "序列帧",
-      hiddenFrames: [],
-      frameDurations: []
-    });
-    res.added++;
   }
   return res;
 }

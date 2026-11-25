@@ -143,6 +143,13 @@ final class ScriptEngine {
 
     final TopDownRuntime host;
     private final File bootFile;
+
+    /** 热重载：上一轮观测到的 boot.json 时间戳（0 表示尚未观测）。 */
+    private long hotReloadStamp = 0L;
+    /** 热重载：累计重载次数（自检与日志用）。 */
+    int hotReloadCount = 0;
+    /** 热重载是否启用（由宿主按调试标志打开；默认关闭，避免正式包误触）。 */
+    boolean hotReloadEnabled = false;
     final File buildDir;
     final File assetRoot;
 
@@ -237,6 +244,16 @@ final class ScriptEngine {
     // 错误去重
     private final Set<String> reportedErrors = new HashSet<String>();
     private String currentScript = "";
+    /**
+     * 当前正在执行回调的「对象」（对象脚本 / 对象事件）。
+     *
+     * <p>为什么引擎要记住它：脚本 scope 是**脚本级共享**的（一只 enemy.js 挂十只小怪共用一个
+     * scope），所以「这一只的参数」不能写进 scope。{@code bwe.params()} 需要在被调用的那一瞬间
+     * 知道"我是谁"——{@link #dispatchObject} 在调用前后保存/恢复这个字段，于是
+     * {@link ScriptParams} 能按对象作用域取覆盖值，用完即恢复，不会漏到别的对象/别的脚本。
+     * 场景脚本与全局钩子没有 self，这里保持 null。
+     */
+    private Actor currentSelf;
     private String lastErrorLine = "";
 
     /**
@@ -263,6 +280,135 @@ final class ScriptEngine {
         loadScriptTable();
         this.world = new ScriptWorld(this);
         this.world.buildTileMap(host.actors);
+    }
+
+    /**
+     * 热重载：轮询 boot.json 的修改时间，变了就把脚本源码重新求值进已有 scope。
+     *
+     * 为什么是「重跑源码」而不是「重启游戏」：
+     *   重启会丢掉玩家当前的血量、位置、进度，改一行脚本要重打一遍关卡，
+     *   调试回路就断了。这里只替换函数定义，作用域和持有状态都还在。
+     *
+     * 为什么异常必须被吞掉：
+     *   用户在编辑器里改到一半（括号没闭合）就保存，是常态。这时如果把异常
+     *   抛到 update 外层，整个游戏直接崩，用户会以为引擎坏了。
+     *   正确行为是：保留上一版能跑的脚本，报一条可读的错，等下一次保存。
+     */
+    private void pollHotReload(Context cx) {
+        if (bootFile == null) {
+            return;
+        }
+        long stamp = bootFile.lastModified();
+        if (hotReloadStamp == 0L) {
+            hotReloadStamp = stamp;   // 第一帧只做基线观测，不重载
+            return;
+        }
+        if (stamp == hotReloadStamp) {
+            return;
+        }
+        hotReloadStamp = stamp;
+        reloadScripts(cx);
+    }
+
+    /**
+     * 重新读取脚本表并把源码求值进已有 scope。返回是否成功。
+     * 失败时保留旧函数（evalTop 是把新顶层代码跑在同一个 scope 上，
+     * 语法错误会在解析期失败，旧定义不会被覆盖）。
+     */
+    boolean reloadScripts(Context cx) {
+        if (bootFile == null || !bootFile.isFile()) {
+            return false;
+        }
+        Map<String, String> freshCode = new LinkedHashMap<String, String>();
+        try {
+            String json = new String(Files.readAllBytes(bootFile.toPath()), StandardCharsets.UTF_8);
+            JsonObject root = new Gson().fromJson(json, JsonObject.class);
+            if (root == null) {
+                return false;
+            }
+            JsonArray arr = root.has("scripts") && root.get("scripts").isJsonArray()
+                    ? root.getAsJsonArray("scripts") : new JsonArray();
+            int index = 0;
+            for (JsonElement e : arr) {
+                index++;
+                if (!e.isJsonObject()) {
+                    continue;
+                }
+                JsonObject o = e.getAsJsonObject();
+                String name = str(o, "name", "");
+                String lang = str(o, "lang", "");
+                String file = str(o, "file", "");
+                String source = str(o, "source", "");
+                boolean js = "js".equalsIgnoreCase(lang) || (lang.isEmpty() && !file.isEmpty());
+                if (!js) {
+                    continue;
+                }
+                if (name.isEmpty()) {
+                    name = baseName(file, "script" + index);
+                }
+                String code = source;
+                if (!file.isEmpty()) {
+                    File f = new File(buildDir, file);
+                    try {
+                        if (f.isFile()) {
+                            code = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+                        }
+                    } catch (Throwable t) {
+                        warn("热重载读取失败 " + f + ": " + t.getMessage());
+                        continue;
+                    }
+                }
+                if (code != null && !code.trim().isEmpty()) {
+                    freshCode.put(name, code);
+                }
+            }
+        } catch (Throwable t) {
+            warn("热重载解析 boot.json 失败: " + t.getMessage());
+            return false;
+        }
+
+        // 先编译再提交。
+        // evalTop 内部会吞掉异常（顶层某个脚本炸了不能拖垮其它脚本），
+        // 所以不能靠 try/catch 判断成败；必须在动到任何已有状态之前，
+        // 用 compileString 把语法先过一遍。语法不过的脚本整条跳过，
+        // 保留上一版能跑的代码。
+        int applied = 0;
+        int rejected = 0;
+        for (ScriptDef def : scriptOrder) {
+            String code = freshCode.get(def.name);
+            if (code == null || code.equals(def.source)) {
+                continue;
+            }
+            String syntaxError = probeSyntax(cx, def.name, code);
+            if (syntaxError != null) {
+                rejected++;
+                warn("热重载「" + def.name + "」有语法错误，已保留上一版: " + syntaxError);
+                continue;
+            }
+            ScriptDef fresh = new ScriptDef(def.name, code);
+            fresh.scope = def.scope;      // 沿用原 scope：脚本里持有的状态不丢
+            int at = scriptOrder.indexOf(def);
+            if (at >= 0) {
+                scriptOrder.set(at, fresh);
+            }
+            scripts.put(def.name, fresh);
+            try {
+                evalTop(cx, fresh);
+                applied++;
+            } catch (Throwable t) {
+                rejected++;
+                warn("热重载「" + def.name + "」执行失败: " + t.getMessage());
+            }
+        }
+        if (applied > 0) {
+            hotReloadCount++;
+            drainMicrotasks(cx);
+            host.scriptLog("[脚本] 热重载 " + applied + " 个脚本（第 " + hotReloadCount + " 次）");
+        }
+        if (rejected > 0) {
+            host.scriptLog("[脚本] 热重载跳过 " + rejected + " 个有问题的脚本，游戏继续运行");
+        }
+        return applied > 0;
     }
 
     private void loadScriptTable() {
@@ -516,6 +662,9 @@ final class ScriptEngine {
             }
             if (failed) {
                 return;
+            }
+            if (hotReloadEnabled) {
+                pollHotReload(cx);
             }
             drainPendingCalls();
             tick(cx, dt);
@@ -1032,7 +1181,11 @@ final class ScriptEngine {
         if (extra != null) {
             System.arraycopy(extra, 0, args, 1, extra.length);
         }
-        invoke(def, f, def.scope, args);
+        // ★ 必须走 invokeFor(self)：ctx 已经是这一只的，但脚本里 `bwe.params()` 靠的是
+        //   「调用期 currentSelf 指向谁」。用普通 invoke 会保持上一层的 self（通常是 null），
+        //   于是所有对象都读到默认值 —— 表现为「面板改了参数，运行时完全没变化」，
+        //   而任何一侧都不报错。这条是参数按对象作用域生效的唯一落点。
+        invokeFor(def, f, def.scope, args, a);
     }
 
     // ---------------- 计时器 ----------------
@@ -1159,6 +1312,16 @@ final class ScriptEngine {
         return currentScript == null ? "" : currentScript;
     }
 
+    /**
+     * 当前回调所属的对象（不是对象脚本回调时返回 null）。
+     *
+     * <p>给 {@link ScriptParams} 用：脚本公开字段必须**按对象作用域**生效，
+     * 而 scope 是脚本级共享的，只能靠"调用期的 this"来区分是哪一只。
+     */
+    Actor currentSelf() {
+        return currentSelf;
+    }
+
     /** 世界事件总线：bwe.world.on/off/emit。 */
     void addWorldHandler(String event, Function fn, ScriptDef def) {
         if (event == null || event.isEmpty() || fn == null) {
@@ -1273,6 +1436,17 @@ final class ScriptEngine {
      * 调用方必须已经进入 Rhino Context。
      */
     Object invoke(ScriptDef def, Function fn, Scriptable thisObj, Object[] args) {
+        return invokeFor(def, fn, thisObj, args, currentSelf);
+    }
+
+    /**
+     * 带「这次调用属于哪个对象」的 invoke。
+     *
+     * <p>对象脚本派发必须走这里（{@link #dispatchObject}）：脚本公开字段按对象作用域取覆盖值，
+     * 靠的就是调用期间 {@link #currentSelf} 指向这一只。非对象调用传 null，
+     * 于是脚本里的 {@code bwe.params()} 只能拿到默认值 —— 正是我们要的语义。
+     */
+    Object invokeFor(ScriptDef def, Function fn, Scriptable thisObj, Object[] args, Actor self) {
         if (fn == null) {
             return null;
         }
@@ -1282,9 +1456,11 @@ final class ScriptEngine {
         }
         Scriptable useThis = thisObj != null ? thisObj : (def != null && def.scope != null ? def.scope : shared);
         String prev = currentScript;
+        Actor prevSelf = currentSelf;
         if (def != null) {
             currentScript = def.name;
         }
+        currentSelf = self;
         long t0 = System.nanoTime();
         try {
             return fn.call(cx, useThis, useThis, args == null ? new Object[0] : args);
@@ -1293,6 +1469,7 @@ final class ScriptEngine {
             return null;
         } finally {
             currentScript = prev;
+            currentSelf = prevSelf;
             // 先算出耗时，再交给剖析/慢调用检查 —— 这样「记录本身」不会被算进样本
             // （否则剖析开销会随帧耗时一起反馈给自己，读数会虚高）。
             long elapsed = System.nanoTime() - t0;
@@ -1458,6 +1635,22 @@ final class ScriptEngine {
     void logError(String msg) {
         String prefix = currentScript == null || currentScript.isEmpty() ? "[脚本] " : "[脚本] " + currentScript + ": ";
         host.scriptLog(prefix + "[错误] " + msg);
+    }
+
+    /**
+     * 语法探针：这份源码能不能被 Rhino 解析。
+     *
+     * 单独抽出来是为了可测——热重载最关键的判断就是"这版源码能不能用"，
+     * 而这个判断不该只能靠"启动游戏看一眼"来验证。
+     * 返回 null 表示可用，否则返回可读的错误信息。
+     */
+    static String probeSyntax(Context cx, String name, String code) {
+        try {
+            cx.compileString(code, name == null ? "script" : name, 1, null);
+            return null;
+        } catch (Throwable t) {
+            return t.getMessage() == null ? t.toString() : t.getMessage();
+        }
     }
 
     private void warn(String msg) {

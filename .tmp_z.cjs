@@ -1,0 +1,13 @@
+﻿const fs=require("fs");
+const A=(s)=>s.replace(/[^\x09\x0a\x20-\x7E]/g,".");
+const P=fs.readFileSync("web/tools/package-bwe.mjs","utf8").split(/\r?\n/);
+console.log("### zip-ish in package-bwe.mjs");
+P.forEach((l,i)=>{ if(/zip/i.test(l)) console.log((i+1)+"| "+A(l).trim().slice(0,110)); });
+const E=fs.readFileSync("web/src/app/editor.ts","utf8").split(/\r?\n/);
+console.log("### editor.ts packager refs");
+E.forEach((l,i)=>{ if(/packageBwe|openBwePackager|exportWeb|exportImg/.test(l)) console.log((i+1)+"| "+A(l).trim().slice(0,120)); });
+const B=fs.readFileSync("web/src/app/packageBwe.ts","utf8").split(/\r?\n/);
+console.log("### packageBwe.ts 36-70");
+for(let i=35;i<70;i++) console.log((i+1)+"| "+A(B[i]));
+console.log("### packageBwe.ts 100-175");
+for(let i=99;i<175;i++) console.log((i+1)+"| "+A(B[i]));

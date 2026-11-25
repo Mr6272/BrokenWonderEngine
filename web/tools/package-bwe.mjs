@@ -19,7 +19,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -462,6 +462,100 @@ function moduleJson(m, owner, assetNames, warnings) {
 }
 
 const KNOWN_ANIM_MODES = new Set(["默认", "只显示首帧", "单次播放", "PLAY_ONCE"]);
+
+/**
+ * 去掉 JS 注释（行注释 + 块注释），保留字符串内容。
+ *
+ * 只给 {@link scriptParamKeys} 用：注释里的 `bwe.params({...})` 是**举例**，不是声明，
+ * 不去掉就会把示例字段当成真实字段，于是给用户报一条假警告。
+ */
+function stripJsComments(src) {
+  let out = "";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      out += c;
+      for (i++; i < src.length; i++) {
+        out += src[i];
+        if (src[i] === "\\") {
+          i++;
+          if (i < src.length) out += src[i];
+          continue;
+        }
+        if (src[i] === quote) break;
+      }
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+      if (i < src.length) out += "\n";
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i++;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * 从脚本源码里取出 `bwe.params({...})` 声明的**键名集合**（导出期的轻量体检用）。
+ *
+ * 为什么这里不引 `web/src/core/scriptParams.ts`：本文件是 node 侧 ESM，直接 import .ts 需要
+ * 额外走一遍 esbuild，而导出链路已经够长。这里的任务是**只为告警提供参照**，所以故意写得保守：
+ * 认不出（没有声明 / 括号不配平 / 有嵌套）就返回 null，调用方跳过检查 ——
+ * 宁可少说一句，也不能因为一个宽松正则给用户报假警告。
+ * 真正的解析权威仍然是 `web/src/core/scriptParams.ts`（编辑器面板用它渲染控件）。
+ */
+function scriptParamKeys(source) {
+  const src = stripJsComments(typeof source === "string" ? source : "");
+  if (!src) return null;
+  const at = src.search(/\bbwe\s*\.\s*params\s*\(\s*\{/);
+  if (at < 0) return null;
+  const open = src.indexOf("{", at);
+  let depth = 0;
+  let end = -1;
+  // 花括号配平（跳过字符串，避免 `}` 出现在默认值文本里被当成闭合）
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      for (i++; i < src.length; i++) {
+        if (src[i] === "\\") i++;
+        else if (src[i] === quote) break;
+      }
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) return null;
+  const body = src.slice(open + 1, end);
+  // 值里出现花括号/方括号 = 有嵌套对象或数组 —— 不在本检查的覆盖面内，保守放弃。
+  // 顶层对象字面量里出现 `{`/`[` 只可能是嵌套值（键与字符串已在上面被跳过），
+  // 所以直接判存在即可，不用再猜"它是不是值的一部分"。
+  if (/[{}[\]]/.test(body.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""'))) {
+    return null;
+  }
+  const keys = new Set();
+  const re = /(?:^|,)\s*(?:([A-Za-z_$][\w$]*)|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*:/g;
+  let m;
+  while ((m = re.exec(body))) {
+    keys.add(m[1] ?? m[2] ?? m[3]);
+  }
+  return keys.size ? keys : null;
+}
 
 function objectJson(o, layerIndex, layerVisible, runtimeAssets, assetEntry, assetNames, warnings) {
   const owner = String(o?.name || o?.id || "未命名对象");
@@ -1009,6 +1103,47 @@ async function writeBuild(project, inputDir, uploadedAssets, onLog, warnings, as
             warnings,
             `${label}：cellH×rows = ${Math.round(cellH * rows)}，图片高 ${Math.round(imageH)}；运行时会按 ${rows} 等分整图切片，与编辑器的 cellH 切片错位`
           );
+        }
+      }
+    }
+  }
+
+  // ---------- 脚本公开字段：覆盖值体检 ----------
+  //
+  // 编辑器把「用户改过的脚本字段」存在对象 script.js 模块的 `values.params`（JSON 文本，
+  // 只含改过的项）里，moduleJson 会把它原样搬进 boot.json 的 `params.params`，
+  // 运行时（ScriptParams）按这个键读覆盖值。原样搬的风险是：
+  //   - 手改过的工程文件里 JSON 坏了 / 不是对象 → 运行时**静默**退回默认值；
+  //   - 脚本后来删掉了某个字段，工程里还留着那条覆盖 → 运行时忽略，但作者以为还在生效。
+  // 两种都在这里说一句。只告警不阻断：参数坏了不该让整个包打不出来。
+  for (const scene of project.scenes ?? []) {
+    for (const obj of scene.objects ?? []) {
+      const owner = `场景「${scene?.name ?? ""}」里的对象「${obj?.name || obj?.id || "未命名"}」`;
+      for (const m of obj?.modules ?? []) {
+        if (String(m?.defId ?? "") !== "script.js") continue;
+        const overrideText = m?.values?.params;
+        if (typeof overrideText !== "string" || !overrideText.trim()) continue;
+        let parsed = null;
+        try {
+          parsed = JSON.parse(overrideText);
+        } catch {
+          warnOnce(warnings, `${owner} 的脚本公开字段覆盖值不是合法 JSON，运行时会把它们全部当成未设置`);
+          continue;
+        }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          warnOnce(warnings, `${owner} 的脚本公开字段覆盖值不是对象，运行时会把它们全部当成未设置`);
+          continue;
+        }
+        const scriptKey = String(m?.values?.script ?? "");
+        const declared = scriptParamKeys(project.scripts?.[scriptKey]?.source);
+        if (!declared) continue; // 认不出声明就闭嘴，不报假警告
+        for (const k of Object.keys(parsed)) {
+          if (!declared.has(k)) {
+            warnOnce(
+              warnings,
+              `${owner} 的脚本公开字段覆盖值里有「${k}」，但脚本「${scriptKey}」没有声明它，运行时忽略`
+            );
+          }
         }
       }
     }
@@ -1984,4 +2119,211 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   });
 }
 
-export { safeSegment, safeVersion, extensionForAsset, writeBuild, decideOrientation };
+﻿
+/**
+ * 导出 Web 游戏包。
+ *
+ * 与 Windows / Android 的目标不同点：Web 产物不是一个可执行容器，而是一个
+ * 目录——把 Build 产物 + 播放器（player.js）+ index.html 摆在一起，扔到任何
+ * 静态服务器上就能玩。
+ *
+ * 关键约束：浏览器里没有 JOGL（它是本地库），所以 Web 端不能用 Java 渲染。
+ * 这里的做法是「同一份 Build 产物，换一个渲染实现」：web/src/webplayer 是
+ * 一个消费 boot.json / scene_0.json / assets 的 WebGL2 播放器。数据格式完全相同，
+ * 脚本源码（ES5）直接复用。
+ *
+ * 诚实说明：播放器目前实现的 API 是渲染/输入/时间/相机/基础音频与基础绘制
+ * （见 web/src/webplayer/api.ts 里的三级清单）。用到 bwe.road / bwe.combat
+ * 这类高级命名空间的项目，在 Web 端会缺少对应行为，但**不会静默失败**——
+ * 会在控制台按名字报出来，可用 __bwe_report() 一次看全。
+ */
+export async function packageWeb(project, uploadedAssets, options = {}, onLog = console.log) {
+  if (!project || !Array.isArray(project.scenes)) {
+    throw new Error("工程数据不完整：缺少 scenes");
+  }
+  const jobId = safeId(options.jobId || `build_web_${Date.now()}`);
+  const outRoot = resolve(options.outDir || join(packageRoot, jobId));
+  const buildDir = join(outRoot, "work");
+  const outDir = join(outRoot, "out");
+  await rm(outRoot, { recursive: true, force: true });
+  await mkdir(buildDir, { recursive: true });
+  await mkdir(outDir, { recursive: true });
+
+  const appName = safeSegment(options.name || project.name || "BWE-Web", "BWE-Web");
+  const version = safeVersion(options.version || project.version);
+  const warnings = [];
+
+  logStep(onLog, `开始导出 Web 包「${appName}」v${version}`);
+
+  // 1/3 工程数据 -> Build 产物（与 Windows/Android 完全同一条路径）
+  logStep(onLog, "1/3 转换工程数据与素材…");
+  const uploaded = uploadedAssets
+    ? normalizeUploadedAssets(uploadedAssets)
+    : await collectDataUrlAssets(project, onLog);
+  const build = await writeBuild(project, buildDir, uploaded.files, onLog, warnings, uploaded.problems);
+  for (const w of warnings) logStep(onLog, `⚠ ${w}`);
+
+  // 2/3 把 Build 产物挪到产物根目录下
+  logStep(onLog, "2/3 拷贝 Build 产物…");
+  // writeBuild 把产物写进 <buildDir>/Build，所以源目录要再下一层，
+  // 否则会得到 Build/Build/boot.json，播放器按 Build/boot.json 找就会 404。
+  const buildSrc = join(buildDir, "Build");
+  const buildOut = join(outDir, "Build");
+  if (!existsSync(buildSrc)) {
+    throw new Error(`writeBuild 没有产出 Build 目录: ${buildSrc}`);
+  }
+  await cp(buildSrc, buildOut, { recursive: true });
+
+  // 3/3 打包播放器：esbuild 把 web/src/webplayer 打成一个 player.js
+  logStep(onLog, "3/3 打包 Web 播放器…");
+  const playerSrc = join(webRoot, "src", "webplayer", "main.ts");
+  if (!existsSync(playerSrc)) {
+    throw new Error(`找不到播放器源码: ${playerSrc}`);
+  }
+  const playerOut = join(outDir, "player.js");
+  const esbuildBin = join(projectRoot, "node_modules", "esbuild", "bin", "esbuild");
+  const esbuildArgs = [
+    playerSrc,
+    "--bundle",
+    "--format=iife",
+    "--platform=browser",
+    "--target=es2020",
+    "--minify",
+    `--outfile=${playerOut}`,
+  ];
+  await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(process.execPath, [esbuildBin, ...esbuildArgs], {
+      cwd: projectRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let err = "";
+    child.stderr.on("data", (d) => { err += String(d); });
+    child.on("error", rejectPromise);
+    child.on("close", (code) => {
+      if (code === 0) resolvePromise();
+      else rejectPromise(new Error(`播放器打包失败 (exit ${code}):\n${err}`));
+    });
+  });
+
+  // index.html：标题替换成工程名
+  const htmlSrc = join(webRoot, "src", "webplayer", "index.html");
+  let html = await readFile(htmlSrc, "utf8");
+  html = html.replace(/__BWE_GAME_TITLE__/g, escapeHtml(appName));
+  await writeFile(join(outDir, "index.html"), html, "utf8");
+
+  // 一份 README，说明怎么把它跑起来 / 怎么部署
+  const readme = [
+    `# ${appName} (Web 导出)`,
+    "",
+    `由 BrokenWonderEngine 导出于 ${new Date().toISOString()}`,
+    "",
+    "## 怎么跑起来",
+    "",
+    "浏览器不允许直接从 file:// 读 JSON（fetch 被拦），所以要起一个静态服务器：",
+    "",
+    "```bash",
+    "npx serve .",
+    "# 或",
+    "python -m http.server 8000",
+    "```",
+    "",
+    "然后打开提示的地址。",
+    "",
+    "## 怎么部署",
+    "",
+    "把整个目录原样上传到任意静态托管（itch.io、GitHub Pages、Netlify、Nginx）即可。",
+    "没有后端依赖，没有特殊响应头要求。",
+    "",
+    "## 出问题时",
+    "",
+    "打开浏览器控制台：",
+    "",
+    "- `__bwe_stats` — 帧率、帧耗时、对象数、draw call",
+    "- `__bwe_report()` — 哪些 API 在 Web 端还没实现（这是导出产物，不是 bug）",
+    "",
+    "### 已知限制",
+    "",
+    "Web 播放器复用同一份 Build 数据，但渲染是由 WebGL2 重新实现的，",
+    "而不是运行 Java 运行时。以下能力在 Web 端是简化或缺失的：",
+    "",
+    "- 高级玩法命名空间（road / vehicle / combat / material / field / sense /",
+    "  faction / nav / physics / quest / dialog 等）尚未移植",
+    "- 光照与后处理未实现",
+    "- 虚拟摇杆、输入框等移动端 UI 控件未实现",
+    "",
+    "用到这些的项目，Web 端会在控制台按名字报出缺失调用，不会静默失效。",
+    "",
+    `工程名: ${appName}`,
+    `版本: ${version}`,
+    `素材: ${(build.assets ?? []).length ?? "?"}`,
+    "",
+  ].join("\n");
+  await writeFile(join(outDir, "README-WEB.md"), readme, "utf8");
+
+  const zipPath = await zipWeb(outDir, appName, onLog);
+  const zipStats = await stat(zipPath);
+  const stats = {
+    platform: "web",
+    appName,
+    version,
+    outDir,
+    zipPath,
+    zipName: basename(zipPath),
+    sizeBytes: zipStats.size,
+    playerBytes: (await stat(playerOut)).size,
+    buildFiles: await countFiles(buildOut),
+    warnings,
+    limitations: [
+      "高级玩法命名空间未移植（road/vehicle/combat/material/field/sense/faction/nav/physics/quest/dialog）",
+      "光照与后处理未实现",
+      "移动端虚拟摇杆与输入控件未实现",
+    ],
+  };
+  logStep(onLog, `完成：${outDir}`);
+  logStep(onLog, `player.js ${(stats.playerBytes / 1024).toFixed(1)} KB · Build 内 ${stats.buildFiles} 个文件`);
+  logStep(onLog, "提示：Web 端复用同一份 Build 数据，但渲染是 WebGL2 重写的，不是 Java 运行时。");
+  return stats;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function zipWeb(outDir, appName, onLog) {
+  const zipPath = join(dirname(outDir), `${appName}-web.zip`);
+  await rm(zipPath, { force: true });
+  logStep(onLog, `压缩 Web 包：${zipPath}`);
+  if (process.platform === "win32") {
+    const script = `Compress-Archive -Path '${join(outDir, "*").replace(/'/g, "''")}' -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force`;
+    await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { cwd: dirname(outDir) });
+  } else {
+    await run("tar", ["-a", "-c", "-f", zipPath, "-C", outDir, "."], { cwd: dirname(outDir) });
+  }
+  return zipPath;
+}
+
+async function countFiles(dir) {
+  let n = 0;
+  const walk = async (d) => {
+    let entries;
+    try {
+      entries = await readdir(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) await walk(join(d, e.name));
+      else n++;
+    }
+  };
+  await walk(dir);
+  return n;
+}
+
+// scriptParamKeys 只给校验脚本用（verify-script-params 断言「残留键会告警」直接调它）；
+// 它不是导出契约的一部分，改签名不影响 boot.json。
+export { safeSegment, safeVersion, extensionForAsset, writeBuild, decideOrientation, scriptParamKeys };

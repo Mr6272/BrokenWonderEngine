@@ -25,7 +25,7 @@ import { loadFrame } from "../data/assets.ts";
 import { sizeOf, boundsOf, paintObject, paintGrid, paintUiFrame, paintLightingPreview, type PaintCtx } from "./painter.ts";
 import { collectSceneLighting } from "./lightMath.ts";
 
-type Mode = "none" | "move" | "marquee" | "pan" | "zone" | "scale";
+type Mode = "none" | "move" | "marquee" | "pan" | "zone" | "scale" | "brush" | "erase";
 
 /**
  * 预制体拖放的 MIME。
@@ -71,6 +71,10 @@ export class CanvasView {
   private pressStartWorld: Point2 = { x: 0, y: 0 };
   private lastScreen: Point2 = { x: 0, y: 0 };
   private moved = false;
+  /** 本轮拖动画笔是否实际写入过（决定松手时要不要记一条撤销） */
+  private brushPainted = false;
+  /** 笔刷上一格（格坐标）。快速拖动时用它做格间插值，避免漏格画出虚线 */
+  private brushLastCell: { gx: number; gy: number } | null = null;
   private spaceDown = false;
   private scaleHandle = -1;
   private pressSize = { w: 0, h: 0 };
@@ -170,6 +174,18 @@ export class CanvasView {
   }
 
   /**
+   * F 键 / 工具条「缩放到整张地图」的落点。
+   *
+   * 语义分两档（这是修「点击物体不能切换到聚焦」的关键）：
+   *   - 有选中对象 → 聚焦到它（框住 + 合适缩放），用户按 F 想看的是"这个东西"；
+   *   - 没有选中     → 缩放到整张地图，保留原来的行为，不破坏肌肉记忆。
+   * 想无条件看全图仍有「缩放到整张地图」按钮/命令（走 zoomToFit 本体）。
+   */
+  fitOrFocus(): void {
+    this.focusSelection();
+  }
+
+  /**
    * 当前场景的像素尺寸。
    *
    * 世界场景 = 格数 × tileSize；UI 场景 = 设计分辨率（1280×720 之类）。
@@ -191,6 +207,72 @@ export class CanvasView {
     this.camX = x;
     this.camY = y;
     this.requestPaint();
+  }
+
+  /**
+   * 把一块世界矩形「框进视野」—— 焦点对齐（Unity/Godot 的 F 键行为）。
+   *
+   * 与 `centerOn` 的区别：那个只挪相机不动缩放，所以在地图 1% 缩放时
+   * 「定位」一个 32px 的小物件，用户看到的还是一个点和一片空白。
+   * 这里同时按矩形算出合适的 zoom，让目标真的占满视野（留 20% 边距，
+   * 免得选中框和缩放控制点贴到画布边缘去）。
+   *
+   * 上限 1.0：物件本来比画布还大时不要放大到 4 倍 —— 那会变成"看一个局部像素"。
+   * 下限沿用画布的 0.15。
+   */
+  focusRect(x: number, y: number, w: number, h: number): void {
+    const cw = this.canvas.clientWidth || 800;
+    const ch = this.canvas.clientHeight || 600;
+    const pad = 0.8;
+    const ww = Math.max(8, w);
+    const hh = Math.max(8, h);
+    this.zoom = clamp(Math.min((cw * pad) / ww, (ch * pad) / hh), 0.15, 1);
+    this.camX = x + ww / 2;
+    this.camY = y + hh / 2;
+    this.requestPaint();
+  }
+
+  /**
+   * 聚焦：有选中就框住选中对象（多个取并集），没有选中就缩放到整张地图。
+   *
+   * 这是 F 键与「双击画布上的对象」的共同实现 —— 两处行为必须一致，
+   * 否则用户按 F 和双击会看到两种不同的"聚焦"。
+   */
+  /**
+   * 聚焦单个对象（列表里点「定位」、双击画布对象、F 键共用同一套）。
+   *
+   * 用 `focusRect` 而不是 `centerOn`：只居中不缩放的话，在地图缩到 46% 时
+   * 「定位」一个 64px 的小物件，用户看到的仍然是一个点和一大片空白 ——
+   * 那不叫聚焦。这里按对象矩形算合适的 zoom，让它真的占满视野。
+   */
+  focusObject(o: SceneObject): void {
+    const project = store.project;
+    if (!project) return;
+    const b = boundsOf(o, project);
+    this.focusRect(b.x, b.y, b.w, b.h);
+  }
+
+  focusSelection(): boolean {
+    const sel = store.selection.filter((o) => o.visible);
+    if (!sel.length) {
+      this.zoomToFit();
+      return false;
+    }
+    const project = store.project;
+    if (!project) return false;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const o of sel) {
+      const b = boundsOf(o, project);
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.w);
+      maxY = Math.max(maxY, b.y + b.h);
+    }
+    this.focusRect(minX, minY, maxX - minX, maxY - minY);
+    return true;
   }
 
   /**
@@ -337,6 +419,7 @@ export class CanvasView {
       showColliders: store.showColliders,
       showZones: store.showZones,
       showNames: store.showNames,
+      showViewport: store.showViewport,
       time: performance.now(),
       selectedIds: new Set(store.selection.map((o) => o.id)),
       overrides: this.overrides,
@@ -517,12 +600,16 @@ export class CanvasView {
         const wx = cx + (dx * size.w) / 2;
         const wy = cy + (dy * size.h) / 2;
         const s = this.worldToScreen(wx, wy);
+        // 控制点要小一号、贴到选中框（painter 里选中框已外扩 1px）上再往外 1px，
+        // 免得把手柄盖住对象边缘的碰撞体虚线。视觉上"扣在角上"，语义不变。
+        const off = dx * 2;
+        const offY = dy * 2;
         g.save();
         g.fillStyle = "#ffffff";
         g.strokeStyle = "#4c8dff";
         g.lineWidth = 1.2;
-        g.fillRect(s.x - hs / 2, s.y - hs / 2, hs, hs);
-        g.strokeRect(s.x - hs / 2, s.y - hs / 2, hs, hs);
+        g.fillRect(s.x + off - hs / 2, s.y + offY - hs / 2, hs, hs);
+        g.strokeRect(s.x + off - hs / 2, s.y + offY - hs / 2, hs, hs);
         g.restore();
       }
     }
@@ -584,6 +671,22 @@ export class CanvasView {
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     });
     c.addEventListener("drop", (e) => this.onDrop(e));
+    // 双击对象 = 聚焦它（Unity 里双击 Hierarchy 项、Godot 里 F 键的同一语义）。
+    // 用户的原话是「点击物体不能切换到聚焦，太难受了」：在此之前双击没有任何反应，
+    // 想看清一个小物件只能滚轮慢慢放大再拖回来。
+    c.addEventListener("dblclick", (e) => {
+      const local = { x: e.clientX - this.rectLeft(), y: e.clientY - this.rectTop() };
+      const world = this.screenToWorld(local);
+      const hit = this.pick(world);
+      if (!hit) {
+        // 空白处双击 = 缩放到整张地图（和以前 F 键的行为一致，保留肌肉记忆）
+        this.zoomToFit();
+        return;
+      }
+      store.select(hit);
+      this.focusSelection();
+      this.flashHud(`已聚焦「${hit.name || hit.kind}」　按 F 也可聚焦选中对象`);
+    });
   }
 
   private updateCursorClass(): void {
@@ -616,15 +719,17 @@ export class CanvasView {
     if (e.button !== 0) return;
 
     if (store.tool === "erase") {
+      // 拖动连续擦除：按下擦一个，进入 erase 模式后移动继续擦，松手记一条撤销。
       const hit = this.pick(this.pressWorld);
       if (hit) {
         scene.objects = scene.objects.filter((o) => o !== hit);
         store.forget(hit);
         store.markDirty();
-        this.cb.onCommit?.("删除对象");
+        this.brushPainted = true;
         this.requestPaint();
       }
-      this.mode = "none";
+      this.brushLastCell = null;
+      this.mode = "erase";
       return;
     }
 
@@ -635,8 +740,13 @@ export class CanvasView {
     }
 
     if (store.tool === "brush") {
-      this.placeAt(this.pressWorld, e.shiftKey);
-      this.mode = "none";
+      // 按下即铺设第一块，然后进入 brush 模式让拖动继续铺。
+      // silent=true：拖动过程里不逐块记撤销，松手时统一记一条。
+      this.brushLastCell = null;
+      this.paintStrokeTo(this.pressWorld);
+      this.mode = "brush";
+      this.brushPainted = true;
+      this.requestPaint();
       return;
     }
 
@@ -736,6 +846,32 @@ export class CanvasView {
       this.moved = true;
     }
 
+    // 拖动画笔：移动经过的每一格都落一块，持久化由松手时统一提交。
+    if (this.mode === "brush") {
+      this.paintStrokeTo(world);
+      this.brushPainted = true;
+      this.requestPaint();
+      return;
+    }
+
+    // 拖动擦除：移动经过的每一格都擦掉。
+    if (this.mode === "erase") {
+      const hit = this.pick(world);
+      // 与单击擦除保持完全一致的行为（不额外加 locked 限制），
+      // 拖动擦除就是"等于连续点击"，不该偷偷改变语义。
+      if (hit) {
+        const sc = store.scene;
+        if (sc) {
+          sc.objects = sc.objects.filter((o) => o !== hit);
+          store.forget(hit);
+          store.markDirty();
+          this.brushPainted = true;
+          this.requestPaint();
+        }
+      }
+      return;
+    }
+
     switch (this.mode) {
       case "pan": {
         this.camX -= (e.clientX - this.lastScreen.x) / this.zoom;
@@ -777,53 +913,72 @@ export class CanvasView {
           let cy = base.y;
           let aligned = false;
 
-          // 对每个参照对象，检查边缘/中心对齐
+          /**
+           * 智能对齐。
+           *
+           * ⚠ 这里的几何必须按「对象坐标 = 中心」来算（`boundsOf` 就是这么定义的：
+           * x/y 是中心，left = x - w/2）。历史上这段把 `r.x` 直接当左边、把
+           * `r.x + rs.w` 当右边、把 `cx + size.w/2` 当对象中心 —— 三处都错半个身位。
+           * 表现是：拖动时吸附得莫名其妙，而更显眼的是那几条**黄色虚线参考线**
+           * 画到了对象右边半个身位之外，看起来就是「虚线位置不对」。
+           *
+           * 现在统一：左 = 中心 - w/2，右 = 中心 + w/2，中心 = 中心。
+           */
+          const oLeft = cx - size.w / 2;
+          const oRight = cx + size.w / 2;
+          const oTop = cy - size.h / 2;
+          const oBottom = cy + size.h / 2;
+          void oLeft; void oRight; void oTop; void oBottom;
+
+          const addV = (x: number) => this.alignmentLines.push({ x, y: -9999, w: 1, h: 9999, kind: "v" });
+          const addH = (y: number) => this.alignmentLines.push({ x: -9999, y, w: 9999, h: 1, kind: "h" });
+
           for (const r of refs) {
             const rs = sizeOf(r, project);
-            // 垂直对齐线（x 方向）：左-左、右-右、中心-中心
-            const rx = r.x;
-            const rRight = r.x + rs.w;
-            const rCx = r.x + rs.w / 2;
-            const oLeft = cx - size.w / 2;
-            const oRight = cx + size.w / 2;
-            const oCx = cx + size.w / 2;
+            const rLeft = r.x - rs.w / 2;
+            const rRight = r.x + rs.w / 2;
+            const rTop = r.y - rs.h / 2;
+            const rBottom = r.y + rs.h / 2;
 
-            const checkV = (lineX: number, label: string) => {
-              if (Math.abs(oLeft - lineX) <= ALIGN_TOL) { cx = lineX + size.w / 2; addV(lineX); aligned = true; this.snapHint = label; return true; }
-              if (Math.abs(oRight - lineX) <= ALIGN_TOL) { cx = lineX - size.w / 2; addV(lineX); aligned = true; this.snapHint = label; return true; }
-              if (Math.abs(oCx - lineX) <= ALIGN_TOL) { cx = lineX; addV(lineX); aligned = true; this.snapHint = label; return true; }
-              return false;
+            // 竖直参考线（x 对齐）：固定一个世界 x，把对象挪到让某条边/中心落在它上面
+            const alignV = (lineX: number, label: string): boolean => {
+              const curLeft = cx - size.w / 2;
+              const curRight = cx + size.w / 2;
+              if (Math.abs(curLeft - lineX) <= ALIGN_TOL) { cx = lineX + size.w / 2; }
+              else if (Math.abs(curRight - lineX) <= ALIGN_TOL) { cx = lineX - size.w / 2; }
+              else if (Math.abs(cx - lineX) <= ALIGN_TOL) { cx = lineX; }
+              else return false;
+              addV(lineX);
+              this.snapHint = label;
+              return true;
             };
 
-            // 水平对齐线（y 方向）：上-上、下-下、中心-中心
-            const ry = r.y;
-            const rBottom = r.y + rs.h;
-            const rCy = r.y + rs.h / 2;
-            const oTop = cy - size.h / 2;
-            const oBottom = cy + size.h / 2;
-            const oCy = cy + size.h / 2;
-
-            const checkH = (lineY: number, label: string) => {
-              if (Math.abs(oTop - lineY) <= ALIGN_TOL) { cy = lineY + size.h / 2; addH(lineY); aligned = true; this.snapHint = label; return true; }
-              if (Math.abs(oBottom - lineY) <= ALIGN_TOL) { cy = lineY - size.h / 2; addH(lineY); aligned = true; this.snapHint = label; return true; }
-              if (Math.abs(oCy - lineY) <= ALIGN_TOL) { cy = lineY; addH(lineY); aligned = true; this.snapHint = label; return true; }
-              return false;
+            // 水平参考线（y 对齐）
+            const alignH = (lineY: number, label: string): boolean => {
+              const curTop = cy - size.h / 2;
+              const curBottom = cy + size.h / 2;
+              if (Math.abs(curTop - lineY) <= ALIGN_TOL) { cy = lineY + size.h / 2; }
+              else if (Math.abs(curBottom - lineY) <= ALIGN_TOL) { cy = lineY - size.h / 2; }
+              else if (Math.abs(cy - lineY) <= ALIGN_TOL) { cy = lineY; }
+              else return false;
+              addH(lineY);
+              this.snapHint = label;
+              return true;
             };
 
-            const addV = (x: number) => this.alignmentLines.push({ x, y: -9999, w: 1, h: 9999, kind: "v" });
-            const addH = (y: number) => this.alignmentLines.push({ x: -9999, y, w: 9999, h: 1, kind: "h" });
-
-            // 尝试对齐（优先对齐最近的一个）
             if (!aligned) {
-              checkV(rx, `对齐「${r.name}」左边`);
-              checkV(rRight, `对齐「${r.name}」右边`);
-              checkV(rCx, `对齐「${r.name}」中心`);
+              aligned =
+                alignV(rLeft, `对齐「${r.name}」左边`) ||
+                alignV(rRight, `对齐「${r.name}」右边`) ||
+                alignV(r.x, `对齐「${r.name}」中心`);
             }
             if (!aligned) {
-              checkH(ry, `对齐「${r.name}」上边`);
-              checkH(rBottom, `对齐「${r.name}」下边`);
-              checkH(rCy, `对齐「${r.name}」中心`);
+              aligned =
+                alignH(rTop, `对齐「${r.name}」上边`) ||
+                alignH(rBottom, `对齐「${r.name}」下边`) ||
+                alignH(r.y, `对齐「${r.name}」中心`);
             }
+            if (aligned) break;
           }
 
           // 如果未对齐到任何对象，保留网格吸附位置
@@ -909,6 +1064,19 @@ export class CanvasView {
     const world = this.screenToWorld(local);
 
     switch (wasMode) {
+      case "brush":
+      case "erase": {
+        // 拖动期间用 silent 落子，松手时统一记一条撤销，避免整条笔画刷出几十条历史。
+        if (this.brushPainted) {
+          store.markDirty();
+          this.cb.onCommit?.(wasMode === "brush" ? "铺设地块" : "擦除地块");
+        }
+        this.brushPainted = false;
+        this.brushLastCell = null;
+        this.mode = "none";
+        break;
+      }
+
       case "move": {
         // 没有真正移动 → 这是一次点击，不是拖动。
         // 关键：不能把 overrides 里的 0 位移提交上去，否则"点一下"也会写脏数据 + 记一次撤销。
@@ -1293,7 +1461,7 @@ export class CanvasView {
     this.requestPaint();
   }
 
-  private placeAt(world: Point2, keepTool: boolean): void {
+  private placeAt(world: Point2, keepTool: boolean, silent = false): void {
     if (!store.scene) return;
     const asset = store.findAsset(store.paintAssetId);
     if (!asset) {
@@ -1335,8 +1503,51 @@ export class CanvasView {
       parentId: null
     });
     store.markDirty();
-    this.cb.onCommit?.("铺设地块");
+    if (!silent) this.cb.onCommit?.("铺设地块");
     if (!keepTool) this.requestPaint();
+  }
+
+  /**
+   * 沿上一点到当前点的整条格子路径落笔。
+   *
+   * 为什么不能只 paintAt(当前点)：mousemove 的采样频率跟不上手的移动速度，
+   * 快速拖一笔时相邻两次事件可能隔了好几格，只按采样点落子会画成一串虚线。
+   * 这里用 Bresenham 补齐格间路径，让"拖动画一条"在物理上真的是一条。
+   */
+  private paintStrokeTo(world: Point2): void {
+    const t = this.tileSize();
+    const gx = Math.floor(world.x / t);
+    const gy = Math.floor(world.y / t);
+    const from = this.brushLastCell;
+    if (!from) {
+      this.placeAt(world, false, true);
+      this.brushLastCell = { gx, gy };
+      return;
+    }
+    if (from.gx === gx && from.gy === gy) return;
+
+    // Bresenham 走格
+    let x0 = from.gx;
+    let y0 = from.gy;
+    const dx = Math.abs(gx - x0);
+    const dy = Math.abs(gy - y0);
+    const sx = x0 < gx ? 1 : -1;
+    const sy = y0 < gy ? 1 : -1;
+    let err = dx - dy;
+    for (;;) {
+      this.placeAt({ x: x0 * t + t / 2, y: y0 * t + t / 2 }, false, true);
+      if (x0 === gx && y0 === gy) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) {
+        err -= dy;
+        x0 += sx;
+      }
+      if (e2 < dx) {
+        err += dx;
+        y0 += sy;
+      }
+    }
+    this.brushLastCell = { gx, gy };
   }
 
   private onWheel(e: WheelEvent): void {
@@ -1410,6 +1621,19 @@ export class CanvasView {
 
   private onDrop(e: DragEvent): void {
     e.preventDefault();
+    /**
+     * 同一次拖放只处理一次。
+     *
+     * 拖放事件在真实浏览器里可能被多个祖先各收一次（冒泡），而且画布实例在
+     * 「切标签 → 重新挂载」时也不会重建监听器；历史上曾经因为面板重复挂监听
+     * 出现过「拖一次变三份、越拖越多」的复制膨胀（见 assetPanel 的注释）。
+     * 在事件对象上打一个标记，把「一次拖放 = 一次创建」变成结构上的保证，
+     * 而不是靠"监听器只挂一个"这种容易被后续改动破坏的约定。
+     */
+    const mark = e as DragEvent & { __bweDropDone?: boolean };
+    if (mark.__bweDropDone) return;
+    mark.__bweDropDone = true;
+
     const dt = e.dataTransfer;
     if (!dt || !store.scene) return;
     const local = { x: e.clientX - this.rectLeft(), y: e.clientY - this.rectTop() };

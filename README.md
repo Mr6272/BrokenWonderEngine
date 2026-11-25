@@ -490,8 +490,7 @@ MIT，见 [`LICENSE`](LICENSE)。`package.json` 与 `desktop/package.json` 都�
 
   MIT 只覆盖这个仓库自己的代码，不改变这些第三方库的条款。MPL-2.0 是文件级 copyleft：
   改了 Rhino 自身的源码要公开那些文件，但把它当依赖用不受影响。
-- 仓库里的美术素材（`Assets/`、`Art/` 以及示例工程内联的图）来源不一，如果要商用建议先逐个确认。
-  示例工程（`web/examples/`）里的素材目前都是**程序生成**的：像素画由 `web/tools/` 下的 `gen-*` 脚本用代码画，
+- 示例工程（`web/examples/`）里的素材目前都是**程序生成**的：像素画由 `web/tools/` 下的 `gen-*` 脚本用代码画，
   扫雷那套由 `tools/gen-minesweeper-assets-code.mjs` 合成（含音效与 BGM，全是正弦/噪声合成，不基于任何现成作品）。
   历史上扫雷用过一批来自仓库外委托单子的素材（含第三方 BGM），因为版权不在本仓库，已全部替换。
 - Electron 运行时是打包时从本机缓存重建的，不进版本库。

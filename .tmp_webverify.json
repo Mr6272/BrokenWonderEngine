@@ -1,0 +1,99 @@
+{
+  "steps": {
+    "pageReady": true,
+    "bodyText": "",
+    "globals": "{\"player\":\"object\",\"stats\":\"object\",\"report\":\"function\"}",
+    "scene": "{\"objects\":3,\"sceneSize\":[64,64],\"camera\":{\"x\":1024,\"y\":1023.9999999999999,\"zoom\":0.146964111328125},\"elapsed\":0.083,\"frames\":5,\"textures\":5,\"drawCalls\":3,\"scripts\":[\"minesweeper:onSceneStart+onUpdate\"],\"assets\":0}",
+    "webgl": "{\"lost\":false,\"version\":\"WebGL 2.0 (OpenGL ES 3.0 Chromium)\",\"renderer\":\"WebKit WebGL\",\"err\":0,\"size\":[878,546]}",
+    "pixels": "{\"size\":[878,546],\"nonBlackRatio\":1,\"buckets\":10,\"top\":[[\"0,0,1\",439188],[\"5,7,9\",13017],[\"11,11,11\",12771],[\"3,4,6\",7424],[\"6,7,9\",2209]]}",
+    "input": "{\"keysBefore\":0,\"keysDown\":1,\"keysUp\":0,\"mouse\":{\"x\":0,\"y\":0,\"down\":false,\"button\":0}}",
+    "framesPerSecond": 58,
+    "apiReport": "{\"ok\":[\"time.now/delta/frame\",\"input.down/pressed/mouse/wheel\",\"camera.x/y/zoom/size/worldToScreen/screenToWorld\",\"draw.rect/circle/text/measureText\",\"world.find/findAll/spawn/emit/on/off/variables\",\"audio.play/music/volume\",\"textinput.define/rect/value/number/setValue/active/cancel/hint/onSubmit\",\"mine.state/set/reset\"],\"partial\":[\"audio.play(ms-bgm)\"],\"missingCalls\":[]}"
+  },
+  "hits": [
+    {
+      "s": 200,
+      "p": "/index.html",
+      "n": 775
+    },
+    {
+      "s": 200,
+      "p": "/player.js",
+      "n": 37602
+    },
+    {
+      "s": 200,
+      "p": "/Build/boot.json",
+      "n": 2335
+    },
+    {
+      "s": 404,
+      "p": "/favicon.ico"
+    },
+    {
+      "s": 200,
+      "p": "/Build/scene_0.json",
+      "n": 6331
+    },
+    {
+      "s": 200,
+      "p": "/Build/assets/as-ms-ms-tile/main.png",
+      "n": 148
+    },
+    {
+      "s": 200,
+      "p": "/Build/assets/as-ms-ms-flag/main.png",
+      "n": 178
+    },
+    {
+      "s": 200,
+      "p": "/Build/assets/as-ms-ms-mine/main.png",
+      "n": 240
+    },
+    {
+      "s": 200,
+      "p": "/Build/assets/as-ms-ms-bg/main.jpg",
+      "n": 9789
+    },
+    {
+      "s": 200,
+      "p": "/Build/assets/as-ms-ms-sfx-hit/main.wav",
+      "n": 48554
+    },
+    {
+      "s": 200,
+      "p": "/Build/assets/as-ms-ms-sfx-flag/main.wav",
+      "n": 14156
+    },
+    {
+      "s": 200,
+      "p": "/Build/assets/as-ms-ms-bgm/main.wav",
+      "n": 2016044
+    },
+    {
+      "s": 200,
+      "p": "/Build/scripts/minesweeper.js",
+      "n": 52997
+    }
+  ],
+  "console": [
+    {
+      "t": "error",
+      "s": "Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8921/favicon.ico"
+    },
+    {
+      "t": "warning",
+      "s": "[BWE/Web] bwe.audio.play(ms-bgm) 是简化实现：Web 产物里没有这个音频，或还没加载完。"
+    },
+    {
+      "t": "log",
+      "s": "[BWE/Web] 已启动：BWE 扫雷 · 秋天的旗，7 个素材，1 个脚本。\n用 __bwe_stats 看帧率，用 __bwe_report() 看哪些 API 还没实现。"
+    },
+    {
+      "t": "warning",
+      "s": "[.WebGL-0x274c00422600]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels @ http://127.0.0.1:8921/index.html"
+    }
+  ],
+  "exceptions": [],
+  "note": []
+}

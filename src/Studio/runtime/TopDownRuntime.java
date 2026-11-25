@@ -522,6 +522,9 @@ public final class TopDownRuntime implements GLEventListener {
         // 脚本要在场景对象就绪后启动（onStart 里可能马上要 find/spawn）。
         try {
             this.scripts = new ScriptEngine(this);
+            // 热重载只在调试/试跑时打开（编辑器 quick-run 会带 -Dbwe.hotreload=1）。
+            // 正式打包不带这个属性，运行时零开销，也不会在玩家机器上轮询文件。
+            this.scripts.hotReloadEnabled = "1".equals(System.getProperty("bwe.hotreload", ""));
             this.scripts.sceneStart();
         } catch (Throwable t) {
             this.scripts = null;

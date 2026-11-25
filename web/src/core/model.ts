@@ -430,6 +430,75 @@ export const UI_DESIGN_W = 1280;
 export const UI_DESIGN_H = 720;
 
 /**
+ * 运行时窗口（逻辑视口）的默认尺寸。
+ *
+ * 与 `src/Studio/runtime/TopDownRuntime.java` 的 `viewW = 1280 / viewH = 720` 一致 ——
+ * 这是打包成 EXE/APK 后玩家真正看到的画面区域。编辑器要把它画出来，
+ * 否则用户在一张 1920×1280 的地图上摆东西时，根本不知道哪些内容会落到窗口之外。
+ *
+ * ⚠ 只能改这一处：改这里等于改运行时的默认窗口协议，两边必须同步。
+ */
+export const RUNTIME_VIEW_W = 1280;
+export const RUNTIME_VIEW_H = 720;
+
+/**
+ * 编辑器里要画的「运行时视口」在世界坐标里的矩形。
+ *
+ * 先厘清运行时到底显示什么（`TopDownRuntime.applyCameraPolicy`）：
+ *   - 玩家**没挂** `fx.cameraFollow` ⇒ `view.fitWholeMap()`：整张地图等比塞进窗口，
+ *     也就是说"画面里的内容"恒等于整张地图，只是缩放比随窗口变。这时窗口边界没有
+ *     额外信息量（画布本身已经把地图边界画出来了）。
+ *   - 玩家**挂了** `fx.cameraFollow` 且地图比窗口大 ⇒ 1:1 跟随，相机贴着玩家，
+ *     窗口里看到的是 `1280×720` **世界单位**的一块区域（这才是真正会移动的取景框，
+ *     也是用户抱怨"编辑器里看不到视口范围"的那个东西）。
+ *
+ * 所以这里画的是**第二种**语义：一块与窗口同尺寸（1:1）、代表"玩家眼前能看到多大"
+ * 的取景框。位置取：
+ *   - 恰好选中一个对象时，框住它（跟着玩家走的那个视角）；
+ *   - 否则放在地图中心（静态参照）。
+ * 这只是编辑器的参考图层，不写进工程数据、不影响导出。
+ */
+export function runtimeViewRect(
+  scene: SceneModel,
+  tileSize: number,
+  focus?: { x: number; y: number } | null,
+  viewW = RUNTIME_VIEW_W,
+  viewH = RUNTIME_VIEW_H
+): {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** 与运行时 contain 一致的缩放比（<1 = 地图比窗口大，地图会被裁掉） */
+  fitZoom: number;
+  /** true = 不带相机跟随时整张地图都在窗口内（此时取景框只是比例参考） */
+  wholeMapVisible: boolean;
+  /** 取景框中心（= 选中对象的中心，或地图中心） */
+  cx: number;
+  cy: number;
+} {
+  const map = scenePixelSize(scene, tileSize);
+  const mapW = Math.max(1, map.w);
+  const mapH = Math.max(1, map.h);
+  const fitZoom = Math.min(4, Math.max(0.15, Math.min(viewW / mapW, viewH / mapH)));
+  // 取景框按 1:1 世界单位：窗口有多少像素，就看到多少世界单位
+  const w = viewW;
+  const h = viewH;
+  const cx = focus ? focus.x : mapW / 2;
+  const cy = focus ? focus.y : mapH / 2;
+  return {
+    x: cx - w / 2,
+    y: cy - h / 2,
+    w,
+    h,
+    fitZoom,
+    wholeMapVisible: mapW <= viewW && mapH <= viewH,
+    cx,
+    cy
+  };
+}
+
+/**
  * 新建一张 UI 场景。
  *
  * 与 createScene 的差别只在三个字段：ui=true 与设计分辨率。

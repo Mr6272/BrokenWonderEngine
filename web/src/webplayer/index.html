@@ -1,0 +1,34 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>__BWE_GAME_TITLE__</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0d0f13;
+    /* 像素画拖动时不要出现文字选择高亮 */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #bwe-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    /* 画布本身就填满，不要留白边 */
+    touch-action: none;
+    image-rendering: pixelated;
+  }
+</style>
+</head>
+<body>
+<canvas id="bwe-canvas"></canvas>
+<script src="player.js"></script>
+</body>
+</html>

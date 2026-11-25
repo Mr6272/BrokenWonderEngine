@@ -1,0 +1,10 @@
+﻿import { readFileSync, writeFileSync } from "node:fs";
+const R = readFileSync("web/src/webplayer/renderer.ts", "utf8");
+const P = readFileSync("web/src/webplayer/player.ts", "utf8");
+const out = [];
+out.push("########## renderer.ts ##########");
+R.split(/\r?\n/).forEach((l,i)=>out.push((i+1)+"| "+l));
+out.push("\n########## player.ts ##########");
+P.split(/\r?\n/).forEach((l,i)=>out.push((i+1)+"| "+l));
+writeFileSync(".tmp_both.txt", out.join("\n"), "utf8");
+console.log("renderer lines:", R.split(/\r?\n/).length, "player lines:", P.split(/\r?\n/).length);

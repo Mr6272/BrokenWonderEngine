@@ -303,7 +303,7 @@ function instructionsModal(title: string, lines: string[]): void {
   });
 }
 
-export async function openBwePackager(): Promise<void> {
+export async function openBwePackager(initialPlatform: "windows" | "android" | "web" = "windows"): Promise<void> {
   const p = store.project;
   if (!p) {
     warn("先打开一个工程");
@@ -329,7 +329,7 @@ export async function openBwePackager(): Promise<void> {
     return;
   }
 
-  if (!status || !status.ok) {
+  if (!status || (!status.ok && initialPlatform !== "web")) {
     instructionsModal("本机缺少打包工具", [
       `Node：${status?.node ?? "未知"}`,
       `javac：${status?.javac ? "已找到" : "缺失"}`,
@@ -347,7 +347,7 @@ export async function openBwePackager(): Promise<void> {
   // （tsc 直接报 TS2367：两个类型没有重叠）。等于 Android 分支是死代码 ——
   // 打包 Android 时从不检查 gradlew/SDK 是否就绪，直接往下跑到 Gradle 才失败。
   // 用显式泛型标注保留联合类型，分支才真的可达。
-  let platform = "windows" as "windows" | "android";
+  let platform = initialPlatform;
   if (platform === "android" && st.android?.ok !== true) {
     instructionsModal("本机缺少 Android 打包条件", [
       "Android 打包需要 android/gradlew 脚本 + Android SDK（compileSdk 34）在本机。",
@@ -366,7 +366,7 @@ export async function openBwePackager(): Promise<void> {
   const prefabCount = (p.prefabs ?? []).length;
 
   modal({
-    title: platform === "android" ? "打包到 BWE · Android APK" : "打包到 BWE · Windows EXE",
+    title: platform === "android" ? "打包到 BWE · Android APK" : platform === "web" ? "导出 Web 游戏包" : "打包到 BWE · Windows EXE",
     xwide: true,
     closeOnMask: false,
     // 关掉面板就停止轮询试跑日志；Java 窗口本身保留，用户可再开面板点「停止试跑」。
@@ -381,7 +381,9 @@ export async function openBwePackager(): Promise<void> {
           platform === "android"
             ? "把当前工程交给 BWE Android 运行时，通过 Gradle assembleDebug 生成 debug APK，拷进 android/app/src/main/assets/BWE/。"
               + "装上 Android 工程（gradlew + Android SDK）后即可在安卓设备上运行。"
-            : "把当前工程交给 BWE Java 运行时，生成自带 Java 的 Windows 应用目录，再压缩成 zip。"
+            : platform === "web"
+              ? "把当前工程导出为可部署的 Web 游戏包，包含 WebGL2 播放器与同一份 Build 数据，解压后上传到静态服务器即可。"
+              : "把当前工程交给 BWE Java 运行时，生成自带 Java 的 Windows 应用目录，再压缩成 zip。"
               + "解压后双击里面的 .exe 即可运行，目标机器不需要安装 Java。"
         )
       );
@@ -441,6 +443,9 @@ export async function openBwePackager(): Promise<void> {
         iconPath: I.exportImg,
         title: "生成 Windows 应用与 zip"
       });
+      const webBtn = button("导出 Web 游戏包", () => void start("web"), {
+        variant: "outline", iconPath: I.exportImg, title: "生成可部署的 Web 游戏 ZIP"
+      });
       const apkBtn = button("打包 Android APK", () => void start("android"), {
         variant: "outline",
         iconPath: I.exportImg,
@@ -453,6 +458,7 @@ export async function openBwePackager(): Promise<void> {
         title: "不做 Windows 包，直接在本机启动 Java 运行时看效果"
       });
       actionRow.appendChild(startBtn);
+      actionRow.appendChild(webBtn);
       actionRow.appendChild(apkBtn);
       actionRow.appendChild(runBtn);
       actionRow.appendChild(
@@ -655,7 +661,7 @@ export async function openBwePackager(): Promise<void> {
         logBox.scrollTop = logBox.scrollHeight;
       };
 
-      async function start(plat: "windows" | "android" = "windows"): Promise<void> {
+      async function start(plat: "windows" | "android" | "web" = "windows"): Promise<void> {
         if (busy) return;
         busy = true;
         platform = plat;
@@ -746,7 +752,7 @@ export async function openBwePackager(): Promise<void> {
 
       function renderResult(r: NonNullable<PackJob["result"]>, jobId: string): void {
         resultBox.replaceChildren();
-        resultBox.appendChild(el("div", { class: "pkg-result-title" }, r.platform === "android" ? "Android APK 打包完成" : "打包完成"));
+        resultBox.appendChild(el("div", { class: "pkg-result-title" }, r.platform === "android" ? "Android APK 打包完成" : r.platform === "web" ? "Web 游戏包导出完成" : "打包完成"));
         const nameLabel = r.apkName || r.zipName || r.exeName || r.appName;
         resultBox.appendChild(
           el("div", { class: "hint" },
@@ -767,7 +773,7 @@ export async function openBwePackager(): Promise<void> {
             button("下载 ZIP", () => downloadArtifact(jobId, false), {
               variant: "primary",
               iconPath: I.import,
-              title: "下载包含 exe 的 Windows 应用包"
+              title: r.platform === "web" ? "下载可部署的 Web 游戏包" : "下载包含 exe 的 Windows 应用包"
             })
           );
         }
@@ -788,7 +794,9 @@ export async function openBwePackager(): Promise<void> {
           el("div", { class: "hint" },
             r.platform === "android"
               ? "APK 已生成（debug）。可用 ADB / 文件传输安装到 Android 设备（需开启未知来源/安装权限）。"
-              : "解压后双击 exe 运行；如果启动失败，查看 Build/bwe.log。")
+              : r.platform === "web"
+                ? "解压后把整个目录上传到静态托管，或用 npx serve / python -m http.server 启动。"
+                : "解压后双击 exe 运行；如果启动失败，查看 Build/bwe.log。")
         );
       }
 

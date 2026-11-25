@@ -1,0 +1,10 @@
+﻿import { readFileSync } from "node:fs";
+const r = JSON.parse(readFileSync(".tmp_webverify.json", "utf8"));
+console.log("=== STEPS ===");
+for (const [k, v] of Object.entries(r.steps || {})) console.log(k + " => " + JSON.stringify(v));
+console.log("\n=== CONSOLE (" + (r.console||[]).length + ") ===");
+for (const c of (r.console||[]).slice(0,20)) console.log(" [" + c.t + "] " + String(c.s).slice(0,240));
+console.log("\n=== EXCEPTIONS (" + (r.exceptions||[]).length + ") ===");
+for (const e of (r.exceptions||[]).slice(0,5)) console.log(" " + String(e).slice(0,300));
+console.log("\n=== HITS ===");
+for (const h of (r.hits||[])) console.log(" " + h.s + " " + h.p + " " + (h.n ?? ""));

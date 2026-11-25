@@ -1,0 +1,11 @@
+﻿import { readFileSync, writeFileSync } from "node:fs";
+const rd = (p) => { const b = readFileSync(p); try { return new TextDecoder("utf-8",{fatal:true}).decode(b); } catch { return new TextDecoder("gbk").decode(b); } };
+const out = [];
+const S = rd("web/.build/packages/web_test_1/out/Build/scripts/minesweeper.js").split(/\r?\n/);
+out.push("########## SCRIPT 555-700 (click path) ##########");
+S.slice(554, 700).forEach((l, k) => out.push((555 + k) + "| " + l.slice(0, 165)));
+const M = rd("src/Studio/runtime/Minesweeper.java").split(/\r?\n/);
+out.push("\n########## JAVA 205-400 ##########");
+M.slice(204, 400).forEach((l, k) => out.push((205 + k) + "| " + l.slice(0, 165)));
+writeFileSync(".tmp_gather.txt", out.join("\n"), "utf8");
+console.log(out.join("\n"));

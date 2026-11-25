@@ -1,0 +1,10 @@
+﻿const fs=require('fs');
+const p='web/src/app/packageBwe.ts';
+let s=fs.readFileSync(p,'utf8');
+s=s.replace('if (!status || !status.ok) {','if (!status || (!status.ok && initialPlatform !== "web")) {');
+fs.writeFileSync(p,s,'utf8');
+const q='package.json'; let j=fs.readFileSync(q,'utf8');
+const marker='  "verify:all": "npm run verify:apidocs:soft && npm run typecheck && npm run check:scripts && npm run verify:openworld';
+if(!j.includes(marker)) throw new Error('package marker missing');
+j=j.replace(marker,'  "verify:web": "node web/tools/verify-mine-rules.mjs && node web/tools/verify-web-player.mjs web/.build/packages/web_test_1/out",\n'+marker.replace('npm run verify:openworld','npm run verify:web && npm run verify:openworld'));
+fs.writeFileSync(q,j,'utf8');

@@ -1,0 +1,10 @@
+﻿import { readFileSync } from "node:fs";
+const rd = (p) => { const b = readFileSync(p); try { return new TextDecoder("utf-8",{fatal:true}).decode(b); } catch { return new TextDecoder("gbk").decode(b); } };
+const L = rd("src/Studio/runtime/Minesweeper.java").split(/\r?\n/);
+const out = [];
+const seg = (a, b, tag) => { out.push("### " + tag); for (let i = a - 1; i < b; i++) { const t = L[i].trim(); if (/^\*|^\/\*\*|^\/\//.test(t)) continue; out.push(L[i].replace(/\s+$/, "")); } out.push(""); };
+seg(622, 671, "reveal + openRegion");
+seg(538, 608, "chord (complex)");
+const s2 = L.findIndex((l) => /chordStandard/.test(l));
+if (s2 >= 0) seg(s2 + 1, s2 + 60, "chordStandard");
+console.log(out.join("\n"));

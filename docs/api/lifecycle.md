@@ -1,4 +1,4 @@
-﻿# 生命周期与运行上下文（Lifecycle & Ctx）
+# 生命周期与运行上下文（Lifecycle & Ctx）
 
 > 本页覆盖：对象脚本 / 场景脚本的回调约定、`ctx` 结构、全局钩子 `bwe.on`/`bwe.off`、定时器 `bwe.after`/`bwe.every`/`bwe.cancel`、以及根命名空间的工具函数（日志、随机、数学、跨脚本调用）。
 >
@@ -668,10 +668,15 @@ function onUpdate(ctx, dt) {
 | `input` | Input | 等同 `bwe.input` |
 | `save` | Save | 等同 `bwe.save` |
 | `dt` | number | 本帧步长（秒），是 getter，每次读都是最新值 |
+| `params` | Record<string, unknown> \| null | 本对象的**脚本公开字段**（默认值 ∪ 覆盖值）；场景脚本里是 `null` |
 | `game` | 命名空间 | 等同 `bwe` 根对象 |
 
 **说明**
 ✅ 已实现。`ctx` 是每次派发时新建的对象，不要长期持有 —— 但它包着的 `world` / `time` / `camera` / `input` / `save` / `game` 都是**同一个**长期对象，可以放心缓存。
+
+`ctx.params` 是**按对象作用域**的：同一个 `enemy.js` 挂在十只小怪上，每只读到的都是自己那份
+（声明写法见 [scripting-api.md 契约 §1.4「脚本公开字段」](../scripting-api.md)）。
+它是惰性求值的：不读就不解析。等价写法 `bwe.params()` 在对象回调里返回同一个结果。
 
 **示例**
 ```js
@@ -693,6 +698,57 @@ function onUpdate(ctx, dt) {
 ---
 
 ## 五、根命名空间工具函数
+
+### bwe.params(defs?) → Record<string, unknown>
+
+**签名**
+`bwe.params(defs?: Record<string, unknown>): Record<string, unknown>`
+
+**参数**
+| 名称 | 类型 | 说明 |
+|---|---|---|
+| defs | Record<string, unknown> | 默认值表。**脚本顶层**传：声明这个脚本的公开字段。回调里省略：取当前对象的有效参数 |
+
+**返回**
+- 顶层调用：默认值的**拷贝**（改它不影响缓存，也不影响别的对象）；
+- 回调里调用：`默认值 ∪ 当前对象的覆盖值` 的**新对象**（与 `ctx.params` 等价）；
+- 没有对象（场景脚本）或没有声明：空对象 `{}`。
+
+**说明**
+✅ 已实现。脚本的「公开字段」——Unity 的 `public float speed` 那套。写一次声明，
+编辑器右栏 Inspector 就会为**每个挂着本脚本的对象**渲染可编辑控件（数字框 / 文本框 / 开关，
+按默认值类型选），用户改过的值存在对象 `script.js` 模块参数的 `params` 键里（JSON 文本）。
+
+**只支持字面量**：`number` / `string` / `true` / `false` / `null`。
+键可以是标识符或字符串（中文键写 `"移动速度": 100`）。嵌套对象、数组、变量、函数调用、
+模板字符串一律不支持 —— 它们需要执行代码才知道值，而面板要在**不执行脚本**的前提下画出控件。
+写错了会给一条中文原因 + 行号（面板显示一行提示，脚本照常跑）。
+
+**按对象作用域**（关键）：脚本的 scope 是脚本级共享的（一只 `enemy.js` 挂十只怪共用一个 scope），
+所以参数只能靠「调用期是哪个对象」区分，不能做成全局表 —— 否则最后初始化的那只把前面全改掉。
+
+**示例**
+```js
+// 顶层：声明字段与默认值
+bwe.params({
+  speed: 100,        // 移动速度（这行注释会显示成控件说明）
+  hp: 3,
+  label: "玩家",
+  alive: true
+});
+
+// A 用默认 100，B 在 Inspector 里改成 250 —— 同一个脚本，各调各的
+function onUpdate(ctx, dt) {
+  var p = ctx.params;              // 或者 bwe.params()
+  if (!p.alive) return;
+  ctx.self.x = ctx.self.x + p.speed * dt;
+}
+```
+
+**另见**
+[Ctx 结构](#四ctx-结构) · [契约 §1.4 脚本公开字段（数据字段 / 导出 / 运行时细节）](../scripting-api.md)
+
+---
 
 ### bwe.log(...args) → void
 

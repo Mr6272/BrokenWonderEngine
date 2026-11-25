@@ -1386,6 +1386,18 @@ function main(): void {
   const args = process.argv.slice(2);
   const seedArg = args.indexOf("--seed");
   const seed = seedArg >= 0 ? Number(args[seedArg + 1]) : 20261029;
+  /**
+   * `--out <路径>`：换个输出位置。
+   *
+   * 为什么需要它：`npm run verify:all` 里的 `verify:openworld` 每次都会重跑本生成器，
+   * 而默认落点是仓库里被 git 跟踪的 `web/examples/开放世界城市.bwproj`。
+   * 生成器给所有场景/图层/对象现生成 `uid()`，于是**每跑一次 verify:all，
+   * 那个文件就变成一份全新 id 的等价副本** —— 5000 行 diff、语义零变化。
+   * 这会让每个开发者的 `git status` 永远是脏的，也没法用 diff 审别人的改动。
+   * 验收脚本改用 `--out .tmp/...` 之后，跑测试不再改动被跟踪的数据文件。
+   */
+  const outArg = args.indexOf("--out");
+  const outOverride = outArg >= 0 ? args[outArg + 1] : "";
   const p: Project = createProject("BWE 开放世界原型 · 自由城");
   p.author = "BWE";
   p.tileSize = TILE;
@@ -1405,9 +1417,11 @@ function main(): void {
     p.scripts[name] = { name, file: "scripts/" + name + ".js", source: "var CITY = " + cityJson + ";" + NL + src, lang: "js" };
   }
   scene.onStartScript = "world";
-  const outDir = resolve(ROOT, "web", "examples");
+  const outDir = outOverride
+    ? resolve(process.cwd(), dirname(outOverride))
+    : resolve(ROOT, "web", "examples");
   mkdirSync(outDir, { recursive: true });
-  const target = resolve(outDir, "开放世界城市.bwproj");
+  const target = outOverride ? resolve(process.cwd(), outOverride) : resolve(outDir, "开放世界城市.bwproj");
   writeFileSync(target, JSON.stringify(p, null, 2) + NL, "utf8");
   console.log("wrote " + target);
   console.log("  scene=" + scene.name + " grid=" + GRID_W + "x" + GRID_H + " tile=" + TILE);

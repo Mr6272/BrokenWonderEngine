@@ -1,0 +1,11 @@
+﻿import { readFileSync } from "node:fs";
+const R = readFileSync("web/src/webplayer/renderer.ts", "utf8").split(/\r?\n/);
+console.log("=== renderer.ts public API ===");
+R.forEach((l, i) => { if (/^\s*(export |public |  [a-zA-Z]+\()/.test(l)) console.log((i+1)+"| "+l.trim().slice(0,120)); });
+const A = readFileSync("web/src/webplayer/api.ts", "utf8");
+const m = A.match(/export function \w+\([^)]*\)/g) || [];
+console.log("\n=== api.ts exports ===");
+console.log(m.join("\n"));
+const P = readFileSync("web/src/webplayer/player.ts", "utf8").split(/\r?\n/);
+console.log("\n=== player ctx \u5f62\u72b6 ===");
+P.forEach((l, i) => { if (/ctx\s*[:=]|scene:|objects|modules|interface PlayerContext|export interface/.test(l)) console.log((i+1)+"| "+l.trim().slice(0,130)); });
